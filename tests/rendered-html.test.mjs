@@ -1,5 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  advanceDesktopEvidence,
+  appendDiagnosticLine,
+  createDesktopEvidence,
+  DISPLAY_HEIGHT,
+  DISPLAY_WIDTH,
+  getPhasePresentation,
+  inspectVmCapabilities,
+  isGuestReadyReport,
+  mapCanvasPointToGuest,
+  measureCanvasDisplay,
+  normalizeRuntimeError,
+  RUNTIME_BASE_URL,
+  RUNTIME_MODULE_URL,
+} from "../app/components/vm-ui-state.mjs";
 
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
@@ -33,6 +48,14 @@ test("server-renders the Omarchy demo launcher", async () => {
   assert.match(html, /Start Omarchy/);
   assert.match(html, /Real x86_64 virtual machine/);
   assert.match(html, /Arch · Hyprland · Quickshell/);
+  assert.match(html, /Shared memory/);
+  assert.match(html, /Wasm threads/);
+  assert.match(html, /Offscreen canvas/);
+  assert.match(
+    html,
+    /<canvas[^>]+width="1600"[^>]+height="900"[^>]+tabindex="0"/i,
+  );
+  assert.doesNotMatch(html, /Omarchy desktop ready|Guest report received/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 
@@ -51,4 +74,253 @@ test("enables cross-origin isolation for WebAssembly threads", async () => {
     response.headers.get("cross-origin-resource-policy"),
     "same-origin",
   );
+});
+
+test("capability gate requires isolation, shared memory, threads, and offscreen canvas", () => {
+  class FakeSharedArrayBuffer {}
+  class FakeMemory {
+    constructor() {
+      this.buffer = new FakeSharedArrayBuffer();
+    }
+  }
+
+  const supported = inspectVmCapabilities({
+    WebAssembly: { Memory: FakeMemory },
+    Worker: class {},
+    Atomics: {},
+    crossOriginIsolated: true,
+    SharedArrayBuffer: FakeSharedArrayBuffer,
+    OffscreenCanvas: class {},
+  });
+  assert.equal(supported.supported, true);
+  assert.equal(supported.checks.wasmThreads, true);
+
+  const unsupported = inspectVmCapabilities({
+    WebAssembly: { Memory: FakeMemory },
+    Worker: class {},
+    Atomics: {},
+    crossOriginIsolated: false,
+    SharedArrayBuffer: FakeSharedArrayBuffer,
+  });
+  assert.equal(unsupported.supported, false);
+  assert.ok(unsupported.missing.includes("crossOriginIsolated"));
+  assert.ok(unsupported.missing.includes("offscreenCanvas"));
+});
+
+test("running emulator is not presented as a ready Omarchy desktop", () => {
+  assert.deepEqual(getPhasePresentation("running", false), {
+    title: "Waiting for the Omarchy desktop",
+    detail: "The emulator is running; readiness must come from the guest.",
+    stage: 3,
+  });
+  assert.equal(getPhasePresentation("running", true).stage, 4);
+  assert.equal(
+    getPhasePresentation("running", true).title,
+    "Omarchy desktop ready",
+  );
+});
+
+test("guest readiness requires an Omarchy-originated x86_64 desktop report", () => {
+  const readyReport = {
+    schemaVersion: 1,
+    generatedAt: "2026-08-14T12:00:00Z",
+    provenance: {
+      repository: "https://github.com/basecamp/omarchy",
+      commit: "a".repeat(40),
+      version: "4.0.0",
+      treeSha256: "b".repeat(64),
+    },
+    system: {
+      architecture: "x86_64",
+      distribution: "Arch Linux",
+      kernel: "7.1.8-arch1-3",
+      sessionType: "wayland",
+    },
+    components: [
+      {
+        role: "compositor",
+        name: "Hyprland",
+        version: "0.56.2",
+        executable: "/usr/bin/Hyprland",
+      },
+      {
+        role: "shell",
+        name: "quickshell",
+        version: "0.3.0",
+        executable: "/usr/bin/quickshell",
+      },
+    ],
+    processes: [
+      { name: "Hyprland", pid: 101 },
+      { name: "quickshell", pid: 102 },
+    ],
+    commands: [
+      { argv: ["uname", "-m"], exitCode: 0, stdout: "x86_64\n" },
+      {
+        argv: ["hyprctl", "version"],
+        exitCode: 0,
+        stdout: "Hyprland 0.56.2\n",
+      },
+      {
+        argv: ["hyprctl", "monitors", "-j"],
+        exitCode: 0,
+        stdout: '[{"width":1600,"height":900}]\n',
+      },
+      {
+        argv: ["omarchy-version"],
+        exitCode: 0,
+        stdout: "4.0.0\n",
+      },
+    ],
+    configs: [
+      {
+        path: "/usr/share/omarchy/shell/shell.qml",
+        sha256: "c".repeat(64),
+        origin: "omarchy-upstream",
+      },
+    ],
+  };
+
+  assert.equal(isGuestReadyReport(readyReport), true);
+  assert.equal(
+    isGuestReadyReport({ ...readyReport, schemaVersion: undefined }),
+    false,
+  );
+  assert.equal(
+    isGuestReadyReport({
+      ...readyReport,
+      system: { ...readyReport.system, architecture: "i686" },
+    }),
+    false,
+  );
+  assert.equal(
+    isGuestReadyReport({ ...readyReport, processes: [{ name: "Hyprland", pid: 101 }] }),
+    false,
+  );
+});
+
+test("desktop readiness requires a report followed by a fresh 1600x900 guest frame", () => {
+  const report = {
+    schemaVersion: 1,
+    generatedAt: "2026-08-14T12:00:00Z",
+    provenance: {
+      repository: "https://github.com/basecamp/omarchy",
+      commit: "b".repeat(40),
+      version: "4.0.0",
+      treeSha256: "c".repeat(64),
+    },
+    system: {
+      architecture: "x86_64",
+      distribution: "Arch Linux",
+      kernel: "7.1.8-arch1-3",
+      sessionType: "wayland",
+    },
+    components: [
+      { role: "compositor", name: "Hyprland", version: "0.56.2", executable: "/usr/bin/Hyprland" },
+      { role: "shell", name: "quickshell", version: "0.3.0", executable: "/usr/bin/quickshell" },
+    ],
+    processes: [
+      { name: "Hyprland", pid: 101 },
+      { name: "quickshell", pid: 102 },
+    ],
+    commands: [
+      { argv: ["uname", "-m"], exitCode: 0, stdout: "x86_64\n" },
+      { argv: ["hyprctl", "version"], exitCode: 0, stdout: "Hyprland 0.56.2\n" },
+      { argv: ["hyprctl", "monitors", "-j"], exitCode: 0, stdout: "[]\n" },
+      { argv: ["omarchy-version"], exitCode: 0, stdout: "4.0.0\n" },
+    ],
+    configs: [
+      { path: "/usr/share/omarchy/shell/shell.qml", sha256: "d".repeat(64), origin: "omarchy-upstream" },
+    ],
+  };
+  const frame = {
+    source: "qemu-guest",
+    sequence: 1,
+    guestWidth: 1600,
+    guestHeight: 900,
+  };
+
+  const reportFirst = advanceDesktopEvidence(createDesktopEvidence(), {
+    type: "guestreport",
+    report,
+  });
+  assert.equal(reportFirst.ready, false);
+  assert.equal(
+    advanceDesktopEvidence(reportFirst, { type: "guestframe", frame }).ready,
+    true,
+  );
+
+  const frameFirst = advanceDesktopEvidence(createDesktopEvidence(), {
+    type: "guestframe",
+    frame,
+  });
+  const reportAfterFrame = advanceDesktopEvidence(frameFirst, {
+    type: "guestreport",
+    report,
+  });
+  assert.equal(reportAfterFrame.ready, false);
+  assert.equal(
+    advanceDesktopEvidence(reportAfterFrame, {
+      type: "guestframe",
+      frame: { ...frame, sequence: 2 },
+    }).ready,
+    true,
+  );
+  assert.equal(
+    advanceDesktopEvidence(reportFirst, {
+      type: "guestframe",
+      frame: { ...frame, guestWidth: 1280 },
+    }).ready,
+    false,
+  );
+});
+
+test("fixed guest backing maps predictably at DPR 1 and DPR 2", () => {
+  const dpr1 = measureCanvasDisplay({ width: 1600, height: 900 }, 1);
+  assert.deepEqual(
+    [dpr1.deviceWidth, dpr1.deviceHeight, dpr1.aspectMatches, dpr1.pixelPerfect],
+    [1600, 900, true, true],
+  );
+
+  const dpr2 = measureCanvasDisplay({ width: 800, height: 450 }, 2);
+  assert.deepEqual(
+    [dpr2.deviceWidth, dpr2.deviceHeight, dpr2.aspectMatches, dpr2.pixelPerfect],
+    [1600, 900, true, true],
+  );
+  assert.deepEqual(
+    mapCanvasPointToGuest(400, 225, {
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 450,
+    }),
+    { x: 800, y: 450 },
+  );
+  assert.deepEqual(
+    mapCanvasPointToGuest(-20, 1000, {
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 450,
+    }),
+    { x: 0, y: 899 },
+  );
+});
+
+test("missing VM artifacts produce a recoverable, specific launcher error", () => {
+  const result = normalizeRuntimeError(
+    new Error("Runtime manifest request failed with HTTP 404."),
+  );
+  assert.equal(result.kind, "artifacts-missing");
+  assert.equal(result.recoverable, true);
+  assert.match(result.message, /\/omarchy\//);
+  assert.equal(RUNTIME_MODULE_URL, "/omarchy/runtime.mjs");
+  assert.equal(RUNTIME_BASE_URL, "/omarchy/");
+  assert.equal(DISPLAY_WIDTH, 1600);
+  assert.equal(DISPLAY_HEIGHT, 900);
+});
+
+test("serial diagnostics stay bounded", () => {
+  const lines = appendDiagnosticLine(["one", "two", "three"], "four", 3);
+  assert.deepEqual(lines, ["two", "three", "four"]);
 });
