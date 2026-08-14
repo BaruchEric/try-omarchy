@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Omarchy paged disk browser proof</title>
+    <style>
+      body { margin: 2rem; background: #11110f; color: #f1f0eb; font: 16px/1.5 ui-monospace, monospace; }
+      pre { max-width: 78rem; overflow: auto; padding: 1rem; border: 1px solid #3a3a36; }
+      [data-state="passed"] { color: #d9ff43; }
+      [data-state="failed"] { color: #ff766f; }
+    </style>
+  </head>
+  <body>
+    <h1>Omarchy paged disk browser proof</h1>
+    <p id="status" data-state="running">Running in a dedicated Worker…</p>
+    <pre id="result" aria-live="polite"></pre>
+    <script type="module">
+      const status = document.querySelector("#status");
+      const result = document.querySelector("#result");
+      const worker = new Worker("/worker.mjs", { type: "module" });
+
+      worker.addEventListener("message", async ({ data }) => {
+        const logResponse = await fetch("/__requests", { cache: "no-store" });
+        const serverRequests = await logResponse.json();
+        const diskRequests = serverRequests.filter((request) => request.path === "/rootfs.ext4");
+        const rangedGets = diskRequests.filter((request) => request.method === "GET" && request.range);
+        const fullGets = diskRequests.filter((request) => request.method === "GET" && !request.range);
+        const bounded = rangedGets.every((request) => request.responseBytes <= 1024 * 1024);
+        const passed = data.programPassed === true && rangedGets.length >= 3 && fullGets.length === 0 && bounded;
+        status.dataset.state = passed ? "passed" : "failed";
+        status.textContent = passed ? "PASS — ranged reads only" : "FAIL";
+        result.textContent = JSON.stringify({
+          passed,
+          rangedRootfsGets: rangedGets.length,
+          fullRootfsGets: fullGets.length,
+          bounded,
+          worker: data,
+          serverRequests,
+        }, null, 2);
+      });
+      worker.addEventListener("error", (event) => {
+        status.dataset.state = "failed";
+        status.textContent = "FAIL";
+        result.textContent = event.message;
+      });
+    </script>
+  </body>
+</html>
