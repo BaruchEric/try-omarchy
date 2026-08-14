@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -16,6 +16,7 @@ function digest(value) {
 
 async function put(root, relativePath, value) {
   const target = path.join(root, relativePath);
+  await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, value);
   return {
     path: relativePath,
@@ -38,19 +39,33 @@ async function fixture() {
     ["qemu.mjs", "emulator-loader", "text/javascript", "export default 1"],
     ["qemu.wasm", "emulator-wasm", "application/wasm", "wasm-fixture"],
     ["qemu.worker.js", "emulator-worker", "text/javascript", "worker-fixture"],
-    ["load.js", "emulator-preload", "text/javascript", "preload-fixture"],
-    ["qemu.data", "guest-package", "application/octet-stream", "data-fixture"],
+    ["production-worker.mjs", "host-worker", "text/javascript", "host-worker-fixture"],
+    ["worker-input.mjs", "host-input-bridge", "text/javascript", "input-fixture"],
+    ["paged-disk.mjs", "paged-disk-adapter", "text/javascript", "paged-fixture"],
+    ["firmware/bios-256k.bin", "firmware", "application/octet-stream", "bios-fixture"],
+    ["firmware/vgabios-virtio.bin", "firmware", "application/octet-stream", "vgabios-fixture"],
   ]) {
     runtimeArtifacts.push({ ...(await put(runtime, name, value)), role, mediaType });
   }
 
   const runtimeManifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    runtimeMode: "worker-paged",
     assets: {
       module: "qemu.mjs",
-      preload: "load.js",
-      data: "qemu.data",
+      hostWorker: "production-worker.mjs",
+      workerInput: "worker-input.mjs",
+      pagedDisk: "paged-disk.mjs",
       locate: { "qemu-system-x86_64.wasm": "qemu.wasm", "qemu-system-x86_64.worker.js": "qemu.worker.js" },
+      firmware: {
+        "bios-256k.bin": "firmware/bios-256k.bin",
+        "vgabios-virtio.bin": "firmware/vgabios-virtio.bin",
+      },
+    },
+    guest: {
+      rootfs: { artifactPath: "rootfs.ext4", mountPath: "/pack/rootfs.ext4" },
+      kernel: { artifactPath: "vmlinuz-linux", mountPath: "/pack/vmlinuz-linux" },
+      initramfs: { artifactPath: "initramfs-linux.img", mountPath: "/pack/initramfs-linux.img" },
     },
   };
   const runtimeBuild = {
@@ -71,6 +86,7 @@ async function fixture() {
   const guestArtifacts = [];
   for (const [name, role, mediaType, value] of [
     ["vmlinuz-linux", "guest-kernel", "application/vnd.linux.kernel", "kernel-fixture"],
+    ["initramfs-linux.img", "guest-initramfs", "application/vnd.linux.initramfs", "initramfs-fixture"],
     ["rootfs.ext4", "guest-rootfs", "application/vnd.omarchy.ext4", "rootfs-fixture"],
     ["provenance.json", "guest-metadata", "application/json", "{\"fixture\":true}\n"],
   ]) {
@@ -151,4 +167,18 @@ test("refuses to overwrite an immutable release directory", async () => {
   await assembleRelease(config);
   await assert.rejects(assembleRelease(config), /refusing to replace existing release directory/);
   assert.equal(JSON.parse(await readFile(path.join(outputDirectory, "artifact-manifest.json"), "utf8")).schemaVersion, 1);
+});
+
+test("refuses legacy preload runtimes and missing paged guest artifacts", async () => {
+  const { runtime, config } = await fixture();
+  const manifestPath = path.join(runtime, "runtime-manifest.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.assets.preload = "load.js";
+  await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+  await assert.rejects(assembleRelease(config), /must not package preload or data assets/);
+
+  delete manifest.assets.preload;
+  manifest.guest.rootfs.artifactPath = "missing-rootfs.ext4";
+  await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+  await assert.rejects(assembleRelease(config), /unpackaged guest artifact: missing-rootfs\.ext4/);
 });

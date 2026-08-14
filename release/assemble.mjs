@@ -114,12 +114,36 @@ function validateLicenses(licenses) {
 }
 
 function validateRuntimeAssets(runtimeManifest, paths) {
+  invariant(
+    runtimeManifest?.schemaVersion === 2 && runtimeManifest?.runtimeMode === "worker-paged",
+    "runtime manifest must use schema 2 worker-paged mode",
+  );
   const assets = runtimeManifest?.assets;
   invariant(isRecord(assets), "runtime manifest is missing assets");
-  const required = [assets.module, assets.preload, assets.data, ...Object.values(assets.locate ?? {})];
+  invariant(
+    !("preload" in assets) && !("data" in assets),
+    "worker-paged runtime must not package preload or data assets",
+  );
+  invariant(isRecord(assets.locate), "runtime manifest is missing generated module assets");
+  invariant(isRecord(assets.firmware), "runtime manifest is missing firmware assets");
+  const required = [
+    assets.module,
+    assets.hostWorker,
+    assets.workerInput,
+    assets.pagedDisk,
+    ...Object.values(assets.locate),
+    ...Object.values(assets.firmware),
+  ];
   for (const value of required) {
     const artifactPath = safeRelativePath(value, "runtime manifest asset");
     invariant(paths.has(artifactPath), `runtime manifest references an unpackaged asset: ${artifactPath}`);
+  }
+  for (const key of ["rootfs", "kernel", "initramfs"]) {
+    const artifactPath = safeRelativePath(
+      runtimeManifest?.guest?.[key]?.artifactPath,
+      `runtime manifest guest ${key}`,
+    );
+    invariant(paths.has(artifactPath), `runtime manifest references an unpackaged guest artifact: ${artifactPath}`);
   }
 }
 
