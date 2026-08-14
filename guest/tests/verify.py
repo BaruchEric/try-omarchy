@@ -101,6 +101,37 @@ def test_static() -> None:
     required_commands = json.loads((GUEST.parent / "scripts/verification/acceptance-contract.json").read_text()).get("requiredGuestCommands", []) if (GUEST.parent / "scripts/verification/acceptance-contract.json").exists() else []
     check(all(repr(command.split()) in probe or json.dumps(command.split()) in probe for command in required_commands), "probe contains acceptance identity commands")
 
+    with tempfile.TemporaryDirectory(prefix="omarchy-container-plan.") as temporary:
+        scratch = pathlib.Path(temporary)
+        output = scratch / "output-not-created"
+        work = scratch / "work-not-created"
+        base_env = os.environ.copy()
+
+        linux_env = {**base_env, "OMARCHY_CONTAINER_HOST_OS": "Linux"}
+        linux = run(GUEST / "build-container.sh", "--dry-run", "--output", output, env=linux_env)
+        check(linux.returncode == 0 and "work-storage=bind" in linux.stdout, "container builder keeps native Linux bind work path")
+
+        desktop_env = {**base_env, "OMARCHY_CONTAINER_HOST_OS": "Darwin"}
+        desktop = run(GUEST / "build-container.sh", "--dry-run", "--output", output, env=desktop_env)
+        volume_match = re.search(r"^work-source=(omarchy-web-guest-work-[0-9]+)$", desktop.stdout, re.MULTILINE)
+        check(desktop.returncode == 0 and "work-storage=volume" in desktop.stdout and volume_match is not None, "Docker Desktop defaults to persistent managed work volume")
+        check(not output.exists() and not work.exists(), "container dry run has no filesystem side effects")
+
+        named = run(GUEST / "build-container.sh", "--dry-run", "--work-volume", "omarchy-test-cache", env=desktop_env)
+        check(named.returncode == 0 and "work-source=omarchy-test-cache" in named.stdout, "explicit Docker work volume accepted")
+
+        unsafe_bind = run(GUEST / "build-container.sh", "--dry-run", "--work", work, env=desktop_env)
+        check(unsafe_bind.returncode != 0 and "unsafe for a pacstrap rootfs" in unsafe_bind.stderr, "Docker Desktop host work bind rejected")
+
+        conflict = run(GUEST / "build-container.sh", "--dry-run", "--work", work, "--work-volume", "omarchy-test-cache", env=linux_env)
+        check(conflict.returncode != 0 and "mutually exclusive" in conflict.stderr, "container work storage options are mutually exclusive")
+
+        invalid = run(GUEST / "build-container.sh", "--dry-run", "--work-volume", "bad/volume", env=desktop_env)
+        check(invalid.returncode != 0 and "invalid Docker volume name" in invalid.stderr, "unsafe Docker volume name rejected")
+
+        wrapper = (GUEST / "build-container.sh").read_text()
+        check("docker volume rm" not in wrapper and "rm -rf" not in wrapper, "container wrapper never deletes existing work storage")
+
 
 def test_source(source: pathlib.Path) -> None:
     check((source / ".git").is_dir(), "pinned source is a git checkout")

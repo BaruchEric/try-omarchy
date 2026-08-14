@@ -82,6 +82,29 @@ The container disables pacman's downloader sandbox only because seccomp is not
 implemented correctly by common x86-on-ARM container emulators. Native builds
 keep the sandbox enabled.
 
+On Linux, the wrapper keeps its source checkout and temporary rootfs in the host
+directory `guest/.work-container`, preserving the original native build path.
+On macOS and other Docker Desktop hosts it instead selects a stable, persistent
+Docker volume named `omarchy-web-guest-work-<workspace-checksum>`. A staged Arch
+root contains read-only and root-owned paths (including the extracted CA store
+and `/etc/machine-id`); Docker Desktop host bind mounts do not provide all Linux
+permission semantics needed to replace and clean those paths. A managed volume
+lives on Docker's Linux filesystem and does. The explicit `--output` directory
+remains a host bind, so successful artifacts appear at the requested path.
+
+Inspect the selection without building or creating any directories/volumes:
+
+```bash
+./guest/build-container.sh --dry-run --output "$PWD/guest/dist"
+```
+
+Use `--work-volume NAME` to select a particular persistent Docker volume. An
+explicit `--work DIR` remains available on Linux, but is rejected on non-Linux
+hosts to avoid recreating the permission failure. The wrapper never removes an
+old host work directory. After a failed Docker Desktop bind-based build, leave
+`guest/.work-container` in place for inspection and rerun the command above;
+the new build uses the managed volume and reuses it on subsequent attempts.
+
 The full package/image build is deliberately not part of the fast test. Do not
 spend that bandwidth until the runtime's virtio-gpu canvas path has passed its
 graphics gate.
