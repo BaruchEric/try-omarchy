@@ -8,6 +8,10 @@ const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
 
 const { d1, r2 } = hostingConfig;
 
+if (r2 !== "OMARCHY_ARTIFACTS") {
+  throw new Error("The Omarchy artifact route requires the OMARCHY_ARTIFACTS R2 binding.");
+}
+
 // macOS Seatbelt blocks FSEvents, so Codex previews need polling for HMR.
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const crossOriginIsolationHeaders = {
