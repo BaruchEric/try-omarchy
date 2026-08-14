@@ -112,8 +112,14 @@ test("isolated VM document owns the only real 1600x900 guest canvas", async () =
     hostSource,
     new RegExp(`const PROTOCOL_VERSION = ${VM_HOST_PROTOCOL.version}`),
   );
-  assert.match(hostSource, /import\(RUNTIME_MODULE_URL\)/);
-  assert.match(hostSource, /new imported\.OmarchyWasmRuntime/);
+  assert.match(hostSource, /new Worker\(workerUrl/);
+  assert.match(hostSource, /canvas\.transferControlToOffscreen\(\)/);
+  assert.match(hostSource, /runtimeWorker\.postMessage\([\s\S]*?\[offscreen\]/);
+  assert.match(hostSource, /RELEASE_BASE_PATH = "\/omarchy\/versions\/f0020448\/"/);
+  assert.match(hostSource, /kind: "key"/);
+  assert.match(hostSource, /kind: "pointer"/);
+  assert.match(hostSource, /kind: "wheel"/);
+  assert.doesNotMatch(hostSource, /OmarchyWasmRuntime|qemu\.data|load\.js/);
   assert.match(hostSource, /event\.source === window\.parent/);
   assert.match(hostSource, /event\.origin === window\.location\.origin/);
 });
