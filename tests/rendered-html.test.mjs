@@ -23,14 +23,17 @@ import {
   RUNTIME_MODULE_URL,
 } from "../app/components/vm-ui-state.mjs";
 
-async function render() {
+async function render({
+  url = "http://localhost/",
+  headers = {},
+} = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
+    new Request(url, {
+      headers: { accept: "text/html", ...headers },
     }),
     {
       ASSETS: {
@@ -61,6 +64,28 @@ test("server-renders the Omarchy demo launcher", async () => {
   assert.doesNotMatch(html, /<canvas\b/i);
   assert.doesNotMatch(html, /Omarchy desktop ready|Guest report received/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+});
+
+test("social metadata uses the incoming public origin and bespoke card", async () => {
+  const response = await render({
+    url: "https://try.example/",
+    headers: {
+      host: "try.example",
+      "x-forwarded-host": "try.example",
+      "x-forwarded-proto": "https",
+    },
+  });
+  const html = await response.text();
+
+  assert.match(html, /property="og:title" content="Try Omarchy — Live in your browser"/i);
+  assert.match(html, /property="og:image" content="https:\/\/try\.example\/og\.png"/i);
+  assert.match(html, /name="twitter:card" content="summary_large_image"/i);
+  assert.match(html, /name="twitter:image" content="https:\/\/try\.example\/og\.png"/i);
+
+  const socialCard = await readFile(
+    new URL("../public/og.png", import.meta.url),
+  );
+  assert.ok(socialCard.byteLength > 100_000);
 });
 
 test("isolated VM document owns the only real 1600x900 guest canvas", async () => {
