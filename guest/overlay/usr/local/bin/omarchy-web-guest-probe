@@ -25,6 +25,7 @@ CONFIGS = [
     "/usr/share/omarchy/default/omarchy/omarchy-menu.jsonc",
     "/usr/share/omarchy/shell/shell.qml",
 ]
+REPORT_PREFIX = "OMARCHY_GUEST_REPORT "
 
 
 def run(argv: list[str]) -> dict[str, object]:
@@ -83,8 +84,15 @@ def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def diagnostic_frame(payload: dict[str, object]) -> str:
+    # ttyS0 can have a getty prompt without a terminating newline. Delimit the
+    # evidence explicitly so line-oriented browser parsers always see the
+    # authenticated marker at column zero. CRLF is also valid on virtio-serial.
+    return "\r\n" + REPORT_PREFIX + json.dumps(payload, separators=(",", ":")) + "\r\n"
+
+
 def emit_diagnostics(payload: dict[str, object]) -> None:
-    line = "OMARCHY_GUEST_REPORT " + json.dumps(payload, separators=(",", ":")) + "\n"
+    frame = diagnostic_frame(payload)
     # virtio-serial is the preferred read-only evidence channel. ttyS0 keeps
     # native QEMU smoke tests useful when the named port is not configured.
     candidates = [
@@ -95,13 +103,13 @@ def emit_diagnostics(payload: dict[str, object]) -> None:
         try:
             descriptor = os.open(candidate, os.O_WRONLY | os.O_NONBLOCK)
             try:
-                os.write(descriptor, line.encode())
+                os.write(descriptor, frame.encode())
             finally:
                 os.close(descriptor)
             return
         except OSError:
             continue
-    print(line, end="", flush=True)
+    print(frame, end="", flush=True)
 
 
 def main() -> None:

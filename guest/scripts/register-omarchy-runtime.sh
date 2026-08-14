@@ -1,0 +1,165 @@
+#!/bin/bash
+
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: register-omarchy-runtime.sh --root ROOT --work WORK --spec SPEC --pacman-config CONFIG
+
+Builds a local Arch package from the already-verified staged Omarchy runtime
+and registers it in the guest package database without rewriting its files.
+USAGE
+}
+
+fail() {
+  echo "register-omarchy-runtime: $*" >&2
+  exit 1
+}
+
+root=""
+work=""
+spec=""
+pacman_config=""
+
+while (($#)); do
+  case "$1" in
+    --root)
+      root=${2:-}
+      shift 2
+      ;;
+    --work)
+      work=${2:-}
+      shift 2
+      ;;
+    --spec)
+      spec=${2:-}
+      shift 2
+      ;;
+    --pacman-config)
+      pacman_config=${2:-}
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown option: $1"
+      ;;
+  esac
+done
+
+[[ $root == /* && -d $root ]] || fail "--root must be an absolute staged root"
+case "$root" in
+  /|/bin|/boot|/etc|/home|/opt|/root|/usr|/var)
+    fail "refusing unsafe root: $root"
+    ;;
+esac
+[[ $work == /* && -d $work ]] || fail "--work must be an absolute directory"
+[[ -f $spec ]] || fail "spec not found: $spec"
+[[ -f $pacman_config ]] || fail "pacman config not found: $pacman_config"
+[[ -d $root/usr/share/omarchy ]] || fail "materialize Omarchy before registering it"
+[[ -x $root/usr/bin/omarchy-version ]] || fail "official omarchy-version command is missing"
+[[ -f $root/usr/share/licenses/omarchy/LICENSE ]] || fail "Omarchy license is missing"
+for command in pacman python3 tar zstd; do
+  command -v "$command" >/dev/null || fail "$command is required"
+done
+
+mapfile -t metadata < <(python3 - "$spec" <<'PY'
+import json
+import pathlib
+import sys
+
+spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print(spec["upstream"]["version"])
+print(spec["upstream"]["repository"])
+print(spec["upstream"]["commit"])
+print(spec["image"]["sourceDateEpoch"])
+PY
+)
+(( ${#metadata[@]} == 4 )) || fail "could not read package identity from spec"
+version=${metadata[0]}
+repository=${metadata[1]}
+commit=${metadata[2]}
+source_date_epoch=${metadata[3]}
+[[ $version =~ ^[A-Za-z0-9._+]+$ ]] || fail "unsafe package version: $version"
+[[ $commit =~ ^[0-9a-f]{40}$ ]] || fail "invalid upstream commit"
+[[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
+[[ $(<"$root/usr/share/omarchy/version") == "$version" ]] || fail "staged version differs from spec"
+
+package_name=omarchy-web-runtime
+package_version="$version-1"
+stage=$(mktemp -d "$work/omarchy-runtime-package.XXXXXX")
+cleanup() {
+  rm -rf "$stage"
+}
+trap cleanup EXIT
+
+mkdir -p "$stage/usr/bin" "$stage/usr/share" "$stage/usr/share/licenses"
+cp -a "$root/usr/share/omarchy" "$stage/usr/share/omarchy"
+cp -a "$root/usr/share/licenses/omarchy" "$stage/usr/share/licenses/omarchy"
+
+shopt -s nullglob
+runtime_commands=("$root/usr/bin/omarchy" "$root/usr/bin"/omarchy-*)
+(( ${#runtime_commands[@]} > 1 )) || fail "staged Omarchy commands are missing"
+for command in "${runtime_commands[@]}"; do
+  [[ -f $command ]] || fail "unexpected Omarchy command: $command"
+  cp -a "$command" "$stage/usr/bin/$(basename "$command")"
+done
+
+installed_size=$(python3 - "$stage/usr" <<'PY'
+import os
+import pathlib
+import sys
+
+total = 0
+for path in pathlib.Path(sys.argv[1]).rglob("*"):
+    if not path.is_dir():
+        total += path.lstat().st_size
+print(total)
+PY
+)
+
+cat >"$stage/.PKGINFO" <<EOF
+pkgname = $package_name
+pkgbase = $package_name
+pkgver = $package_version
+pkgdesc = Pinned Basecamp Omarchy runtime $commit for the disposable browser guest
+url = $repository
+builddate = $source_date_epoch
+packager = Omarchy Web reproducible guest builder
+size = $installed_size
+arch = any
+license = MIT
+provides = omarchy=$version
+EOF
+
+archive="$stage/$package_name-$package_version-any.pkg.tar.zst"
+tar \
+  --sort=name \
+  --mtime="@$source_date_epoch" \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  --format=gnu \
+  -C "$stage" \
+  -cf - .PKGINFO usr |
+  zstd --force --quiet -12 --threads=1 -o "$archive"
+
+# The payload is already present and was verified against the pinned source.
+# --dbonly registers ownership/version metadata without replacing a single
+# upstream byte. The local package resolves `pacman -Q omarchy` via provides.
+pacman \
+  --noconfirm \
+  --config "$pacman_config" \
+  --root "$root" \
+  --dbpath "$root/var/lib/pacman" \
+  --logfile "$root/var/log/pacman.log" \
+  -U --dbonly "$archive"
+
+query=$(pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Q omarchy)
+[[ $query == "$package_name $package_version" ]] || fail "provider query returned: $query"
+pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Qk "$package_name" >/dev/null ||
+  fail "registered package does not own the complete staged runtime"
+
+echo "Registered $query for pinned source $commit"

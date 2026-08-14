@@ -10,6 +10,7 @@ import json
 import os
 import pathlib
 import re
+import runpy
 import subprocess
 import tempfile
 
@@ -101,6 +102,13 @@ def test_static() -> None:
     required_commands = json.loads((GUEST.parent / "scripts/verification/acceptance-contract.json").read_text()).get("requiredGuestCommands", []) if (GUEST.parent / "scripts/verification/acceptance-contract.json").exists() else []
     check(all(repr(command.split()) in probe or json.dumps(command.split()) in probe for command in required_commands), "probe contains acceptance identity commands")
 
+    probe_namespace = runpy.run_path(str(GUEST / "overlay/usr/local/bin/omarchy-web-guest-probe"))
+    framed_report = probe_namespace["diagnostic_frame"]({"schemaVersion": 1, "source": "guest"})
+    serial_with_prompt = "omarchy-web login: " + framed_report
+    report_lines = [line for line in serial_with_prompt.splitlines() if line.startswith("OMARCHY_GUEST_REPORT ")]
+    framed_payload = json.loads(report_lines[0].removeprefix("OMARCHY_GUEST_REPORT ")) if len(report_lines) == 1 else {}
+    check(framed_report.startswith("\r\nOMARCHY_GUEST_REPORT ") and framed_report.endswith("\r\n") and framed_payload == {"schemaVersion": 1, "source": "guest"}, "serial guest report starts on a fresh framed line after a getty prompt")
+
     finalize = (GUEST / "scripts/finalize-rootfs.sh").read_text()
     default_link = "ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target"
     check("systemctl set-default" not in finalize and default_link in finalize, "graphical default target is materialized without systemctl")
@@ -114,6 +122,11 @@ def test_static() -> None:
 
     build = (GUEST / "build.sh").read_text()
     configure = (GUEST / "scripts/configure-rootfs.sh").read_text()
+    identity = (GUEST / "scripts/register-omarchy-runtime.sh").read_text()
+    identity_call = '"$guest_dir/scripts/register-omarchy-runtime.sh"'
+    check(identity_call in build and build.find(identity_call) < build.find('arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs'), "local Omarchy runtime package is registered before guest finalization")
+    check("package_name=omarchy-web-runtime" in identity and "provides = omarchy=$version" in identity and "-U --dbonly" in identity, "local package transparently provides the official Omarchy identity")
+    check('cp -a "$root/usr/share/omarchy"' in identity and 'cp -a "$command"' in identity and '-Qk "$package_name"' in identity, "local package owns and verifies the exact staged Omarchy runtime")
     check('package_cache="$work/pacman-cache"' in build and 'CacheDir = %s\\n' in build, "package cache is persistent under the selected work storage")
     check('pacstrap -c -P -C "$pacman_config"' in build, "pacstrap uses its configured host-cache mode")
     check('if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]' in build and "printf 'DisableSandbox\\n'" in build, "emulated builder sandbox override remains conditional")

@@ -30,6 +30,14 @@ Hyprland and Quickshell are live, `omarchy-web-guest-probe` emits a
 `guest-report.json` and a single `OMARCHY_GUEST_REPORT` JSON line over the named
 `omarchy.web.diagnostics` virtio-serial port (falling back to ttyS0).
 
+The trimmed image materializes the verified upstream payload, then registers
+that exact staged tree as a local `omarchy-web-runtime` Arch package providing
+`omarchy`. This leaves every upstream command byte-identical while making the
+official `omarchy-version` command report the pinned `4.0.0.alpha-1` package
+version through its normal `pacman -Q omarchy` lookup. The package database
+also owns the staged runtime paths, and the build rejects missing files with
+`pacman -Qk` before packing the image.
+
 ## Fast verification on any development machine
 
 No Docker, Arch installation, root access, or network is needed:

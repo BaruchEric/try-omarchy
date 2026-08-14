@@ -142,6 +142,11 @@ done
 
 "$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir"
 "$guest_dir/scripts/configure-rootfs.sh" --root "$root"
+"$guest_dir/scripts/register-omarchy-runtime.sh" \
+  --root "$root" \
+  --work "$work" \
+  --spec "$guest_dir/spec.json" \
+  --pacman-config "$pacman_config"
 arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
 arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/packages.lock.txt"
 
