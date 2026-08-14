@@ -105,6 +105,15 @@ old host work directory. After a failed Docker Desktop bind-based build, leave
 `guest/.work-container` in place for inspection and rerun the command above;
 the new build uses the managed volume and reuses it on subsequent attempts.
 
+Downloaded package archives are kept in `pacman-cache/` under that same work
+directory or managed volume. The builder uses pacstrap's supported host-cache
+mode, so a failed staging root can be discarded without discarding its verified
+downloads. Repository databases are still refreshed and the reviewed version
+lock plus package signatures are still enforced on every attempt. Pacstrap's
+temporary builder configuration is replaced with Omarchy's pinned, unmodified
+pacman configuration before the guest image is packed. The build never prunes
+the persistent package cache automatically.
+
 The full package/image build is deliberately not part of the fast test. Do not
 spend that bandwidth until the runtime's virtio-gpu canvas path has passed its
 graphics gate.

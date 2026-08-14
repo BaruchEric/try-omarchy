@@ -113,6 +113,14 @@ def test_static() -> None:
         check(replace.returncode == 0 and link.is_symlink() and os.readlink(link) == "/usr/lib/systemd/system/graphical.target", "graphical default target replaces an existing default exactly")
 
     build = (GUEST / "build.sh").read_text()
+    configure = (GUEST / "scripts/configure-rootfs.sh").read_text()
+    check('package_cache="$work/pacman-cache"' in build and 'CacheDir = %s\\n' in build, "package cache is persistent under the selected work storage")
+    check('pacstrap -c -P -C "$pacman_config"' in build, "pacstrap uses its configured host-cache mode")
+    check('if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]' in build and "printf 'DisableSandbox\\n'" in build, "emulated builder sandbox override remains conditional")
+    pinned_guest_config = 'install -m 0644 "$root/usr/share/omarchy/default/pacman/pacman-stable.conf" "$root/etc/pacman.conf"'
+    check(pinned_guest_config in configure, "guest receives the unmodified pinned pacman configuration")
+    check('rmdir "$staged_package_cache"' in build and 'rm -rf "$package_cache"' not in build and 'rm -f "$package_cache"' not in build, "persistent package cache is never deleted by the build")
+
     resolver_link = 'ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"'
     resolver_index = build.find(resolver_link)
     check(resolver_link not in finalize and build.count(resolver_link) == 1, "resolver symlink is materialized outside the chroot")

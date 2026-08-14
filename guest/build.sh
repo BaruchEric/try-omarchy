@@ -90,12 +90,27 @@ while IFS= read -r package; do
 done <"$guest_dir/packages.x86_64.txt"
 
 echo "Installing ${#packages[@]} trimmed guest packages"
-pacman_config="$source_dir/default/pacman/pacman-stable.conf"
-if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]; then
-  pacman_config="$work/pacman-builder.conf"
-  cp "$source_dir/default/pacman/pacman-stable.conf" "$pacman_config"
-  sed -i '/^\[options\]$/a DisableSandbox' "$pacman_config"
-fi
+upstream_pacman_config="$source_dir/default/pacman/pacman-stable.conf"
+package_cache="$work/pacman-cache"
+pacman_config="$work/pacman-builder.conf"
+[[ $package_cache != *$'\n'* ]] || fail "work path cannot contain a newline"
+install -d -m 0755 "$package_cache"
+
+# Preserve the pinned repository configuration exactly, adding only builder
+# options. The generated file is temporary build input; configure-rootfs later
+# installs Omarchy's unmodified pacman configuration into the guest.
+options_sections=0
+while IFS= read -r line || [[ -n $line ]]; do
+  printf '%s\n' "$line"
+  if [[ $line == "[options]" ]]; then
+    printf 'CacheDir = %s\n' "$package_cache"
+    if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]; then
+      printf 'DisableSandbox\n'
+    fi
+    options_sections=$((options_sections + 1))
+  fi
+done <"$upstream_pacman_config" >"$pacman_config"
+(( options_sections == 1 )) || fail "pinned pacman configuration must contain one [options] section"
 
 # Resolve against an empty target database and require the reviewed transitive
 # version lock before any multi-gigabyte package transaction begins.
@@ -108,7 +123,23 @@ python3 "$guest_dir/scripts/resolve-package-lock.py" \
   --output "$resolution_db/resolved.json" \
   --expect "$guest_dir/packages.x86_64.lock.json"
 
-pacstrap -C "$pacman_config" -K -M "$root" "${packages[@]}"
+# pacstrap reads configured CacheDir paths for host-cache mode only with -P.
+# The copied builder config is replaced by configure-rootfs below. Archives
+# remain under $work across failed staging roots and are still signature-checked.
+pacstrap -c -P -C "$pacman_config" -K -M "$root" "${packages[@]}"
+
+# pacstrap creates a target-side mirror of every configured cache directory,
+# even in host-cache mode. It must be empty; remove only that staged mirror and
+# any empty parents it introduced, never the persistent cache itself.
+staged_package_cache="$root$package_cache"
+[[ $staged_package_cache == "$root/"* ]] || fail "unsafe staged package cache path"
+rmdir "$staged_package_cache" || fail "target-side package cache mirror is unexpectedly non-empty"
+staged_parent=$(dirname "$staged_package_cache")
+while [[ $staged_parent != "$root" ]]; do
+  rmdir "$staged_parent" 2>/dev/null || break
+  staged_parent=$(dirname "$staged_parent")
+done
+
 "$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir"
 "$guest_dir/scripts/configure-rootfs.sh" --root "$root"
 arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
