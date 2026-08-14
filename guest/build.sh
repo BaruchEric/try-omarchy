@@ -114,5 +114,9 @@ pacstrap -C "$pacman_config" -K -M "$root" "${packages[@]}"
 arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
 arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/packages.lock.txt"
 
+# arch-chroot bind-mounts the host resolver file at this path. Replace it only
+# after every chroot invocation has returned and the temporary mount is gone.
+ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
+
 "$guest_dir/scripts/pack-image.sh" --root "$root" --output "$output"
 echo "Guest build complete: $output/guest-manifest.json"

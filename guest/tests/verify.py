@@ -112,6 +112,20 @@ def test_static() -> None:
         replace = run("ln", "-sfn", "/usr/lib/systemd/system/graphical.target", link)
         check(replace.returncode == 0 and link.is_symlink() and os.readlink(link) == "/usr/lib/systemd/system/graphical.target", "graphical default target replaces an existing default exactly")
 
+    build = (GUEST / "build.sh").read_text()
+    resolver_link = 'ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"'
+    resolver_index = build.find(resolver_link)
+    check(resolver_link not in finalize and build.count(resolver_link) == 1, "resolver symlink is materialized outside the chroot")
+    check(build.rfind("arch-chroot ") < resolver_index < build.find('"$guest_dir/scripts/pack-image.sh"'), "resolver symlink follows every chroot and precedes image packing")
+    with tempfile.TemporaryDirectory(prefix="omarchy-resolver-link.") as temporary:
+        resolv_conf = pathlib.Path(temporary) / "etc/resolv.conf"
+        resolv_conf.parent.mkdir(parents=True)
+        resolv_conf.write_text("nameserver 192.0.2.1\n")
+        target = "../run/systemd/resolve/stub-resolv.conf"
+        replace = run("ln", "-sfn", target, resolv_conf)
+        repeat = run("ln", "-sfn", target, resolv_conf)
+        check(replace.returncode == 0 and repeat.returncode == 0 and resolv_conf.is_symlink() and os.readlink(resolv_conf) == target, "resolver symlink replaces chroot file idempotently")
+
     with tempfile.TemporaryDirectory(prefix="omarchy-container-plan.") as temporary:
         scratch = pathlib.Path(temporary)
         output = scratch / "output-not-created"

@@ -31,7 +31,6 @@ systemctl enable systemd-resolved.service
 # directly avoids a systemctl introspection path that crashes under common
 # x86-on-ARM container emulators after it has already written the link.
 ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target
-ln -sfn ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
 # Generate the same current-theme state a normal headless Omarchy install
 # creates. Only session notifications/restarts are skipped.
