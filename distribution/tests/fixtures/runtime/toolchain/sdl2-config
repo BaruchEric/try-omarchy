@@ -1,0 +1,2 @@
+#!/bin/sh
+echo -sUSE_SDL=2

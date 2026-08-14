@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "sourceDateEpoch": 1786719479,
+  "outputDirectory": "./dist",
+  "guest": {
+    "artifactDirectory": "../guest/dist",
+    "packageLock": "../guest/dist/packages.lock.txt"
+  },
+  "runtime": {
+    "directory": "../runtime",
+    "qemuCheckout": "/private/tmp/qemu-wasm-source"
+  },
+  "licenses": {
+    "licenseMappings": {},
+    "packageLicenseOverrides": {},
+    "additionalSpdxLicenseIds": []
+  }
+}
