@@ -39,7 +39,9 @@ artifacts. Existing output directories are never replaced.
 
 By default the tool reads `rootfs.ext4` and `packages.lock.txt` from the guest
 artifact directory. It extracts ext4 read-only with `debugfs`, which binds the
-audit to the already-hashed release image. A fixture or retained build root may
+audit to the already-hashed release image. Only the two trees consumed by the
+audit—`/var/lib/pacman/local` and the complete `/usr/share/licenses` corpus—are
+materialized on the host. A fixture or retained build root may
 set `guest.rootfsDirectory` only together with
 `guest.allowUnverifiedRootfsDirectory: true`; the manifest then marks the audit
 as **not cryptographically bound** and it must not be used as release evidence.

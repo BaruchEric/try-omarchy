@@ -18,7 +18,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { buildDistribution, removeExtractedTree } from "../build.mjs";
+import {
+  buildDistribution,
+  extractRootfsAuditTrees,
+  removeExtractedTree,
+} from "../build.mjs";
 
 const execFileAsync = promisify(execFile);
 const fixtureRoot = fileURLToPath(new URL("fixtures", import.meta.url));
@@ -36,6 +40,46 @@ test("removes read-only trees produced by debugfs", async () => {
 
   await removeExtractedTree(root);
   await assert.rejects(lstat(root), { code: "ENOENT" });
+});
+
+test("extracts only the package database and complete license corpus from ext4", async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "omarchy-debugfs-scope-"));
+  context.after(() => removeExtractedTree(root));
+  const fakeDebugfs = path.join(root, "debugfs-fixture.mjs");
+  const image = path.join(root, "rootfs.ext4");
+  const destination = path.join(root, "extracted");
+  await writeFile(image, "ext4 fixture");
+  await writeFile(
+    fakeDebugfs,
+    `#!/usr/bin/env node
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
+const [flag, command, image] = process.argv.slice(2);
+if (flag !== "-R" || !image) process.exit(2);
+const match = /^rdump (\\/[^ ]+) (.+)$/.exec(command);
+if (!match) process.exit(3);
+appendFileSync(new URL("calls.log", import.meta.url), match[1] + "\\n");
+const target = path.join(match[2], path.basename(match[1]));
+mkdirSync(target, { recursive: true });
+writeFileSync(path.join(target, "fixture"), match[1]);
+`,
+  );
+  await chmod(fakeDebugfs, 0o755);
+
+  await extractRootfsAuditTrees(image, destination, fakeDebugfs);
+
+  assert.equal(
+    await readFile(path.join(destination, "usr/share/licenses/fixture"), "utf8"),
+    "/usr/share/licenses",
+  );
+  assert.equal(
+    await readFile(path.join(destination, "var/lib/pacman/local/fixture"), "utf8"),
+    "/var/lib/pacman/local",
+  );
+  assert.equal(
+    await readFile(path.join(root, "calls.log"), "utf8"),
+    "/usr/share/licenses\n/var/lib/pacman/local\n",
+  );
 });
 
 function sha256(value) {

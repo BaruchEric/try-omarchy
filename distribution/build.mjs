@@ -54,6 +54,10 @@ const DEFAULT_RUNTIME_INPUTS = [
   "upstream.lock.json",
   "web",
 ];
+const REQUIRED_ROOTFS_AUDIT_TREES = [
+  ["/usr/share/licenses", "usr/share"],
+  ["/var/lib/pacman/local", "var/lib/pacman"],
+];
 
 async function makeTreeOwnerWritable(target) {
   let info;
@@ -205,17 +209,25 @@ async function verifyGuestArtifacts(guestDirectory, manifest) {
   return verified;
 }
 
-async function extractRootfs(imagePath, destination, debugfsCommand) {
+export async function extractRootfsAuditTrees(imagePath, destination, debugfsCommand) {
   await mkdir(destination, { recursive: false });
   invariant(!/\s/.test(destination), `temporary rootfs extraction path contains whitespace: ${destination}`);
-  try {
-    await execFileAsync(debugfsCommand, ["-R", `rdump / ${destination}`, imagePath], {
-      encoding: "utf8",
-      maxBuffer: 16 * 1024 * 1024,
-    });
-  } catch (error) {
-    const detail = error?.code === "ENOENT" ? `${debugfsCommand} is not installed` : error?.stderr?.trim() || error.message;
-    throw new Error(`could not extract the guest ext4 image with debugfs: ${detail}`);
+
+  for (const [guestPath, parentPath] of REQUIRED_ROOTFS_AUDIT_TREES) {
+    const nativeParent = path.join(destination, ...parentPath.split("/"));
+    await mkdir(nativeParent, { recursive: true });
+    try {
+      await execFileAsync(debugfsCommand, ["-R", `rdump ${guestPath} ${nativeParent}`, imagePath], {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+      });
+    } catch (error) {
+      const rawDetail = error?.code === "ENOENT"
+        ? `${debugfsCommand} is not installed`
+        : error?.stderr?.trim() || error.message;
+      const detail = rawDetail.length > 4096 ? rawDetail.slice(-4096) : rawDetail;
+      throw new Error(`could not extract ${guestPath} from the guest ext4 image with debugfs: ${detail}`);
+    }
   }
   return destination;
 }
@@ -241,7 +253,11 @@ async function resolveRootfs(config, guestDirectory, temporaryRoot, rootArtifact
     invariant((await sha256File(image)) === rootArtifact.sha256, "configured rootfs image digest does not match the guest manifest");
   }
   return {
-    path: await extractRootfs(image, path.join(temporaryRoot, "rootfs"), config.guest.debugfsCommand ?? "debugfs"),
+    path: await extractRootfsAuditTrees(
+      image,
+      path.join(temporaryRoot, "rootfs"),
+      config.guest.debugfsCommand ?? "debugfs",
+    ),
     kind: "verified-ext4-artifact",
     cryptographicallyBoundToGuestArtifact: true,
     artifactPath: rootArtifact.path,
