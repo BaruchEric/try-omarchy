@@ -327,11 +327,26 @@ test("rejects changed or traversal-named guest artifacts", async (context) => {
   });
 });
 
-test("rejects license symlinks that escape the rootfs", async (context) => {
+test("rejects license symlinks that escape the license corpus", async (context) => {
   const fixture = await makeFixture(context);
   const unsafe = path.join(fixture.rootfs, "usr/share/licenses/demo-lib/ESCAPE");
   await symlink("/etc/passwd", unsafe);
-  await assert.rejects(buildDistribution(fixture.config), /license symlink escapes rootfs/);
+  await assert.rejects(buildDistribution(fixture.config), /license symlink escapes license root/);
+});
+
+test("resolves absolute guest license symlinks inside the extracted rootfs", async (context) => {
+  const fixture = await makeFixture(context);
+  await symlink(
+    "/usr/share/licenses/demo-lib",
+    path.join(fixture.rootfs, "usr/share/licenses/demo-lib-alias"),
+  );
+
+  const result = await buildDistribution(fixture.config);
+  assert(
+    result.noticeIndex.licenseCorpus.some((item) =>
+      item.originalPaths.includes("usr/share/licenses/demo-lib-alias/LICENSE"),
+    ),
+  );
 });
 
 test("requires an explicit non-release flag for an unverified rootfs directory", async (context) => {

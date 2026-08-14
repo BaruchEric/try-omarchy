@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, readlink, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
 import { invariant, safeRelativePath, sha256File } from "./archive.mjs";
@@ -258,6 +258,55 @@ export function verifyPackageLock(installed, lock) {
   );
 }
 
+function isInsideGuestRoot(guestPath, allowedGuestRoot) {
+  return guestPath === allowedGuestRoot || guestPath.startsWith(`${allowedGuestRoot}/`);
+}
+
+async function resolveGuestPath(rootfs, guestPath, allowedGuestRoot) {
+  let pending = path.posix.normalize(`/${guestPath}`).split("/").filter(Boolean);
+  const resolved = [];
+  const followedLinks = new Set();
+
+  while (pending.length > 0) {
+    const component = pending.shift();
+    const candidate = path.join(rootfs, ...resolved, component);
+    const info = await lstat(candidate);
+    if (!info.isSymbolicLink()) {
+      resolved.push(component);
+      continue;
+    }
+
+    const linkGuestPath = `/${[...resolved, component].join("/")}`;
+    invariant(!followedLinks.has(linkGuestPath), `license symlink cycle: ${linkGuestPath}`);
+    invariant(followedLinks.size < 40, `license symlink chain is too deep: ${linkGuestPath}`);
+    followedLinks.add(linkGuestPath);
+
+    const target = await readlink(candidate);
+    invariant(!target.includes("\0"), `license symlink target is invalid: ${linkGuestPath}`);
+    const parentGuestPath = `/${resolved.join("/")}`;
+    const targetGuestPath = path.posix.normalize(
+      target.startsWith("/") ? target : path.posix.join(parentGuestPath, target),
+    );
+    invariant(
+      isInsideGuestRoot(targetGuestPath, allowedGuestRoot),
+      `license symlink escapes license root: ${linkGuestPath}`,
+    );
+    pending = [
+      ...targetGuestPath.split("/").filter(Boolean),
+      ...pending,
+    ];
+    resolved.length = 0;
+  }
+
+  const resolvedGuestPath = `/${resolved.join("/")}`;
+  const resolvedHostPath = path.join(rootfs, ...resolved);
+  return {
+    guestPath: resolvedGuestPath,
+    hostPath: resolvedHostPath,
+    info: await lstat(resolvedHostPath),
+  };
+}
+
 async function collectTreeFiles(rootfs, relativeRoot) {
   const rootReal = await realpath(rootfs);
   const start = path.join(rootfs, ...relativeRoot.split("/"));
@@ -267,7 +316,14 @@ async function collectTreeFiles(rootfs, relativeRoot) {
   invariant(startReal.startsWith(`${rootReal}${path.sep}`), `license root escapes the rootfs: ${relativeRoot}`);
   const files = [];
 
-  async function visit(directory, relativeDirectory, ancestors = new Set()) {
+  const allowedGuestRoot = `/${relativeRoot}`;
+
+  async function visit(
+    directory,
+    relativeDirectory,
+    physicalGuestDirectory = relativeDirectory,
+    ancestors = new Set(),
+  ) {
     const directoryReal = await realpath(directory);
     invariant(directoryReal.startsWith(`${rootReal}${path.sep}`), `license directory escapes rootfs: ${relativeDirectory}`);
     invariant(!ancestors.has(directoryReal), `license directory symlink cycle: ${relativeDirectory}`);
@@ -275,19 +331,29 @@ async function collectTreeFiles(rootfs, relativeRoot) {
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       const relativePath = safeRelativePath(path.posix.join(relativeDirectory, entry.name), "rootfs license path");
-      const absolutePath = path.join(rootfs, ...relativePath.split("/"));
+      const physicalGuestPath = path.posix.join(physicalGuestDirectory, entry.name);
+      const absolutePath = path.join(directory, entry.name);
       const info = await lstat(absolutePath);
       if (info.isDirectory()) {
         invariant(!info.isSymbolicLink(), `license directory is a symlink: ${relativePath}`);
-        await visit(absolutePath, relativePath, nextAncestors);
+        await visit(absolutePath, relativePath, physicalGuestPath, nextAncestors);
       } else if (info.isSymbolicLink()) {
-        const resolved = await realpath(absolutePath);
-        invariant(resolved.startsWith(`${rootReal}${path.sep}`), `license symlink escapes rootfs: ${relativePath}`);
-        const resolvedInfo = await stat(resolved);
-        if (resolvedInfo.isDirectory()) await visit(resolved, relativePath, nextAncestors);
+        const resolved = await resolveGuestPath(rootfs, physicalGuestPath, allowedGuestRoot);
+        invariant(
+          isInsideGuestRoot(resolved.guestPath, allowedGuestRoot),
+          `license symlink escapes license root: ${relativePath}`,
+        );
+        if (resolved.info.isDirectory()) {
+          await visit(
+            resolved.hostPath,
+            relativePath,
+            resolved.guestPath.slice(1),
+            nextAncestors,
+          );
+        }
         else {
-          invariant(resolvedInfo.isFile(), `license symlink does not resolve to a file: ${relativePath}`);
-          files.push({ logicalPath: relativePath, sourcePath: resolved });
+          invariant(resolved.info.isFile(), `license symlink does not resolve to a file: ${relativePath}`);
+          files.push({ logicalPath: relativePath, sourcePath: resolved.hostPath });
         }
       } else {
         invariant(info.isFile(), `special file is forbidden in license tree: ${relativePath}`);
