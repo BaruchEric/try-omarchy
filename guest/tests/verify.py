@@ -101,6 +101,17 @@ def test_static() -> None:
     required_commands = json.loads((GUEST.parent / "scripts/verification/acceptance-contract.json").read_text()).get("requiredGuestCommands", []) if (GUEST.parent / "scripts/verification/acceptance-contract.json").exists() else []
     check(all(repr(command.split()) in probe or json.dumps(command.split()) in probe for command in required_commands), "probe contains acceptance identity commands")
 
+    finalize = (GUEST / "scripts/finalize-rootfs.sh").read_text()
+    default_link = "ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target"
+    check("systemctl set-default" not in finalize and default_link in finalize, "graphical default target is materialized without systemctl")
+    with tempfile.TemporaryDirectory(prefix="omarchy-default-target.") as temporary:
+        systemd = pathlib.Path(temporary) / "etc/systemd/system"
+        systemd.mkdir(parents=True)
+        link = systemd / "default.target"
+        link.symlink_to("/usr/lib/systemd/system/multi-user.target")
+        replace = run("ln", "-sfn", "/usr/lib/systemd/system/graphical.target", link)
+        check(replace.returncode == 0 and link.is_symlink() and os.readlink(link) == "/usr/lib/systemd/system/graphical.target", "graphical default target replaces an existing default exactly")
+
     with tempfile.TemporaryDirectory(prefix="omarchy-container-plan.") as temporary:
         scratch = pathlib.Path(temporary)
         output = scratch / "output-not-created"
