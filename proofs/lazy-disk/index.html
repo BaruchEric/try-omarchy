@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lazy disk COW proof</title>
+    <style>
+      body { margin: 2rem; background: #11110f; color: #f1f0eb; font: 16px/1.5 ui-monospace, monospace; }
+      pre { max-width: 72rem; overflow: auto; padding: 1rem; border: 1px solid #3a3a36; }
+      [data-state="passed"] { color: #d9ff43; }
+      [data-state="failed"] { color: #ff766f; }
+    </style>
+  </head>
+  <body>
+    <h1>Lazy disk copy-on-write proof</h1>
+    <p id="status" data-state="running">Running in a dedicated Worker…</p>
+    <pre id="result" aria-live="polite"></pre>
+    <script type="module">
+      const status = document.querySelector("#status");
+      const result = document.querySelector("#result");
+      const worker = new Worker("./worker.mjs", { type: "module" });
+      worker.addEventListener("message", ({ data }) => {
+        const passed = data.passed && data.rangeRequestCount >= 2 && !data.requestedWholeFile;
+        status.dataset.state = passed ? "passed" : "failed";
+        status.textContent = passed ? "PASS" : "FAIL";
+        result.textContent = JSON.stringify(data, null, 2);
+      });
+      worker.addEventListener("error", (event) => {
+        status.dataset.state = "failed";
+        status.textContent = "FAIL";
+        result.textContent = event.message;
+      });
+    </script>
+  </body>
+</html>
+
