@@ -19,8 +19,8 @@ import {
   mapCanvasPointToGuest,
   measureCanvasDisplay,
   normalizeRuntimeError,
-  RUNTIME_BASE_URL,
-  RUNTIME_MODULE_URL,
+  PRODUCTION_WORKER_URL,
+  RELEASE_BASE_URL,
 } from "../app/components/vm-ui-state.mjs";
 
 async function render({
@@ -488,8 +488,8 @@ test("missing VM artifacts produce a recoverable, specific launcher error", () =
   assert.equal(result.kind, "artifacts-missing");
   assert.equal(result.recoverable, true);
   assert.match(result.message, /\/omarchy\//);
-  assert.equal(RUNTIME_MODULE_URL, "/omarchy/runtime.mjs");
-  assert.equal(RUNTIME_BASE_URL, "/omarchy/");
+  assert.equal(PRODUCTION_WORKER_URL, "/omarchy/versions/f0020448/production-worker.mjs");
+  assert.equal(RELEASE_BASE_URL, "/omarchy/versions/f0020448/");
   assert.equal(DISPLAY_WIDTH, 1600);
   assert.equal(DISPLAY_HEIGHT, 900);
 });

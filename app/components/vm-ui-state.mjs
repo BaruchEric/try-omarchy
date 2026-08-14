@@ -1,7 +1,7 @@
 export const DISPLAY_WIDTH = 1600;
 export const DISPLAY_HEIGHT = 900;
-export const RUNTIME_MODULE_URL = "/omarchy/runtime.mjs";
-export const RUNTIME_BASE_URL = "/omarchy/";
+export const RELEASE_BASE_URL = "/omarchy/versions/f0020448/";
+export const PRODUCTION_WORKER_URL = `${RELEASE_BASE_URL}production-worker.mjs`;
 
 export const CAPABILITY_DEFINITIONS = Object.freeze([
   { key: "webAssembly", label: "WebAssembly" },
@@ -92,9 +92,24 @@ const PHASES = {
     detail: "Checking the exact emulator and guest artifact set.",
     stage: 1,
   },
+  "loading-artifact-manifest": {
+    title: "Verifying the release",
+    detail: "Checking the immutable emulator and Omarchy artifact set.",
+    stage: 1,
+  },
+  "loading-runtime-manifest": {
+    title: "Reading the VM profile",
+    detail: "Checking the paged x86_64 runtime configuration.",
+    stage: 1,
+  },
   "loading-guest": {
     title: "Loading Omarchy",
     detail: "The guest image is moving into this tab's memory.",
+    stage: 2,
+  },
+  "preflighting-rootfs": {
+    title: "Connecting the Omarchy disk",
+    detail: "Verifying byte-range access without downloading the full image.",
     stage: 2,
   },
   "starting-emulator": {
