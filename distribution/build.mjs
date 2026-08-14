@@ -3,6 +3,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmod,
   lstat,
   mkdir,
   mkdtemp,
@@ -53,6 +54,37 @@ const DEFAULT_RUNTIME_INPUTS = [
   "upstream.lock.json",
   "web",
 ];
+
+async function makeTreeOwnerWritable(target) {
+  let info;
+  try {
+    info = await lstat(target);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+
+  if (info.isSymbolicLink()) return;
+  if (info.isDirectory()) {
+    await chmod(target, info.mode | 0o700);
+    for (const entry of await readdir(target)) {
+      await makeTreeOwnerWritable(path.join(target, entry));
+    }
+    return;
+  }
+
+  await chmod(target, info.mode | 0o600);
+}
+
+export async function removeExtractedTree(target) {
+  try {
+    await rm(target, { recursive: true, force: true });
+  } catch (error) {
+    if (error?.code !== "EACCES" && error?.code !== "EPERM") throw error;
+    await makeTreeOwnerWritable(target);
+    await rm(target, { recursive: true, force: true });
+  }
+}
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -768,8 +800,8 @@ export async function buildDistribution(inputConfig, { configRoot = process.cwd(
     promoted = true;
     return { outputDirectory, manifest: distributionManifest, spdx, noticeIndex, sourceManifest };
   } finally {
-    await rm(temporary, { recursive: true, force: true });
-    if (!promoted) await rm(staging, { recursive: true, force: true });
+    await removeExtractedTree(temporary);
+    if (!promoted) await removeExtractedTree(staging);
   }
 }
 

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
+  chmod,
   cp,
   lstat,
   mkdir,
@@ -17,12 +18,25 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { buildDistribution } from "../build.mjs";
+import { buildDistribution, removeExtractedTree } from "../build.mjs";
 
 const execFileAsync = promisify(execFile);
 const fixtureRoot = fileURLToPath(new URL("fixtures", import.meta.url));
 const SOURCE_DATE_EPOCH = 1_786_719_479;
 const SUBPROJECTS = ["berkeley-softfloat-3", "berkeley-testfloat-3", "dtc", "keycodemapdb"];
+
+test("removes read-only trees produced by debugfs", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "omarchy-debugfs-cleanup-"));
+  const lockedDirectory = path.join(root, "etc", "ca-certificates", "extracted", "cadir");
+  const lockedFile = path.join(lockedDirectory, "01419da9.0");
+  await mkdir(lockedDirectory, { recursive: true });
+  await writeFile(lockedFile, "certificate fixture");
+  await chmod(lockedFile, 0o444);
+  await chmod(lockedDirectory, 0o555);
+
+  await removeExtractedTree(root);
+  await assert.rejects(lstat(root), { code: "ENOENT" });
+});
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
