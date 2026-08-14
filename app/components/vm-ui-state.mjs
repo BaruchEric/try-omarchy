@@ -114,7 +114,7 @@ const PHASES = {
   },
   failed: {
     title: "The emulator stopped",
-    detail: "Open diagnostics for the last output, then reload the demo.",
+    detail: "Open diagnostics for the last output, then start a fresh session.",
     stage: 0,
   },
   error: {
@@ -170,7 +170,7 @@ export function normalizeRuntimeError(error) {
       kind: "memory",
       title: "The browser could not reserve enough memory",
       message:
-        "Close memory-heavy tabs, reload this disposable session, and try again.",
+        "Close memory-heavy tabs, reset this disposable session, and try again.",
       technical,
       recoverable: true,
     };
@@ -180,7 +180,7 @@ export function normalizeRuntimeError(error) {
     kind: "runtime",
     title: "Omarchy could not start",
     message:
-      "No changes were made to your computer. You can retry this disposable session or reload for a clean start.",
+      "No changes were made to your computer. Reset to replace this disposable VM with a clean session.",
     technical,
     recoverable: true,
   };

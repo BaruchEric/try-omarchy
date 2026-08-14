@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import {
+  acceptVmHostMessage,
+  createVmHostCommand,
+  createVmRun,
+  VM_HOST_PROTOCOL,
+} from "../app/components/vm-host-protocol.mjs";
 import {
   advanceDesktopEvidence,
   appendDiagnosticLine,
@@ -51,12 +58,148 @@ test("server-renders the Omarchy demo launcher", async () => {
   assert.match(html, /Shared memory/);
   assert.match(html, /Wasm threads/);
   assert.match(html, /Offscreen canvas/);
-  assert.match(
-    html,
-    /<canvas[^>]+width="1600"[^>]+height="900"[^>]+tabindex="0"/i,
-  );
+  assert.doesNotMatch(html, /<canvas\b/i);
   assert.doesNotMatch(html, /Omarchy desktop ready|Guest report received/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
+});
+
+test("isolated VM document owns the only real 1600x900 guest canvas", async () => {
+  const hostHtml = await readFile(
+    new URL("../public/vm/index.html", import.meta.url),
+    "utf8",
+  );
+  const hostSource = await readFile(
+    new URL("../public/vm/host.mjs", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    hostHtml,
+    /<canvas[\s\S]*?id="canvas"[\s\S]*?width="1600"[\s\S]*?height="900"[\s\S]*?tabindex="0"/i,
+  );
+  assert.match(hostHtml, /aria-describedby="guest-input-help"/i);
+  assert.match(hostHtml, /<script type="module" src="\/vm\/host\.mjs">/i);
+  assert.match(
+    hostSource,
+    new RegExp(`const PROTOCOL_CHANNEL = "${VM_HOST_PROTOCOL.channel}"`),
+  );
+  assert.match(
+    hostSource,
+    new RegExp(`const PROTOCOL_VERSION = ${VM_HOST_PROTOCOL.version}`),
+  );
+  assert.match(hostSource, /import\(RUNTIME_MODULE_URL\)/);
+  assert.match(hostSource, /new imported\.OmarchyWasmRuntime/);
+  assert.match(hostSource, /event\.source === window\.parent/);
+  assert.match(hostSource, /event\.origin === window\.location\.origin/);
+});
+
+test("VM host protocol rejects wrong origins, sources, versions, and shapes", () => {
+  const nonce = "run_nonce_12345678901234567890";
+  const source = {};
+  const data = {
+    channel: VM_HOST_PROTOCOL.channel,
+    version: VM_HOST_PROTOCOL.version,
+    runNonce: nonce,
+    type: "ready",
+  };
+  const expected = {
+    expectedOrigin: "https://try.example",
+    expectedSource: source,
+    expectedNonce: nonce,
+  };
+
+  assert.deepEqual(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source, data },
+      expected,
+    ),
+    data,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      { origin: "https://evil.example", source, data },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source: {}, data },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...data, version: 2 },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...data, unexpected: true },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...data, type: "guestframe", frame: { sequence: 1 } },
+      },
+      expected,
+    ),
+    null,
+  );
+});
+
+test("reset lifecycle creates a new iframe generation and rejects stale runs", () => {
+  const firstNonce = "first_run_12345678901234567890";
+  const secondNonce = "second_run_1234567890123456789";
+  const first = createVmRun(null, firstNonce);
+  const second = createVmRun(first, secondNonce);
+  const source = {};
+  const staleEvent = {
+    origin: "https://try.example",
+    source,
+    data: {
+      channel: VM_HOST_PROTOCOL.channel,
+      version: VM_HOST_PROTOCOL.version,
+      runNonce: first.nonce,
+      type: "phase",
+      phase: "running",
+    },
+  };
+
+  assert.equal(first.generation, 1);
+  assert.equal(second.generation, 2);
+  assert.notEqual(first.src, second.src);
+  assert.match(second.src, /\/vm\/index\.html\?/);
+  assert.equal(
+    acceptVmHostMessage(staleEvent, {
+      expectedOrigin: "https://try.example",
+      expectedSource: source,
+      expectedNonce: second.nonce,
+    }),
+    null,
+  );
+  assert.deepEqual(createVmHostCommand("start", second.nonce), {
+    channel: VM_HOST_PROTOCOL.channel,
+    version: 1,
+    runNonce: second.nonce,
+    type: "start",
+  });
 });
 
 test("enables cross-origin isolation for WebAssembly threads", async () => {

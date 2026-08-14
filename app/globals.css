@@ -315,19 +315,17 @@ h1 {
   background: #000;
 }
 
-.guest-canvas {
+.guest-host {
   position: absolute;
   inset: 0;
   display: block;
   width: 100%;
   height: 100%;
+  border: 0;
   background: #000;
-  image-rendering: auto;
-  object-fit: contain;
-  touch-action: none;
 }
 
-.guest-canvas:focus-visible {
+.guest-host:focus-visible {
   outline: 2px solid var(--acid);
   outline-offset: -3px;
 }
@@ -738,7 +736,7 @@ kbd {
 
 .machine-frame:fullscreen .machine-screen {
   width: min(100vw, calc((100vh - 84px) * 16 / 9));
-  max-width: var(--guest-max-css-width, 1600px);
+  max-width: var(--guest-canvas-css-width, 1600px);
   min-height: 0;
   align-self: center;
   justify-self: center;

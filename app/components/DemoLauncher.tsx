@@ -2,21 +2,23 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
+  acceptVmHostMessage,
+  createVmHostCommand,
+  createVmRun,
+  createVmRunNonce,
+} from "./vm-host-protocol.mjs";
+import {
   advanceDesktopEvidence,
   appendDiagnosticLine,
   CAPABILITY_DEFINITIONS,
   createDesktopEvidence,
   describeCapabilityIssue,
-  DISPLAY_HEIGHT,
   DISPLAY_WIDTH,
   formatGuestIdentity,
   getPhasePresentation,
   inspectVmCapabilities,
   isGuestReadyReport,
-  measureCanvasDisplay,
   normalizeRuntimeError,
-  RUNTIME_BASE_URL,
-  RUNTIME_MODULE_URL,
 } from "./vm-ui-state.mjs";
 
 type CapabilityReport = {
@@ -37,37 +39,32 @@ type GuestFrame = {
 };
 
 type RuntimeErrorInfo = ReturnType<typeof normalizeRuntimeError>;
-type CanvasMetrics = ReturnType<typeof measureCanvasDisplay>;
+type CanvasMetrics = {
+  backingWidth: number;
+  backingHeight: number;
+  cssWidth: number;
+  cssHeight: number;
+  deviceWidth: number;
+  deviceHeight: number;
+  devicePixelRatio: number;
+  pixelPerfect: boolean;
+  aspectMatches: boolean;
+};
 
-interface VmRuntime extends EventTarget {
-  start(): Promise<unknown>;
-  requestReset(): boolean;
-}
-
-type VmRuntimeConstructor = new (options: {
-  baseUrl: string;
-  canvas: HTMLCanvasElement;
-}) => VmRuntime;
-
-function eventDetail(event: Event): unknown {
-  return (event as CustomEvent<unknown>).detail;
-}
-
-function objectDetail(event: Event): Record<string, unknown> {
-  const detail = eventDetail(event);
-  return detail && typeof detail === "object"
-    ? (detail as Record<string, unknown>)
-    : {};
-}
+type VmRun = {
+  generation: number;
+  nonce: string;
+  src: string;
+};
 
 const BOOT_STAGES = ["Runtime", "System image", "Emulator", "Desktop proof"];
 
 export function DemoLauncher() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const machineRef = useRef<HTMLDivElement>(null);
-  const runtimeRef = useRef<VmRuntime | null>(null);
-  const runNumberRef = useRef(0);
+  const activeRunRef = useRef<VmRun | null>(null);
   const desktopEvidenceRef = useRef(createDesktopEvidence());
+  const [hostRun, setHostRun] = useState<VmRun | null>(null);
   const [capabilities, setCapabilities] = useState<CapabilityReport | null>(null);
   const [phase, setPhase] = useState("idle");
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -83,42 +80,154 @@ export function DemoLauncher() {
 
   useEffect(() => {
     let cancelled = false;
+    function readDpr() {
+      setDisplayDpr(
+        Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+          ? window.devicePixelRatio
+          : 1,
+      );
+    }
+
+    function focusGuest() {
+      const activeRun = activeRunRef.current;
+      const hostWindow = iframeRef.current?.contentWindow;
+      if (!activeRun || !hostWindow) return;
+      hostWindow.postMessage(
+        createVmHostCommand("focus", activeRun.nonce),
+        window.location.origin,
+      );
+    }
+
     queueMicrotask(() => {
       if (!cancelled) {
         setCapabilities(inspectVmCapabilities(window) as CapabilityReport);
-        setDisplayDpr(
-          Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
-            ? window.devicePixelRatio
-            : 1,
-        );
+        readDpr();
       }
     });
 
     function handleFullscreenChange() {
       setIsFullscreen(document.fullscreenElement === machineRef.current);
       if (document.fullscreenElement === machineRef.current) {
-        canvasRef.current?.focus({ preventScroll: true });
+        focusGuest();
       }
     }
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
+    window.addEventListener("resize", readDpr);
     return () => {
       cancelled = true;
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      window.removeEventListener("resize", readDpr);
     };
   }, []);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || typeof ResizeObserver !== "function") return;
+    function addHostDiagnostic(value: string) {
+      setSerialLines((lines) => appendDiagnosticLine(lines, value));
+    }
 
-    const observer = new ResizeObserver(() => {
-      setCanvasMetrics(
-        measureCanvasDisplay(canvas.getBoundingClientRect(), window.devicePixelRatio),
-      );
-    });
-    observer.observe(canvas);
-    return () => observer.disconnect();
+    function handleHostMessage(event: MessageEvent) {
+      const activeRun = activeRunRef.current;
+      const hostWindow = iframeRef.current?.contentWindow;
+      if (!activeRun || !hostWindow) return;
+
+      const message = acceptVmHostMessage(event, {
+        expectedOrigin: window.location.origin,
+        expectedSource: hostWindow,
+        expectedNonce: activeRun.nonce,
+      });
+      if (!message) return;
+
+      switch (message.type) {
+        case "ready":
+          hostWindow.postMessage(
+            createVmHostCommand("start", activeRun.nonce),
+            window.location.origin,
+          );
+          break;
+        case "phase": {
+          const nextPhase = message.phase as string;
+          setPhase(nextPhase);
+          if (nextPhase === "failed") {
+            const failure = normalizeRuntimeError(
+              message.reason ?? "The emulator reported a failed phase.",
+            );
+            setRuntimeError(failure);
+            addHostDiagnostic(`[runtime] ${failure.technical}`);
+          }
+          break;
+        }
+        case "serial":
+          addHostDiagnostic(`[${message.stream}] ${message.line}`);
+          break;
+        case "guestframe": {
+          const frame = message.frame as GuestFrame;
+          setLastFrame(frame);
+          const previous = desktopEvidenceRef.current;
+          const next = advanceDesktopEvidence(previous, {
+            type: "guestframe",
+            frame,
+          });
+          desktopEvidenceRef.current = next;
+          if (!previous.ready && next.ready && next.report) {
+            setGuestReport(next.report as GuestReport);
+            setGuestReady(true);
+            setRuntimeError(null);
+            addHostDiagnostic(
+              "[guest] Desktop report followed by a fresh 1600x900 guest frame; session is ready.",
+            );
+            hostWindow.postMessage(
+              createVmHostCommand("focus", activeRun.nonce),
+              window.location.origin,
+            );
+          }
+          break;
+        }
+        case "guestreport": {
+          const report = message.report;
+          if (!isGuestReadyReport(report)) {
+            addHostDiagnostic(
+              "[guest] Rejected a readiness report that did not prove Omarchy, Arch x86_64, Hyprland, and the shell.",
+            );
+            break;
+          }
+          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
+            type: "guestreport",
+            report,
+          });
+          desktopEvidenceRef.current = next;
+          setGuestReport(report as GuestReport);
+          setGuestReady(false);
+          addHostDiagnostic(
+            "[guest] Authenticity report received; waiting for a later 1600x900 guest frame.",
+          );
+          break;
+        }
+        case "reload":
+          addHostDiagnostic(
+            `[runtime] ${message.reason} Use Reset to replace this isolated VM document.`,
+          );
+          break;
+        case "error": {
+          const failure = normalizeRuntimeError(
+            message.technical ?? message.message,
+          );
+          setRuntimeError(failure);
+          setPhase("error");
+          addHostDiagnostic(`[host] ${failure.technical}`);
+          break;
+        }
+        case "metrics":
+          setCanvasMetrics(message.metrics as CanvasMetrics);
+          break;
+      }
+    }
+
+    window.addEventListener("message", handleHostMessage);
+    return () => {
+      window.removeEventListener("message", handleHostMessage);
+      activeRunRef.current = null;
+    };
   }, []);
 
   const unsupported = capabilities !== null && !capabilities.supported;
@@ -130,151 +239,42 @@ export function DemoLauncher() {
     setSerialLines((lines) => appendDiagnosticLine(lines, value));
   }
 
-  async function handleLaunch() {
-    if (!capabilities?.supported || starting || guestReady) return;
-
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const runNumber = runNumberRef.current + 1;
-    runNumberRef.current = runNumber;
-    setSessionStarted(true);
-    setGuestReady(false);
-    setGuestReport(null);
-    setLastFrame(null);
-    desktopEvidenceRef.current = createDesktopEvidence();
-    setRuntimeError(null);
-    setControlMessage("");
-    setSerialLines([]);
-    setPhase("loading-runtime");
-
+  function beginFreshRun(isReset: boolean) {
     try {
-      const runtimeUrl = new URL(RUNTIME_MODULE_URL, window.location.href).href;
-      const imported = (await import(
-        /* @vite-ignore */ runtimeUrl
-      )) as unknown as {
-        OmarchyWasmRuntime?: VmRuntimeConstructor;
-      };
-      if (typeof imported.OmarchyWasmRuntime !== "function") {
-        throw new Error(
-          "The module at /omarchy/runtime.mjs does not export OmarchyWasmRuntime.",
-        );
-      }
-      if (runNumber !== runNumberRef.current) return;
-
-      const runtime = new imported.OmarchyWasmRuntime({
-        baseUrl: new URL(RUNTIME_BASE_URL, window.location.href).href,
-        canvas,
-      });
-      runtimeRef.current = runtime;
-
-      runtime.addEventListener("phasechange", (event) => {
-        if (runNumber !== runNumberRef.current) return;
-        const detail = objectDetail(event);
-        const nextPhase =
-          typeof detail.phase === "string" ? detail.phase : "unknown";
-        setPhase(nextPhase);
-        if (nextPhase === "failed") {
-          const failure = normalizeRuntimeError(
-            detail.reason ?? "The emulator reported a failed phase.",
-          );
-          setRuntimeError(failure);
-          addDiagnostic(`[runtime] ${failure.technical}`);
-        }
-      });
-
-      runtime.addEventListener("serial", (event) => {
-        if (runNumber !== runNumberRef.current) return;
-        const detail = objectDetail(event);
-        const stream = detail.stream === "stderr" ? "stderr" : "stdout";
-        const line = typeof detail.line === "string" ? detail.line : "";
-        if (line) addDiagnostic(`[${stream}] ${line}`);
-      });
-
-      runtime.addEventListener("guestframe", (event) => {
-        if (runNumber !== runNumberRef.current) return;
-        const detail = objectDetail(event);
-        if (
-          detail.source === "qemu-guest" &&
-          typeof detail.sequence === "number" &&
-          Number.isFinite(detail.sequence)
-        ) {
-          const frame = {
-            sequence: detail.sequence,
-            source: detail.source,
-            guestWidth:
-              typeof detail.guestWidth === "number"
-                ? detail.guestWidth
-                : undefined,
-            guestHeight:
-              typeof detail.guestHeight === "number"
-                ? detail.guestHeight
-                : undefined,
-          };
-          setLastFrame(frame);
-
-          const previous = desktopEvidenceRef.current;
-          const next = advanceDesktopEvidence(previous, {
-            type: "guestframe",
-            frame,
-          });
-          desktopEvidenceRef.current = next;
-          if (!previous.ready && next.ready && next.report) {
-            setGuestReport(next.report as GuestReport);
-            setGuestReady(true);
-            setRuntimeError(null);
-            addDiagnostic(
-              "[guest] Desktop report followed by a fresh 1600x900 guest frame; session is ready.",
-            );
-            canvas.focus({ preventScroll: true });
-          }
-        }
-      });
-
-      runtime.addEventListener("guestreport", (event) => {
-        if (runNumber !== runNumberRef.current) return;
-        const report = eventDetail(event);
-        if (!isGuestReadyReport(report)) {
-          addDiagnostic(
-            "[guest] Rejected a readiness report that did not prove Omarchy, Arch x86_64, Hyprland, and the shell.",
-          );
-          return;
-        }
-
-        const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
-          type: "guestreport",
-          report,
-        });
-        desktopEvidenceRef.current = next;
-        setGuestReport(report as GuestReport);
-        setGuestReady(false);
-        addDiagnostic(
-          "[guest] Authenticity report received; waiting for a later 1600x900 guest frame.",
-        );
-      });
-
-      runtime.addEventListener("guestreporterror", (event) => {
-        const detail = objectDetail(event);
-        addDiagnostic(
-          `[guest] Invalid readiness report: ${String(detail.error ?? "unknown parse error")}`,
-        );
-      });
-
-      runtime.addEventListener("reloadrequired", (event) => {
-        const detail = objectDetail(event);
-        addDiagnostic(
-          `[runtime] ${String(detail.reason ?? "Reload required to reset the VM.")}`,
-        );
-      });
-
-      await runtime.start();
+      const nextRun = createVmRun(
+        activeRunRef.current,
+        createVmRunNonce(window.crypto),
+      ) as VmRun;
+      activeRunRef.current = nextRun;
+      if (iframeRef.current) iframeRef.current.src = "about:blank";
+      setHostRun(nextRun);
+      setSessionStarted(true);
+      setGuestReady(false);
+      setGuestReport(null);
+      setLastFrame(null);
+      setCanvasMetrics(null);
+      desktopEvidenceRef.current = createDesktopEvidence();
+      setRuntimeError(null);
+      setControlMessage("");
+      setSerialLines(
+        isReset
+          ? [
+              "[launcher] Previous VM document destroyed; starting a fresh disposable session.",
+            ]
+          : [],
+      );
+      setPhase("loading-runtime");
     } catch (error) {
-      if (runNumber !== runNumberRef.current) return;
       const failure = normalizeRuntimeError(error);
       setRuntimeError(failure);
       setPhase("error");
       addDiagnostic(`[launcher] ${failure.technical}`);
     }
+  }
+
+  function handleLaunch() {
+    if (!capabilities?.supported || starting || guestReady) return;
+    beginFreshRun(false);
   }
 
   async function handleFullscreen() {
@@ -287,6 +287,14 @@ export function DemoLauncher() {
       } else {
         await machine.requestFullscreen();
       }
+      const activeRun = activeRunRef.current;
+      const hostWindow = iframeRef.current?.contentWindow;
+      if (activeRun && hostWindow) {
+        hostWindow.postMessage(
+          createVmHostCommand("focus", activeRun.nonce),
+          window.location.origin,
+        );
+      }
       setControlMessage("");
     } catch {
       setControlMessage(
@@ -295,8 +303,8 @@ export function DemoLauncher() {
     }
   }
 
-  function reloadSession() {
-    window.location.reload();
+  function resetSession() {
+    beginFreshRun(true);
   }
 
   const launchLabel =
@@ -316,6 +324,7 @@ export function DemoLauncher() {
     // The frame has a one-pixel border on each side; add those CSS pixels so
     // the canvas content itself maps exactly to the guest's device pixels.
     "--guest-max-css-width": `${DISPLAY_WIDTH / displayDpr + 2}px`,
+    "--guest-canvas-css-width": `${DISPLAY_WIDTH / displayDpr}px`,
   } as CSSProperties;
 
   return (
@@ -405,7 +414,7 @@ export function DemoLauncher() {
                     <button
                       className="machine-control machine-control--reset"
                       type="button"
-                      onClick={reloadSession}
+                      onClick={resetSession}
                     >
                       Reset
                     </button>
@@ -415,21 +424,18 @@ export function DemoLauncher() {
             </div>
 
             <div className="machine-screen">
-              <canvas
-                ref={canvasRef}
-                className="guest-canvas"
-                width={DISPLAY_WIDTH}
-                height={DISPLAY_HEIGHT}
-                tabIndex={0}
-                aria-label="Omarchy guest display. Click to send keyboard and pointer input to the virtual machine."
-                aria-describedby={sessionStarted ? "shortcut-help" : undefined}
-                onPointerDown={() =>
-                  canvasRef.current?.focus({ preventScroll: true })
-                }
-                onContextMenu={(event) => event.preventDefault()}
-              >
-                Your browser needs canvas support to show the Omarchy guest.
-              </canvas>
+              {hostRun && (
+                <iframe
+                  key={hostRun.generation}
+                  ref={iframeRef}
+                  className="guest-host"
+                  src={hostRun.src}
+                  title="Omarchy disposable virtual machine"
+                  aria-describedby="shortcut-help"
+                  sandbox="allow-same-origin allow-scripts"
+                  referrerPolicy="same-origin"
+                />
+              )}
 
               {!sessionStarted && (
                 <div className="screen-overlay screen-overlay--idle">
@@ -501,9 +507,9 @@ export function DemoLauncher() {
                     <button
                       className="inline-action"
                       type="button"
-                      onClick={reloadSession}
+                      onClick={resetSession}
                     >
-                      Reload and try again
+                      Start a fresh session
                     </button>
                   </div>
                 </div>
@@ -583,8 +589,8 @@ export function DemoLauncher() {
           </div>
           {sessionStarted && (
             <p className="disposable-note">
-              Reset reloads this page and destroys the current in-memory VM.
-              Nothing from this session is kept.
+              Reset destroys this isolated in-memory VM and starts a fresh one
+              without reloading the page. Nothing from this session is kept.
             </p>
           )}
         </div>
