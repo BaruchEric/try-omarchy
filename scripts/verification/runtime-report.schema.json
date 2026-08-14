@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/omarchy-web/runtime-report.schema.json",
+  "title": "Omarchy five-minute browser run report",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "environment",
+    "authenticity",
+    "display",
+    "input",
+    "journey",
+    "performance",
+    "durationMs"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "artifactManifestSha256": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$"
+    },
+    "environment": {
+      "type": "object",
+      "required": [
+        "browser",
+        "browserVersion",
+        "operatingSystem",
+        "networkProfile",
+        "devicePixelRatio",
+        "crossOriginIsolated",
+        "sharedArrayBuffer"
+      ]
+    },
+    "authenticity": {
+      "type": "object",
+      "required": [
+        "evidenceSource",
+        "guestArchitecture",
+        "omarchyCommit",
+        "framebufferSource"
+      ]
+    },
+    "display": {
+      "type": "object",
+      "required": [
+        "guestWidth",
+        "guestHeight",
+        "canvasCssWidth",
+        "canvasCssHeight",
+        "canvasBackingWidth",
+        "canvasBackingHeight"
+      ]
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "keyboard",
+        "modifiers",
+        "pointerMotion",
+        "pointerButtons",
+        "wheel",
+        "focusRecovery",
+        "shortcutAlternative"
+      ]
+    },
+    "journey": { "type": "array", "minItems": 10 },
+    "performance": {
+      "type": "object",
+      "required": [
+        "coldDesktopReadyMs",
+        "cachedDesktopReadyMs",
+        "inputLatencyP95Ms",
+        "fpsP05",
+        "fpsP50",
+        "memoryPeakMiB",
+        "longestBlackFrameMs",
+        "runtimeCrashCount",
+        "consoleErrorCount"
+      ]
+    },
+    "durationMs": { "type": "number", "minimum": 1 }
+  }
+}
