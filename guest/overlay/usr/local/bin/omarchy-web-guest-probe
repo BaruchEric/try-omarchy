@@ -1,0 +1,162 @@
+#!/usr/bin/python3
+"""Collect live, guest-originated authenticity evidence after desktop start."""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import time
+
+PROVENANCE = pathlib.Path("/usr/share/omarchy-web/provenance.json")
+REPORT = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "omarchy-web/guest-report.json"
+COMMANDS = [
+    ["uname", "-m"],
+    ["hyprctl", "version"],
+    ["hyprctl", "monitors", "-j"],
+    ["omarchy-version"],
+]
+CONFIGS = [
+    "/usr/share/omarchy/default/hypr/omarchy.lua",
+    "/usr/share/omarchy/default/omarchy/omarchy-menu.jsonc",
+    "/usr/share/omarchy/shell/shell.qml",
+]
+
+
+def run(argv: list[str]) -> dict[str, object]:
+    result = subprocess.run(argv, text=True, capture_output=True, check=False)
+    return {
+        "argv": argv,
+        "exitCode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def package_version(name: str) -> str:
+    result = subprocess.run(["pacman", "-Q", name], text=True, capture_output=True, check=False)
+    if result.returncode == 0 and " " in result.stdout.strip():
+        return result.stdout.strip().split(" ", 1)[1]
+    return "unknown"
+
+
+def process_records() -> list[dict[str, object]]:
+    records = []
+    for proc in pathlib.Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            name = (proc / "comm").read_text().strip()
+            raw_command = (proc / "cmdline").read_bytes().rstrip(b"\0")
+            command = raw_command.replace(b"\0", b" ").decode(errors="replace")
+            if "hyprland" not in (name + " " + command).lower() and "quickshell" not in (name + " " + command).lower():
+                continue
+            records.append(
+                {
+                    "name": name,
+                    "pid": int(proc.name),
+                    "executable": os.readlink(proc / "exe"),
+                    "command": command,
+                }
+            )
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return sorted(records, key=lambda item: int(item["pid"]))
+
+
+def wait_for_desktop() -> None:
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        version = subprocess.run(["hyprctl", "version"], capture_output=True, check=False)
+        processes = process_records()
+        if version.returncode == 0 and any("quickshell" in str(item["name"]).lower() for item in processes):
+            return
+        time.sleep(1)
+    raise SystemExit("Hyprland and Quickshell did not become ready within 45 seconds")
+
+
+def sha256(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def emit_diagnostics(payload: dict[str, object]) -> None:
+    line = "OMARCHY_GUEST_REPORT " + json.dumps(payload, separators=(",", ":")) + "\n"
+    # virtio-serial is the preferred read-only evidence channel. ttyS0 keeps
+    # native QEMU smoke tests useful when the named port is not configured.
+    candidates = [
+        pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
+        pathlib.Path("/dev/ttyS0"),
+    ]
+    for candidate in candidates:
+        try:
+            descriptor = os.open(candidate, os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                os.write(descriptor, line.encode())
+            finally:
+                os.close(descriptor)
+            return
+        except OSError:
+            continue
+    print(line, end="", flush=True)
+
+
+def main() -> None:
+    wait_for_desktop()
+    provenance = json.loads(PROVENANCE.read_text())
+    normalized = provenance["normalizedUpstreamTree"]
+    commands = [run(argv) for argv in COMMANDS]
+    processes = process_records()
+    hyprland_version = next(item["stdout"] for item in commands if item["argv"] == ["hyprctl", "version"])
+    hyprland_version = str(hyprland_version).splitlines()[0] if str(hyprland_version).strip() else package_version("hyprland")
+    shell_process = next((item for item in processes if "quickshell" in str(item["name"]).lower()), None)
+    shell_name = str(shell_process["name"]) if shell_process else "quickshell"
+
+    payload = {
+        "schemaVersion": 1,
+        "generatedAt": dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "provenance": {
+            "repository": provenance["upstream"]["repository"],
+            "commit": provenance["upstream"]["commit"],
+            "version": provenance["upstream"]["version"],
+            "treeSha256": normalized["sha256"],
+        },
+        "system": {
+            "architecture": os.uname().machine,
+            "distribution": "Arch Linux",
+            "kernel": os.uname().release,
+            "sessionType": os.environ.get("XDG_SESSION_TYPE", "wayland"),
+        },
+        "components": [
+            {
+                "role": "compositor",
+                "name": "Hyprland",
+                "version": hyprland_version,
+                "executable": shutil.which("Hyprland") or "/usr/bin/Hyprland",
+            },
+            {
+                "role": "shell",
+                "name": shell_name,
+                "version": package_version("quickshell-git"),
+                "executable": shutil.which("quickshell") or "/usr/bin/quickshell",
+            },
+        ],
+        "processes": processes,
+        "commands": commands,
+        "configs": [
+            {"path": path, "sha256": sha256(pathlib.Path(path)), "origin": "omarchy-upstream"}
+            for path in CONFIGS
+        ],
+    }
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
+    temporary = REPORT.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temporary.replace(REPORT)
+    emit_diagnostics(payload)
+
+
+if __name__ == "__main__":
+    main()

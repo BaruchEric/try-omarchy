@@ -1,0 +1,13 @@
+{
+  "browser": {
+    "check_default_browser": false
+  },
+  "distribution": {
+    "skip_first_run_ui": true
+  },
+  "profile": {
+    "default_content_setting_values": {
+      "notifications": 2
+    }
+  }
+}

@@ -1,0 +1,12 @@
+FROM archlinux:base
+
+RUN pacman -Syu --noconfirm --disable-sandbox \
+      arch-install-scripts \
+      e2fsprogs \
+      git \
+      python \
+      zstd \
+    && pacman -Scc --noconfirm --disable-sandbox
+
+WORKDIR /workspace
+ENTRYPOINT ["/workspace/guest/build.sh"]

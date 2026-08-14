@@ -1,0 +1,5 @@
+/dist/
+/.work/
+/.work-container/
+__pycache__/
+*.pyc

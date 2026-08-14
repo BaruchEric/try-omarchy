@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "image": {
+    "architecture": "x86_64",
+    "filesystem": "ext4",
+    "filesystemLabel": "omarchy-web",
+    "filesystemUuid": "63d3677c-30d7-4f6b-a8b4-6ffea9ce2e42",
+    "sizeMiB": 6144,
+    "sourceDateEpoch": 1786719479
+  },
+  "guest": {
+    "hostname": "omarchy-web",
+    "username": "omarchy",
+    "uid": 1000,
+    "defaultTheme": "tokyo-night",
+    "virtualDisplay": {
+      "width": 1600,
+      "height": 900,
+      "refreshHz": 60,
+      "scale": 1
+    }
+  },
+  "upstream": {
+    "repository": "https://github.com/basecamp/omarchy",
+    "commit": "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
+    "tree": "19fba2114c162be330337f8a7f1e109e2a1f8384",
+    "treeSha256": "7c053841c0b43df796cb002441f3e0cccad4a32288769f499c86b509b4f86980",
+    "version": "4.0.0.alpha",
+    "license": "MIT"
+  },
+  "themes": [
+    "catppuccin",
+    "gruvbox",
+    "matte-black",
+    "rose-pine",
+    "tokyo-night",
+    "white"
+  ],
+  "inputs": {
+    "packages": "packages.x86_64.txt",
+    "packageLock": "packages.x86_64.lock.json",
+    "maskedSystemServices": "services.system-mask.txt",
+    "maskedUserServices": "services.user-mask.txt"
+  },
+  "authenticity": {
+    "verbatimRuntimeTrees": [
+      "applications",
+      "bin",
+      "config",
+      "default",
+      "install",
+      "migrations",
+      "shell"
+    ],
+    "requiredPaths": [
+      "LICENSE",
+      "bin/omarchy",
+      "bin/omarchy-launch-shell",
+      "bin/omarchy-menu",
+      "bin/omarchy-theme-set",
+      "config/foot/foot.ini",
+      "config/hypr/hyprland.lua",
+      "config/hypr/monitors.lua",
+      "config/omarchy/shell.json",
+      "default/hypr/omarchy.lua",
+      "default/omarchy/omarchy-menu.jsonc",
+      "default/themed/shell.toml.tpl",
+      "default/uwsm/env.d/10-omarchy",
+      "default/wayland-sessions/omarchy.desktop",
+      "shell/shell.qml",
+      "themes/tokyo-night/colors.toml",
+      "version"
+    ]
+  },
+  "runtime": {
+    "kernel": "vmlinuz-linux",
+    "initramfs": "initramfs-linux.img",
+    "disk": "rootfs.ext4",
+    "compressedDisk": "rootfs.ext4.zst",
+    "kernelCommandLine": "root=/dev/vda rw rootfstype=ext4 console=tty0 console=ttyS0,115200n8 loglevel=3 systemd.show_status=auto vt.global_cursor_default=0",
+    "minimumMemoryMiB": 1536,
+    "recommendedMemoryMiB": 2048,
+    "devices": [
+      "virtio-blk-pci",
+      "virtio-gpu-pci",
+      "virtio-keyboard-pci",
+      "virtio-mouse-pci",
+      "virtio-net-pci"
+    ]
+  }
+}

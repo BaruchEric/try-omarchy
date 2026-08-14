@@ -1,0 +1,12 @@
+[Unit]
+Description=Emit live Omarchy browser-demo authenticity evidence
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/omarchy-web-guest-probe
+
+[Install]
+WantedBy=graphical-session.target
