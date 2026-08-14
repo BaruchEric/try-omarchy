@@ -258,11 +258,13 @@ export function verifyPackageLock(installed, lock) {
   );
 }
 
-function isInsideGuestRoot(guestPath, allowedGuestRoot) {
-  return guestPath === allowedGuestRoot || guestPath.startsWith(`${allowedGuestRoot}/`);
+function isInsideGuestRoots(guestPath, allowedGuestRoots) {
+  return allowedGuestRoots.some(
+    (root) => guestPath === root || guestPath.startsWith(`${root}/`),
+  );
 }
 
-async function resolveGuestPath(rootfs, guestPath, allowedGuestRoot) {
+async function resolveGuestPath(rootfs, guestPath, allowedGuestRoots) {
   let pending = path.posix.normalize(`/${guestPath}`).split("/").filter(Boolean);
   const resolved = [];
   const followedLinks = new Set();
@@ -288,8 +290,8 @@ async function resolveGuestPath(rootfs, guestPath, allowedGuestRoot) {
       target.startsWith("/") ? target : path.posix.join(parentGuestPath, target),
     );
     invariant(
-      isInsideGuestRoot(targetGuestPath, allowedGuestRoot),
-      `license symlink escapes license root: ${linkGuestPath}`,
+      isInsideGuestRoots(targetGuestPath, allowedGuestRoots),
+      `license symlink escapes reviewed guest roots: ${linkGuestPath}`,
     );
     pending = [
       ...targetGuestPath.split("/").filter(Boolean),
@@ -316,7 +318,7 @@ async function collectTreeFiles(rootfs, relativeRoot) {
   invariant(startReal.startsWith(`${rootReal}${path.sep}`), `license root escapes the rootfs: ${relativeRoot}`);
   const files = [];
 
-  const allowedGuestRoot = `/${relativeRoot}`;
+  const allowedGuestRoots = [`/${relativeRoot}`, "/usr/share/doc"];
 
   async function visit(
     directory,
@@ -338,10 +340,10 @@ async function collectTreeFiles(rootfs, relativeRoot) {
         invariant(!info.isSymbolicLink(), `license directory is a symlink: ${relativePath}`);
         await visit(absolutePath, relativePath, physicalGuestPath, nextAncestors);
       } else if (info.isSymbolicLink()) {
-        const resolved = await resolveGuestPath(rootfs, physicalGuestPath, allowedGuestRoot);
+        const resolved = await resolveGuestPath(rootfs, physicalGuestPath, allowedGuestRoots);
         invariant(
-          isInsideGuestRoot(resolved.guestPath, allowedGuestRoot),
-          `license symlink escapes license root: ${relativePath}`,
+          isInsideGuestRoots(resolved.guestPath, allowedGuestRoots),
+          `license symlink escapes reviewed guest roots: ${relativePath}`,
         );
         if (resolved.info.isDirectory()) {
           await visit(

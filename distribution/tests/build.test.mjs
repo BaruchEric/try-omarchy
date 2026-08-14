@@ -52,16 +52,27 @@ test("extracts only the package database and complete license corpus from ext4",
   await writeFile(
     fakeDebugfs,
     `#!/usr/bin/env node
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 const [flag, command, image] = process.argv.slice(2);
 if (flag !== "-R" || !image) process.exit(2);
-const match = /^rdump (\\/[^ ]+) (.+)$/.exec(command);
-if (!match) process.exit(3);
-appendFileSync(new URL("calls.log", import.meta.url), match[1] + "\\n");
-const target = path.join(match[2], path.basename(match[1]));
-mkdirSync(target, { recursive: true });
-writeFileSync(path.join(target, "fixture"), match[1]);
+const rdump = /^rdump (\\/[^ ]+) (.+)$/.exec(command);
+const dump = /^dump (\\/[^ ]+) (.+)$/.exec(command);
+if (rdump) {
+  appendFileSync(new URL("calls.log", import.meta.url), "rdump " + rdump[1] + "\\n");
+  const target = path.join(rdump[2], path.basename(rdump[1]));
+  mkdirSync(target, { recursive: true });
+  writeFileSync(path.join(target, "fixture"), rdump[1]);
+  if (rdump[1] === "/usr/share/licenses") {
+    symlinkSync("/usr/share/doc/demo/LICENSE", path.join(target, "external-license"));
+  }
+} else if (dump) {
+  appendFileSync(new URL("calls.log", import.meta.url), "dump " + dump[1] + "\\n");
+  mkdirSync(path.dirname(dump[2]), { recursive: true });
+  writeFileSync(dump[2], dump[1]);
+} else {
+  process.exit(3);
+}
 `,
   );
   await chmod(fakeDebugfs, 0o755);
@@ -77,8 +88,14 @@ writeFileSync(path.join(target, "fixture"), match[1]);
     "/var/lib/pacman/local",
   );
   assert.equal(
+    await readFile(path.join(destination, "usr/share/doc/demo/LICENSE"), "utf8"),
+    "/usr/share/doc/demo/LICENSE",
+  );
+  assert.equal(
     await readFile(path.join(root, "calls.log"), "utf8"),
-    "/usr/share/licenses\n/var/lib/pacman/local\n",
+    "rdump /usr/share/licenses\n" +
+      "rdump /var/lib/pacman/local\n" +
+      "dump /usr/share/doc/demo/LICENSE\n",
   );
 });
 
@@ -327,11 +344,11 @@ test("rejects changed or traversal-named guest artifacts", async (context) => {
   });
 });
 
-test("rejects license symlinks that escape the license corpus", async (context) => {
+test("rejects license symlinks that escape reviewed guest roots", async (context) => {
   const fixture = await makeFixture(context);
   const unsafe = path.join(fixture.rootfs, "usr/share/licenses/demo-lib/ESCAPE");
   await symlink("/etc/passwd", unsafe);
-  await assert.rejects(buildDistribution(fixture.config), /license symlink escapes license root/);
+  await assert.rejects(buildDistribution(fixture.config), /license symlink escapes reviewed guest roots/);
 });
 
 test("resolves absolute guest license symlinks inside the extracted rootfs", async (context) => {

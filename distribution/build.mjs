@@ -8,6 +8,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readlink,
   readdir,
   realpath,
   rename,
@@ -58,6 +59,9 @@ const REQUIRED_ROOTFS_AUDIT_TREES = [
   ["/usr/share/licenses", "usr/share"],
   ["/var/lib/pacman/local", "var/lib/pacman"],
 ];
+const LICENSE_GUEST_ROOT = "/usr/share/licenses";
+const ALLOWED_EXTERNAL_LICENSE_ROOT = "/usr/share/doc";
+const SAFE_DEBUGFS_PATH = /^\/[A-Za-z0-9._+/-]+$/;
 
 async function makeTreeOwnerWritable(target) {
   let info;
@@ -209,6 +213,62 @@ async function verifyGuestArtifacts(guestDirectory, manifest) {
   return verified;
 }
 
+function insideGuestPath(guestPath, root) {
+  return guestPath === root || guestPath.startsWith(`${root}/`);
+}
+
+function resolveGuestLinkTarget(linkGuestPath, target) {
+  return path.posix.normalize(
+    target.startsWith("/")
+      ? target
+      : path.posix.join(path.posix.dirname(linkGuestPath), target),
+  );
+}
+
+async function collectExternalLicenseTargets(destination) {
+  const licenseRoot = path.join(destination, "usr", "share", "licenses");
+  const targets = new Set();
+
+  async function visit(directory, guestDirectory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const nativePath = path.join(directory, entry.name);
+      const guestPath = path.posix.join(guestDirectory, entry.name);
+      const info = await lstat(nativePath);
+      if (info.isDirectory()) {
+        await visit(nativePath, guestPath);
+      } else if (info.isSymbolicLink()) {
+        const target = resolveGuestLinkTarget(guestPath, await readlink(nativePath));
+        if (insideGuestPath(target, LICENSE_GUEST_ROOT)) continue;
+        invariant(
+          insideGuestPath(target, ALLOWED_EXTERNAL_LICENSE_ROOT) &&
+            SAFE_DEBUGFS_PATH.test(target) &&
+            !target.split("/").includes(".."),
+          `license symlink target is outside the reviewed guest documentation root: ${guestPath}`,
+        );
+        targets.add(target);
+      }
+    }
+  }
+
+  await visit(licenseRoot, LICENSE_GUEST_ROOT);
+  return [...targets].sort();
+}
+
+async function runDebugfs(debugfsCommand, command, imagePath, guestPath) {
+  try {
+    await execFileAsync(debugfsCommand, ["-R", command, imagePath], {
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    const rawDetail = error?.code === "ENOENT"
+      ? `${debugfsCommand} is not installed`
+      : error?.stderr?.trim() || error.message;
+    const detail = rawDetail.length > 4096 ? rawDetail.slice(-4096) : rawDetail;
+    throw new Error(`could not extract ${guestPath} from the guest ext4 image with debugfs: ${detail}`);
+  }
+}
+
 export async function extractRootfsAuditTrees(imagePath, destination, debugfsCommand) {
   await mkdir(destination, { recursive: false });
   invariant(!/\s/.test(destination), `temporary rootfs extraction path contains whitespace: ${destination}`);
@@ -216,18 +276,23 @@ export async function extractRootfsAuditTrees(imagePath, destination, debugfsCom
   for (const [guestPath, parentPath] of REQUIRED_ROOTFS_AUDIT_TREES) {
     const nativeParent = path.join(destination, ...parentPath.split("/"));
     await mkdir(nativeParent, { recursive: true });
-    try {
-      await execFileAsync(debugfsCommand, ["-R", `rdump ${guestPath} ${nativeParent}`, imagePath], {
-        encoding: "utf8",
-        maxBuffer: 4 * 1024 * 1024,
-      });
-    } catch (error) {
-      const rawDetail = error?.code === "ENOENT"
-        ? `${debugfsCommand} is not installed`
-        : error?.stderr?.trim() || error.message;
-      const detail = rawDetail.length > 4096 ? rawDetail.slice(-4096) : rawDetail;
-      throw new Error(`could not extract ${guestPath} from the guest ext4 image with debugfs: ${detail}`);
-    }
+    await runDebugfs(
+      debugfsCommand,
+      `rdump ${guestPath} ${nativeParent}`,
+      imagePath,
+      guestPath,
+    );
+  }
+
+  for (const guestPath of await collectExternalLicenseTargets(destination)) {
+    const nativePath = path.join(destination, ...guestPath.split("/").filter(Boolean));
+    await mkdir(path.dirname(nativePath), { recursive: true });
+    await runDebugfs(
+      debugfsCommand,
+      `dump ${guestPath} ${nativePath}`,
+      imagePath,
+      guestPath,
+    );
   }
   return destination;
 }
