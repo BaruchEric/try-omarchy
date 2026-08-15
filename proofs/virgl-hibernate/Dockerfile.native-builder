@@ -1,0 +1,21 @@
+ARG BASE_IMAGE=omarchy-qemu-wasm-builder:emsdk-3.1.50
+FROM ${BASE_IMAGE}
+
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      cpio \
+      libdrm-dev \
+      libegl1-mesa-dev \
+      libepoxy-dev \
+      libgbm-dev \
+      libgl1-mesa-dri \
+      libglvnd-dev \
+      libgles2-mesa-dev \
+      libpixman-1-dev \
+      libsdl2-dev \
+      libvirglrenderer-dev \
+      mesa-utils \
+      xauth \
+      xvfb \
+      zstd \
+ && rm -rf /var/lib/apt/lists/*
