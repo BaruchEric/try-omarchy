@@ -529,7 +529,11 @@ export class HibernationResumeGate {
         "HIBERNATION_RESUME_FAILED",
         "Guest hibernation resume evidence is invalid.",
       );
-    try { this.#onFailure(failure); } catch {}
+    try {
+      this.#onFailure(failure);
+    } catch {
+      // Failure reporting must not interfere with the gate's terminal state.
+    }
     this.#reject(failure);
   }
 
@@ -636,7 +640,7 @@ export class HibernationResumeGate {
       }
       try {
         this.#rendererReport = parseRendererReportLine(line);
-      } catch (error) {
+      } catch {
         this.#abort(new ProductionWorkerError(
           "HIBERNATION_RENDERER_REPORT_INVALID",
           "Renderer report is malformed or does not prove VirGL.",
@@ -658,7 +662,7 @@ export class HibernationResumeGate {
       const marker = parseHibernationReportLine(line);
       this.#state = "verifying-marker";
       void this.#authenticateMarker(marker);
-    } catch (error) {
+    } catch {
       this.#abort(new ProductionWorkerError(
         "HIBERNATION_REPORT_INVALID",
         "Hibernation report is malformed.",

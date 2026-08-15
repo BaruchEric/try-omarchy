@@ -37,49 +37,6 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function guestReport(upstream = {
-  repository: "https://github.com/basecamp/omarchy",
-  commit: "a".repeat(40),
-  version: "4.0.0.alpha",
-  treeSha256: "b".repeat(64),
-}) {
-  return {
-    schemaVersion: 1,
-    generatedAt: "2026-08-15T09:00:00.000Z",
-    provenance: { ...upstream },
-    system: {
-      architecture: "x86_64",
-      distribution: "Arch Linux",
-      kernel: "7.1.8-arch1-3",
-      sessionType: "wayland",
-    },
-    components: [
-      { role: "compositor", name: "Hyprland", version: "0.56.2", executable: "/usr/bin/Hyprland" },
-      { role: "shell", name: "quickshell", version: "0.3.0", executable: "/usr/bin/quickshell" },
-    ],
-    processes: [
-      { name: "Hyprland", pid: 436, executable: "/usr/bin/Hyprland", command: "Hyprland" },
-      { name: "quickshell", pid: 481, executable: "/usr/bin/quickshell", command: "quickshell" },
-    ],
-    commands: [
-      { argv: ["uname", "-m"], exitCode: 0, stdout: "x86_64\n", stderr: "" },
-      { argv: ["hyprctl", "version"], exitCode: 0, stdout: "Hyprland 0.56.2\n", stderr: "" },
-      {
-        argv: ["hyprctl", "monitors", "-j"],
-        exitCode: 0,
-        stdout: JSON.stringify([{ width: 1600, height: 900, disabled: false }]),
-        stderr: "",
-      },
-      { argv: ["omarchy-version"], exitCode: 0, stdout: `${upstream.version}\n`, stderr: "" },
-    ],
-    configs: [{
-      path: "/usr/share/omarchy/shell/shell.qml",
-      sha256: "9".repeat(64),
-      origin: "omarchy-upstream",
-    }],
-  };
-}
-
 function sourceEvidence() {
   return {
     diagnosticsSha256: "c".repeat(64),

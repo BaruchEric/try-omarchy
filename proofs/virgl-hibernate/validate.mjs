@@ -337,7 +337,7 @@ if (process.env.VIRGL_HIBERNATE_SKIP_EVIDENCE_INDEX !== "1") {
   const indexed = new Map();
   const indexText = await text("SHA256SUMS");
   for (const line of indexText.split("\n").filter(Boolean)) {
-    const match = /^([0-9a-f]{64})  \.\/(.+)$/.exec(line);
+    const match = /^([0-9a-f]{64}) {2}\.\/(.+)$/.exec(line);
     invariant(match !== null, "SHA256SUMS contains a malformed line", { line });
     const [, sha256, relative] = match;
     invariant(

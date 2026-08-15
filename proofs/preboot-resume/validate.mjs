@@ -262,7 +262,7 @@ export async function validatePrebootResume({ guestDirectory, evidenceDirectory 
     ["checkpoint-manifest.json", await sha256(files.checkpointManifest)],
   ]);
   const actualSums = new Map(sumsText.trim().split("\n").map((line) => {
-    const match = line.match(/^([0-9a-f]{64})  (.+)$/);
+    const match = line.match(/^([0-9a-f]{64}) {2}(.+)$/);
     invariant(match, `invalid SHA256SUMS line: ${line}`);
     return [match[2], match[1]];
   }));
