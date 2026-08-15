@@ -107,7 +107,7 @@ const machineCommon = {
 };
 assert.deepEqual(manifest.producerMachine, {
   ...machineCommon,
-  display: "sdl,gl=on,show-cursor=on",
+  display: "sdl,gl=on,show-cursor=on,full-screen=on",
 });
 assert.deepEqual(manifest.runtimeMachine, {
   ...machineCommon,
@@ -284,7 +284,7 @@ for (const command of [sourceCommand, targetCommand]) {
   for (const token of [
     "-machine pc-q35-8.2", "-cpu qemu64", "-m 1024M",
     "-accel tcg,tb-size=128,thread=multi", "-smp 2,sockets=1,cores=2,threads=1",
-    "-display sdl,gl=on,show-cursor=on",
+    "-display sdl,gl=on,show-cursor=on,full-screen=on",
     "-device virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
     "ignore_loglevel", "hibernate.compressor=lzo",
     "id=omarchy-hibernate-root", "drive=omarchy-hibernate-root,serial=omarchy-root",

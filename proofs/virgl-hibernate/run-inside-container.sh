@@ -378,7 +378,7 @@ common_args=(
   -m 1024M
   -accel tcg,tb-size=128,thread=multi
   -smp 2,sockets=1,cores=2,threads=1
-  -display sdl,gl=on,show-cursor=on
+  -display sdl,gl=on,show-cursor=on,full-screen=on
   -device virtio-vga-gl,max_outputs=1,xres=1600,yres=900
   -device virtio-keyboard-pci
   -device virtio-tablet-pci
@@ -714,7 +714,7 @@ const manifest = {
   },
   producerMachine: {
     ...machineCommon,
-    display: "sdl,gl=on,show-cursor=on",
+    display: "sdl,gl=on,show-cursor=on,full-screen=on",
   },
   runtimeMachine: {
     ...machineCommon,

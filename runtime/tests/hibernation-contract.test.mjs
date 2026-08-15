@@ -152,7 +152,7 @@ function hibernationProfile({
         smp: "2,sockets=1,cores=2,threads=1",
         accel: "tcg,tb-size=128,thread=multi",
         cpu: "qemu64",
-        display: "sdl,gl=on,show-cursor=on",
+        display: "sdl,gl=on,show-cursor=on,full-screen=on",
         displayDevice: "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
         blockDevices: [
           { driveId: "omarchy-hibernate-root", device: "virtio-blk-pci", serial: "omarchy-root", role: "root", format: "qcow2" },

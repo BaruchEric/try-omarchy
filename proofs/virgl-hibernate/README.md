@@ -22,7 +22,7 @@ two vCPUs, and `tcg,tb-size=128,thread=multi`. Their ordered block devices are:
    by standalone `omarchy-hibernate.qcow2` with fixed UUID
    `4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f`.
 
-The native producer uses `sdl,gl=on,show-cursor=on`; the browser runtime uses
+The native producer uses `sdl,gl=on,show-cursor=on,full-screen=on`; the browser runtime uses
 `sdl,gl=es,show-cursor=on`. The manifest binds these separately as
 `producerMachine` and `runtimeMachine`. Every other machine field and both
 ordered block records must match.
