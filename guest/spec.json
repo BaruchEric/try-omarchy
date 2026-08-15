@@ -77,15 +77,17 @@
     "initramfs": "initramfs-linux.img",
     "disk": "rootfs.ext4",
     "compressedDisk": "rootfs.ext4.zst",
-    "kernelCommandLine": "root=/dev/vda rw rootfstype=ext4 console=tty0 console=ttyS0,115200n8 loglevel=3 systemd.show_status=auto vt.global_cursor_default=0",
-    "minimumMemoryMiB": 1536,
-    "recommendedMemoryMiB": 2048,
+    "kernelCommandLine": "root=/dev/vda rw rootwait console=tty0 console=ttyS0,115200n8 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1",
+    "minimumMemoryMiB": 1024,
+    "recommendedMemoryMiB": 1536,
     "devices": [
       "virtio-blk-pci",
-      "virtio-gpu-pci",
+      "virtio-vga",
       "virtio-keyboard-pci",
-      "virtio-mouse-pci",
-      "virtio-net-pci"
+      "virtio-tablet-pci",
+      "virtio-serial-pci",
+      "virtserialport:omarchy.web.diagnostics",
+      "isa-serial"
     ]
   }
 }

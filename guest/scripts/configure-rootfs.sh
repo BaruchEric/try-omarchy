@@ -91,9 +91,9 @@ while IFS= read -r unit; do
   mask_unit "$root/etc/skel/.config/systemd/user" "$unit"
 done <"$guest_dir/services.user-mask.txt"
 
-mkdir -p "$root/etc/skel/.config/systemd/user/graphical-session.target.wants"
-ln -sfn /usr/lib/systemd/user/omarchy-web-guest-probe.service \
-  "$root/etc/skel/.config/systemd/user/graphical-session.target.wants/omarchy-web-guest-probe.service"
+# The tty1 login starts the observer before executing Omarchy's exact UWSM
+# command. It deliberately is not ordered after graphical-session.target: that
+# would hide the failures which prevent Hyprland from reaching the target.
 
 # No persistent logs, random seed, browser state, or package cache should be
 # shipped in a disposable image.

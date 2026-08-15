@@ -1,12 +1,15 @@
 [Unit]
-Description=Emit live Omarchy browser-demo authenticity evidence
-After=graphical-session.target
-PartOf=graphical-session.target
-ConditionEnvironment=WAYLAND_DISPLAY
+Description=Observe Omarchy startup and emit live browser-demo authenticity evidence
 
 [Service]
-Type=oneshot
-ExecStart=/usr/local/bin/omarchy-web-guest-probe
-
-[Install]
-WantedBy=graphical-session.target
+Type=simple
+ExecStart=/usr/local/bin/omarchy-web-guest-probe --watch
+RemainAfterExit=yes
+Nice=19
+IOSchedulingClass=idle
+UMask=0077
+Environment=PATH=/usr/local/bin:/usr/bin
+Environment=PYTHONNOUSERSITE=1
+UnsetEnvironment=LD_AUDIT LD_DEBUG LD_LIBRARY_PATH LD_PRELOAD PYTHONHOME PYTHONPATH
+Restart=on-failure
+RestartSec=5s

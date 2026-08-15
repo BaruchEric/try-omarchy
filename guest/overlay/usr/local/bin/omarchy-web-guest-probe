@@ -1,19 +1,25 @@
 #!/usr/bin/python3
-"""Collect live, guest-originated authenticity evidence after desktop start."""
+"""Observe the real Omarchy session and emit guest-originated evidence."""
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 import pathlib
-import shutil
+import re
+import secrets
+import select
+import stat
 import subprocess
+import sys
 import time
+from collections.abc import Callable, Iterable
 
 PROVENANCE = pathlib.Path("/usr/share/omarchy-web/provenance.json")
-REPORT = pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "omarchy-web/guest-report.json"
 COMMANDS = [
     ["uname", "-m"],
     ["hyprctl", "version"],
@@ -26,20 +32,155 @@ CONFIGS = [
     "/usr/share/omarchy/shell/shell.qml",
 ]
 REPORT_PREFIX = "OMARCHY_GUEST_REPORT "
-
-
-def run(argv: list[str]) -> dict[str, object]:
-    result = subprocess.run(argv, text=True, capture_output=True, check=False)
-    return {
-        "argv": argv,
-        "exitCode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
+STAGE_PREFIX = "OMARCHY_GUEST_STAGE "
+STAGES = frozenset({"autologin", "uwsm", "hyprland", "quickshell", "report"})
+STAGE_STATUSES = frozenset({"started", "waiting", "ready", "failed"})
+POLL_SECONDS = 10
+SLOW_START_SECONDS = 15 * 60
+MAX_STAGE_MESSAGE_BYTES = 512
+MAX_STAGE_LINE_BYTES = 2048
+MAX_DIAGNOSTIC_BYTES = 256 * 1024
+MAX_STATE_BYTES = 4096
+MAX_REPORT_BYTES = 256 * 1024
+MAX_SAFE_INTEGER = (1 << 53) - 1
+DIAGNOSTIC_WRITE_SECONDS = 10
+UWSM_UNIT = "wayland-wm@hyprland.desktop.service"
+SYSTEMCTL = "/usr/bin/systemctl"
+PACMAN = "/usr/bin/pacman"
+HYPRLAND = "/usr/bin/Hyprland"
+QUICKSHELL = "/usr/bin/quickshell"
+TRUSTED_COMMANDS = {
+    "uname": "/usr/bin/uname",
+    "hyprctl": "/usr/bin/hyprctl",
+    "omarchy-version": "/usr/bin/omarchy-version",
+}
+TRUSTED_PATH = "/usr/local/bin:/usr/bin"
+MANAGER_ENVIRONMENT_KEYS = frozenset(
+    {
+        "DBUS_SESSION_BUS_ADDRESS",
+        "HYPRLAND_INSTANCE_SIGNATURE",
+        "WAYLAND_DISPLAY",
+        "XDG_CURRENT_DESKTOP",
+        "XDG_RUNTIME_DIR",
+        "XDG_SESSION_DESKTOP",
+        "XDG_SESSION_TYPE",
     }
+)
+STATE_KEYS = frozenset(
+    {
+        "schemaVersion",
+        "sequence",
+        "monotonicMs",
+        "diagnosticsPoisoned",
+        "reportPendingSha256",
+        "reportDeliveredSha256",
+    }
+)
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
-def package_version(name: str) -> str:
-    result = subprocess.run(["pacman", "-Q", name], text=True, capture_output=True, check=False)
+class PartialDiagnosticWrite(RuntimeError):
+    """A frame reached a diagnostics device but was not completed."""
+
+    def __init__(self, candidate: pathlib.Path, written: int, total: int) -> None:
+        super().__init__(
+            f"partial diagnostics write to {candidate}: {written} of {total} bytes"
+        )
+        self.candidate = candidate
+        self.written = written
+        self.total = total
+
+
+def runtime_directory() -> pathlib.Path:
+    configured = os.environ.get("XDG_RUNTIME_DIR")
+    if configured:
+        base = pathlib.Path(configured)
+        if not base.is_absolute():
+            raise RuntimeError("XDG_RUNTIME_DIR must be absolute")
+        return base / "omarchy-web"
+    return pathlib.Path("/tmp") / f"omarchy-web-{os.getuid()}"
+
+
+def report_path() -> pathlib.Path:
+    return runtime_directory() / "guest-report.json"
+
+
+def trusted_environment(source: dict[str, str] | None = None) -> dict[str, str]:
+    supplied = source or {}
+    environment = {
+        "HOME": "/home/omarchy",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LOGNAME": "omarchy",
+        "PATH": TRUSTED_PATH,
+        "USER": "omarchy",
+    }
+    for key in MANAGER_ENVIRONMENT_KEYS:
+        value = supplied.get(key)
+        if isinstance(value, str) and "\0" not in value and "\n" not in value:
+            environment[key] = value
+    return environment
+
+
+def command_argv(argv: list[str]) -> list[str]:
+    executable = TRUSTED_COMMANDS.get(argv[0])
+    if executable is None:
+        raise ValueError(f"untrusted identity command: {argv[0]}")
+    return [executable, *argv[1:]]
+
+
+def run(
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    reported_argv: list[str] | None = None,
+    timeout: int | None = None,
+) -> dict[str, object]:
+    evidence_argv = list(reported_argv if reported_argv is not None else argv)
+    try:
+        result = subprocess.run(
+            argv,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=timeout,
+        )
+        return {
+            "argv": evidence_argv,
+            "exitCode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or ""
+        return {
+            "argv": evidence_argv,
+            "exitCode": 124,
+            "stdout": stdout,
+            "stderr": f"command timed out after {timeout} seconds",
+        }
+    except OSError as error:
+        return {
+            "argv": evidence_argv,
+            "exitCode": 127,
+            "stdout": "",
+            "stderr": f"could not execute trusted command: {error}",
+        }
+
+
+def package_version(name: str, environment: dict[str, str]) -> str:
+    try:
+        result = subprocess.run(
+            [PACMAN, "-Q", name],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=trusted_environment(environment),
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
     if result.returncode == 0 and " " in result.stdout.strip():
         return result.stdout.strip().split(" ", 1)[1]
     return "unknown"
@@ -52,15 +193,19 @@ def process_records() -> list[dict[str, object]]:
             continue
         try:
             name = (proc / "comm").read_text().strip()
+            executable = os.readlink(proc / "exe")
             raw_command = (proc / "cmdline").read_bytes().rstrip(b"\0")
             command = raw_command.replace(b"\0", b" ").decode(errors="replace")
-            if "hyprland" not in (name + " " + command).lower() and "quickshell" not in (name + " " + command).lower():
+            if (name, executable) not in {
+                ("Hyprland", HYPRLAND),
+                ("quickshell", QUICKSHELL),
+            }:
                 continue
             records.append(
                 {
                     "name": name,
                     "pid": int(proc.name),
-                    "executable": os.readlink(proc / "exe"),
+                    "executable": executable,
                     "command": command,
                 }
             )
@@ -69,63 +214,936 @@ def process_records() -> list[dict[str, object]]:
     return sorted(records, key=lambda item: int(item["pid"]))
 
 
-def wait_for_desktop() -> None:
-    deadline = time.monotonic() + 45
-    while time.monotonic() < deadline:
-        version = subprocess.run(["hyprctl", "version"], capture_output=True, check=False)
-        processes = process_records()
-        if version.returncode == 0 and any("quickshell" in str(item["name"]).lower() for item in processes):
-            return
-        time.sleep(1)
-    raise SystemExit("Hyprland and Quickshell did not become ready within 45 seconds")
+def user_manager_environment() -> dict[str, str]:
+    environment = trusted_environment(os.environ)
+    try:
+        result = subprocess.run(
+            [SYSTEMCTL, "--user", "show-environment"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return environment
+    if result.returncode != 0:
+        return environment
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in MANAGER_ENVIRONMENT_KEYS:
+            environment[key] = value
+    return trusted_environment(environment)
+
+
+def uwsm_unit_state() -> dict[str, str]:
+    try:
+        result = subprocess.run(
+            [
+                SYSTEMCTL,
+                "--user",
+                "show",
+                UWSM_UNIT,
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=Result",
+                "--property=ExecMainStatus",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=trusted_environment(os.environ),
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    state = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            state[key] = value
+    return state
 
 
 def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def diagnostic_frame(payload: dict[str, object]) -> str:
+def diagnostic_frame(
+    payload: dict[str, object],
+    prefix: str = REPORT_PREFIX,
+) -> str:
     # ttyS0 can have a getty prompt without a terminating newline. Delimit the
     # evidence explicitly so line-oriented browser parsers always see the
     # authenticated marker at column zero. CRLF is also valid on virtio-serial.
-    return "\r\n" + REPORT_PREFIX + json.dumps(payload, separators=(",", ":")) + "\r\n"
+    return (
+        "\r\n"
+        + prefix
+        + json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+        + "\r\n"
+    )
 
 
-def emit_diagnostics(payload: dict[str, object]) -> None:
-    frame = diagnostic_frame(payload)
+def _diagnostic_candidates() -> list[pathlib.Path]:
     # virtio-serial is the preferred read-only evidence channel. ttyS0 keeps
     # native QEMU smoke tests useful when the named port is not configured.
-    candidates = [
+    return [
         pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
         pathlib.Path("/dev/ttyS0"),
     ]
-    for candidate in candidates:
+
+
+def _write_frames(
+    frames: Iterable[str],
+    *,
+    candidates: Iterable[pathlib.Path] | None = None,
+    opener: Callable[[pathlib.Path, int], int] = os.open,
+    writer: Callable[[int, bytes], int] = os.write,
+    closer: Callable[[int], None] = os.close,
+    waiter: Callable[..., object] = select.select,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> pathlib.Path | None:
+    encoded = "".join(frames).encode()
+    if not encoded:
+        return None
+    if len(encoded) > MAX_DIAGNOSTIC_BYTES:
+        raise ValueError(
+            f"diagnostics payload exceeds {MAX_DIAGNOSTIC_BYTES} bytes"
+        )
+
+    selected_candidates = list(
+        _diagnostic_candidates() if candidates is None else candidates
+    )
+    flags = os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC
+    for candidate in selected_candidates:
+        descriptor = -1
+        offset = 0
+        deadline = monotonic() + DIAGNOSTIC_WRITE_SECONDS
         try:
-            descriptor = os.open(candidate, os.O_WRONLY | os.O_NONBLOCK)
-            try:
-                os.write(descriptor, frame.encode())
-            finally:
-                os.close(descriptor)
-            return
-        except OSError:
+            descriptor = opener(candidate, flags)
+            while offset < len(encoded):
+                try:
+                    written = writer(descriptor, encoded[offset:])
+                except InterruptedError:
+                    continue
+                except BlockingIOError:
+                    remaining = deadline - monotonic()
+                    if remaining <= 0:
+                        break
+                    try:
+                        waiter([], [descriptor], [], remaining)
+                    except InterruptedError:
+                        continue
+                    continue
+                if written <= 0 or written > len(encoded) - offset:
+                    break
+                offset += written
+        except OSError as error:
+            if offset:
+                raise PartialDiagnosticWrite(
+                    candidate, offset, len(encoded)
+                ) from error
             continue
-    print(frame, end="", flush=True)
+        finally:
+            if descriptor >= 0:
+                try:
+                    closer(descriptor)
+                except OSError:
+                    pass
+
+        if offset == len(encoded):
+            return candidate
+        if offset:
+            raise PartialDiagnosticWrite(candidate, offset, len(encoded))
+    return None
 
 
-def main() -> None:
-    wait_for_desktop()
+def _open_private_directory(path: pathlib.Path) -> int:
+    if not path.is_absolute():
+        raise RuntimeError(f"private runtime path must be absolute: {path}")
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid():
+        os.close(descriptor)
+        raise RuntimeError(f"private runtime directory is not owned safely: {path}")
+    if stat.S_IMODE(metadata.st_mode) != 0o700:
+        os.fchmod(descriptor, 0o700)
+    return descriptor
+
+
+def _validate_private_file(descriptor: int, label: str) -> None:
+    metadata = os.fstat(descriptor)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+    ):
+        raise RuntimeError(f"{label} is not a private regular file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        os.fchmod(descriptor, 0o600)
+
+
+def _read_at(
+    directory_fd: int,
+    name: str,
+    *,
+    limit: int,
+    missing: bytes | None = None,
+) -> bytes:
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory_fd,
+        )
+    except FileNotFoundError:
+        if missing is not None:
+            return missing
+        raise
+    try:
+        _validate_private_file(descriptor, name)
+        metadata = os.fstat(descriptor)
+        if metadata.st_size > limit:
+            raise RuntimeError(f"{name} exceeds its {limit}-byte bound")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        value = b"".join(chunks)
+        if len(value) > limit:
+            raise RuntimeError(f"{name} exceeds its {limit}-byte bound")
+        return value
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_write_at(
+    directory_fd: int,
+    name: str,
+    value: bytes,
+    *,
+    limit: int,
+) -> None:
+    if len(value) > limit:
+        raise RuntimeError(f"{name} exceeds its {limit}-byte bound")
+    temporary = f".{name}.{secrets.token_hex(12)}.tmp"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        _validate_private_file(descriptor, temporary)
+        offset = 0
+        while offset < len(value):
+            try:
+                written = os.write(descriptor, value[offset:])
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise OSError(f"could not complete atomic write for {name}")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        os.fsync(directory_fd)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _empty_state() -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "sequence": 0,
+        "monotonicMs": -1,
+        "diagnosticsPoisoned": False,
+        "reportPendingSha256": None,
+        "reportDeliveredSha256": None,
+    }
+
+
+def _validate_state(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != STATE_KEYS:
+        raise RuntimeError("guest stage state has an invalid schema")
+    sequence = value.get("sequence")
+    monotonic_ms = value.get("monotonicMs")
+    poisoned = value.get("diagnosticsPoisoned")
+    pending = value.get("reportPendingSha256")
+    delivered = value.get("reportDeliveredSha256")
+    if value.get("schemaVersion") != 1:
+        raise RuntimeError("guest stage state has an unsupported schema version")
+    if not isinstance(poisoned, bool):
+        raise RuntimeError("guest stage state diagnosticsPoisoned is invalid")
+    if (
+        not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence < 0
+        or sequence > MAX_SAFE_INTEGER
+    ):
+        raise RuntimeError("guest stage state sequence is invalid")
+    if (
+        not isinstance(monotonic_ms, int)
+        or isinstance(monotonic_ms, bool)
+        or monotonic_ms < -1
+        or monotonic_ms > MAX_SAFE_INTEGER
+        or (sequence == 0 and monotonic_ms != -1)
+        or (sequence > 0 and monotonic_ms < 0)
+    ):
+        raise RuntimeError("guest stage state monotonicMs is invalid")
+    for digest in (pending, delivered):
+        if digest is not None and (
+            not isinstance(digest, str) or SHA256_PATTERN.fullmatch(digest) is None
+        ):
+            raise RuntimeError("guest stage state report digest is invalid")
+    if pending is not None and delivered is not None:
+        raise RuntimeError("guest stage state has conflicting report digests")
+    return dict(value)
+
+
+class StateLease:
+    """Hold the stable state lock while accessing atomically replaced state."""
+
+    def __init__(self, selected: pathlib.Path) -> None:
+        self.path = selected
+        self.directory_fd = _open_private_directory(selected.parent)
+        self.lock_fd = -1
+        try:
+            self.lock_fd = os.open(
+                f"{selected.name}.lock",
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=self.directory_fd,
+            )
+            _validate_private_file(self.lock_fd, f"{selected.name}.lock")
+            fcntl.flock(self.lock_fd, fcntl.LOCK_EX)
+        except Exception:
+            if self.lock_fd >= 0:
+                os.close(self.lock_fd)
+            os.close(self.directory_fd)
+            raise
+
+    def fileno(self) -> int:
+        return self.lock_fd
+
+    def load(self) -> dict[str, object]:
+        encoded = _read_at(
+            self.directory_fd,
+            self.path.name,
+            limit=MAX_STATE_BYTES,
+            missing=b"",
+        )
+        if not encoded:
+            try:
+                os.stat(
+                    self.path.name,
+                    dir_fd=self.directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return _empty_state()
+            raise RuntimeError("guest stage state exists but is empty")
+        try:
+            value = json.loads(encoded)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("guest stage state is malformed") from error
+        return _validate_state(value)
+
+    def store(self, state: dict[str, object]) -> None:
+        validated = _validate_state(state)
+        encoded = (
+            json.dumps(validated, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        _atomic_write_at(
+            self.directory_fd,
+            self.path.name,
+            encoded,
+            limit=MAX_STATE_BYTES,
+        )
+
+    def close(self) -> None:
+        if self.lock_fd >= 0:
+            fcntl.flock(self.lock_fd, fcntl.LOCK_UN)
+            os.close(self.lock_fd)
+            self.lock_fd = -1
+        if self.directory_fd >= 0:
+            os.close(self.directory_fd)
+            self.directory_fd = -1
+
+
+def _state_lease(state_path: pathlib.Path | None = None) -> StateLease:
+    return StateLease(state_path or runtime_directory() / "stage-state.json")
+
+
+def bounded_stage_message(message: object) -> str:
+    normalized = " ".join(str(message).split())
+    encoded = normalized.encode()
+    if len(encoded) <= MAX_STAGE_MESSAGE_BYTES:
+        return normalized
+    shortened = encoded[: MAX_STAGE_MESSAGE_BYTES - 3]
+    while True:
+        try:
+            return shortened.decode() + "..."
+        except UnicodeDecodeError:
+            shortened = shortened[:-1]
+
+
+def _stage_payloads(
+    events: Iterable[tuple[str, str, int, str]],
+    *,
+    state_path: pathlib.Path | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[list[dict[str, object]], StateLease]:
+    lease = _state_lease(state_path)
+    try:
+        state = lease.load()
+        if state["diagnosticsPoisoned"]:
+            raise RuntimeError(
+                "a previous diagnostics frame was partial; refusing more output"
+            )
+        if state["reportDeliveredSha256"] is not None:
+            return [], lease
+        if state["reportPendingSha256"] is not None:
+            raise RuntimeError(
+                "a previous report delivery was interrupted; refusing more diagnostics"
+            )
+        sequence = int(state["sequence"])
+        last_monotonic_ms = int(state["monotonicMs"])
+        payloads = []
+        for stage, status, attempt, message in events:
+            if stage not in STAGES:
+                raise ValueError(f"unsupported guest stage: {stage}")
+            if status not in STAGE_STATUSES:
+                raise ValueError(f"unsupported guest stage status: {status}")
+            if (
+                not isinstance(attempt, int)
+                or isinstance(attempt, bool)
+                or attempt < 1
+                or attempt > MAX_SAFE_INTEGER
+            ):
+                raise ValueError("guest stage attempt must be a positive integer")
+            normalized_message = bounded_stage_message(message)
+            sequence += 1
+            if sequence > MAX_SAFE_INTEGER:
+                raise RuntimeError("guest stage sequence exceeded the protocol bound")
+            monotonic_ms = max(int(monotonic() * 1000), last_monotonic_ms + 1)
+            if monotonic_ms > MAX_SAFE_INTEGER:
+                raise RuntimeError("guest monotonic timestamp exceeded the protocol bound")
+            last_monotonic_ms = monotonic_ms
+            payloads.append(
+                {
+                    "schemaVersion": 1,
+                    "sequence": sequence,
+                    "monotonicMs": monotonic_ms,
+                    "stage": stage,
+                    "status": status,
+                    "attempt": attempt,
+                    "message": normalized_message,
+                }
+            )
+        state["sequence"] = sequence
+        state["monotonicMs"] = last_monotonic_ms
+        lease.store(state)
+        return payloads, lease
+    except Exception:
+        lease.close()
+        raise
+
+
+def emit_stages(
+    events: Iterable[tuple[str, str, int, str]],
+    *,
+    state_path: pathlib.Path | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    write_frames: Callable[[Iterable[str]], pathlib.Path | None] = _write_frames,
+) -> list[dict[str, object]]:
+    payloads, lease = _stage_payloads(
+        events, state_path=state_path, monotonic=monotonic
+    )
+    try:
+        frames = [diagnostic_frame(payload, STAGE_PREFIX) for payload in payloads]
+        if any(len(frame.encode()) > MAX_STAGE_LINE_BYTES for frame in frames):
+            raise RuntimeError("guest stage frame exceeds its protocol bound")
+        if frames:
+            try:
+                write_frames(frames)
+            except PartialDiagnosticWrite:
+                state = lease.load()
+                state["diagnosticsPoisoned"] = True
+                lease.store(state)
+                raise
+    finally:
+        lease.close()
+    return payloads
+
+
+def _report_digest(payload: dict[str, object]) -> str:
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_report_at(directory_fd: int, name: str) -> dict[str, object]:
+    try:
+        encoded = _read_at(
+            directory_fd,
+            name,
+            limit=MAX_REPORT_BYTES,
+        )
+        value = json.loads(encoded)
+        if not isinstance(value, dict):
+            raise RuntimeError("persisted guest report is not a JSON object")
+        return value
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("persisted guest report is malformed") from error
+
+
+def _read_report(selected: pathlib.Path) -> dict[str, object]:
+    directory_fd = _open_private_directory(selected.parent)
+    try:
+        return _read_report_at(directory_fd, selected.name)
+    finally:
+        os.close(directory_fd)
+
+
+def _encoded_report(payload: dict[str, object]) -> bytes:
+    return (
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    ).encode()
+
+
+def _persist_report_at(
+    directory_fd: int,
+    name: str,
+    payload: dict[str, object],
+) -> None:
+    _atomic_write_at(
+        directory_fd,
+        name,
+        _encoded_report(payload),
+        limit=MAX_REPORT_BYTES,
+    )
+
+
+def _report_name_for_lease(lease: StateLease, selected: pathlib.Path) -> str:
+    if selected.parent != lease.path.parent:
+        raise RuntimeError("report and stage state must share one private directory")
+    return selected.name
+
+
+def report_delivery_complete(
+    *,
+    state_path: pathlib.Path | None = None,
+    selected_report_path: pathlib.Path | None = None,
+) -> bool:
+    lease = _state_lease(state_path)
+    try:
+        state = lease.load()
+        if state["diagnosticsPoisoned"]:
+            raise RuntimeError(
+                "a previous diagnostics frame was partial; refusing more output"
+            )
+        pending = state["reportPendingSha256"]
+        delivered = state["reportDeliveredSha256"]
+        if pending is not None:
+            raise RuntimeError(
+                "a previous report delivery was interrupted; refusing a duplicate"
+            )
+        if delivered is None:
+            return False
+        selected_report = selected_report_path or report_path()
+        report_name = _report_name_for_lease(lease, selected_report)
+        persisted = _read_report_at(lease.directory_fd, report_name)
+        if _report_digest(persisted) != delivered:
+            raise RuntimeError("delivered report digest does not match persisted evidence")
+        return True
+    finally:
+        lease.close()
+
+
+def emit_report(
+    payload: dict[str, object],
+    attempt: int,
+    *,
+    state_path: pathlib.Path | None = None,
+    selected_report_path: pathlib.Path | None = None,
+    write_frames: Callable[[Iterable[str]], pathlib.Path | None] = _write_frames,
+) -> bool:
+    selected_report = selected_report_path or report_path()
+    digest = _report_digest(payload)
+    lease = _state_lease(state_path)
+    try:
+        state = lease.load()
+        report_name = _report_name_for_lease(lease, selected_report)
+        if state["diagnosticsPoisoned"]:
+            raise RuntimeError(
+                "a previous diagnostics frame was partial; refusing more output"
+            )
+        if state["reportDeliveredSha256"] is not None:
+            persisted = _read_report_at(lease.directory_fd, report_name)
+            if _report_digest(persisted) != state["reportDeliveredSha256"]:
+                raise RuntimeError(
+                    "delivered report digest does not match persisted evidence"
+                )
+            return True
+        if state["reportPendingSha256"] is not None:
+            raise RuntimeError(
+                "a previous report delivery was interrupted; refusing a duplicate"
+            )
+        if (
+            not isinstance(attempt, int)
+            or isinstance(attempt, bool)
+            or attempt < 1
+            or attempt > MAX_SAFE_INTEGER
+        ):
+            raise ValueError("report attempt must be a positive protocol integer")
+
+        _persist_report_at(lease.directory_fd, report_name, payload)
+        persisted = _read_report_at(lease.directory_fd, report_name)
+        if _report_digest(persisted) != digest:
+            raise RuntimeError("report changed between persistence and delivery")
+
+        payloads = []
+        sequence = int(state["sequence"]) + 1
+        monotonic_ms = max(
+            int(time.monotonic() * 1000), int(state["monotonicMs"]) + 1
+        )
+        if sequence > MAX_SAFE_INTEGER or monotonic_ms > MAX_SAFE_INTEGER:
+            raise RuntimeError("report stage exceeded the protocol integer bound")
+        payloads.append(
+            {
+                "schemaVersion": 1,
+                "sequence": sequence,
+                "monotonicMs": monotonic_ms,
+                "stage": "report",
+                "status": "ready",
+                "attempt": attempt,
+                "message": "authenticated guest report is complete",
+            }
+        )
+        frames = [
+            diagnostic_frame(payloads[0], STAGE_PREFIX),
+            diagnostic_frame(payload, REPORT_PREFIX),
+        ]
+        if len(frames[0].encode()) > MAX_STAGE_LINE_BYTES:
+            raise RuntimeError("report-ready stage exceeds its protocol bound")
+        if sum(len(frame.encode()) for frame in frames) > MAX_DIAGNOSTIC_BYTES:
+            raise RuntimeError("guest report exceeds its diagnostics protocol bound")
+
+        state["sequence"] = sequence
+        state["monotonicMs"] = monotonic_ms
+        state["reportPendingSha256"] = digest
+        lease.store(state)
+        target = write_frames(frames)
+        if target is None:
+            state["reportPendingSha256"] = None
+            lease.store(state)
+            return False
+        state["reportPendingSha256"] = None
+        state["reportDeliveredSha256"] = digest
+        lease.store(state)
+        return True
+    finally:
+        lease.close()
+
+
+def desktop_observation() -> tuple[
+    dict[str, str], list[dict[str, object]], dict[str, object]
+]:
+    processes = process_records()
+    hyprland_process = any(
+        item.get("name") == "Hyprland" and item.get("executable") == HYPRLAND
+        for item in processes
+    )
+    if not hyprland_process:
+        return (
+            trusted_environment(os.environ),
+            processes,
+            {
+                "argv": ["hyprctl", "version"],
+                "exitCode": 127,
+                "stdout": "",
+                "stderr": "Hyprland process is not live",
+            },
+        )
+    environment = user_manager_environment()
+    version = run(
+        [TRUSTED_COMMANDS["hyprctl"], "version"],
+        env=environment,
+        reported_argv=["hyprctl", "version"],
+        timeout=15,
+    )
+    return environment, processes, version
+
+
+def wait_for_desktop(
+    *,
+    observe: Callable[
+        [],
+        tuple[dict[str, str], list[dict[str, object]], dict[str, object]],
+    ] = desktop_observation,
+    read_uwsm_state: Callable[[], dict[str, str]] = uwsm_unit_state,
+    emit: Callable[[Iterable[tuple[str, str, int, str]]], object] = emit_stages,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+    slow_start_seconds: int = SLOW_START_SECONDS,
+) -> dict[str, str]:
+    started = monotonic()
+    attempt = 0
+    emitted = {
+        "hyprland-started": False,
+        "hyprland-ready": False,
+        "quickshell-ready": False,
+        "uwsm-ready": False,
+        "uwsm-failure": None,
+        "slow-failure": False,
+    }
+    emit(
+        [
+            (
+                "autologin",
+                "ready",
+                1,
+                "tty1 automatic login entered the Omarchy demo profile",
+            ),
+            (
+                "uwsm",
+                "started",
+                1,
+                "executing upstream command: uwsm start -g -1 -e -D Hyprland hyprland.desktop",
+            ),
+            ("hyprland", "waiting", 1, "waiting for the authentic compositor process"),
+            (
+                "quickshell",
+                "waiting",
+                1,
+                "waiting for the authentic Omarchy shell process",
+            ),
+            (
+                "report",
+                "waiting",
+                1,
+                "waiting for the live desktop evidence preconditions",
+            ),
+        ]
+    )
+
+    while True:
+        attempt += 1
+        environment, processes, version = observe()
+        hyprland_process = any(
+            item.get("name") == "Hyprland" and item.get("executable") == HYPRLAND
+            for item in processes
+        )
+        quickshell_process = any(
+            item.get("name") == "quickshell"
+            and item.get("executable") == QUICKSHELL
+            for item in processes
+        )
+        hyprland_ready = hyprland_process and version["exitCode"] == 0
+
+        transitions = []
+        if hyprland_process and not emitted["hyprland-started"]:
+            transitions.append(
+                ("hyprland", "started", attempt, "Hyprland process observed")
+            )
+            emitted["hyprland-started"] = True
+        if hyprland_ready and not emitted["hyprland-ready"]:
+            transitions.append(
+                ("hyprland", "ready", attempt, "hyprctl reached the live compositor")
+            )
+            emitted["hyprland-ready"] = True
+        if quickshell_process and not emitted["quickshell-ready"]:
+            transitions.extend(
+                [
+                    ("quickshell", "started", attempt, "quickshell process observed"),
+                    (
+                        "quickshell",
+                        "ready",
+                        attempt,
+                        "authentic Omarchy shell process is live",
+                    ),
+                ]
+            )
+            emitted["quickshell-ready"] = True
+        if hyprland_ready and quickshell_process and not emitted["uwsm-ready"]:
+            transitions.append(
+                ("uwsm", "ready", attempt, "UWSM desktop processes are live")
+            )
+            emitted["uwsm-ready"] = True
+        if transitions:
+            emit(transitions)
+        if hyprland_ready and quickshell_process:
+            return environment
+
+        if attempt == 1 or attempt % 6 == 0:
+            state = read_uwsm_state()
+            if state.get("ActiveState") == "failed" or state.get("Result") not in (
+                None,
+                "",
+                "success",
+            ):
+                message = (
+                    f"{UWSM_UNIT} ActiveState={state.get('ActiveState', 'unknown')} "
+                    f"SubState={state.get('SubState', 'unknown')} "
+                    f"Result={state.get('Result', 'unknown')} "
+                    f"ExecMainStatus={state.get('ExecMainStatus', 'unknown')}"
+                )
+                if message != emitted["uwsm-failure"]:
+                    emit([("uwsm", "failed", attempt, message)])
+                    emitted["uwsm-failure"] = message
+
+        elapsed = monotonic() - started
+        if elapsed >= slow_start_seconds and not emitted["slow-failure"]:
+            missing = []
+            if not hyprland_ready:
+                missing.append("Hyprland")
+            if not quickshell_process:
+                missing.append("Quickshell")
+            emit(
+                [
+                    (
+                        "report",
+                        "failed",
+                        attempt,
+                        f"{', '.join(missing)} not ready after the bounded 15-minute startup window; continuing diagnostics",
+                    )
+                ]
+            )
+            emitted["slow-failure"] = True
+        sleep(POLL_SECONDS)
+
+
+def monitor_contract_matches(monitors: object) -> bool:
+    if not isinstance(monitors, list) or len(monitors) != 1:
+        return False
+    monitor = monitors[0]
+    return (
+        isinstance(monitor, dict)
+        and monitor.get("width") == 1600
+        and monitor.get("height") == 900
+        and monitor.get("scale") == 1
+        and monitor.get("disabled") is not True
+        and monitor.get("dpmsStatus") is not False
+    )
+
+
+def omarchy_version_matches(installed: str, expected: str) -> bool:
+    if installed == expected:
+        return True
+    return (
+        re.fullmatch(
+            rf"{re.escape(expected)}-[1-9][0-9]*(?:\.[0-9]+)*",
+            installed,
+        )
+        is not None
+    )
+
+
+def build_report(environment: dict[str, str]) -> dict[str, object]:
+    environment = trusted_environment(environment)
+    if environment.get("XDG_SESSION_TYPE") != "wayland":
+        raise RuntimeError("systemd user environment does not prove a Wayland session")
     provenance = json.loads(PROVENANCE.read_text())
     normalized = provenance["normalizedUpstreamTree"]
-    commands = [run(argv) for argv in COMMANDS]
+    commands = [
+        run(
+            command_argv(argv),
+            env=environment,
+            reported_argv=argv,
+            timeout=30,
+        )
+        for argv in COMMANDS
+    ]
     processes = process_records()
-    hyprland_version = next(item["stdout"] for item in commands if item["argv"] == ["hyprctl", "version"])
-    hyprland_version = str(hyprland_version).splitlines()[0] if str(hyprland_version).strip() else package_version("hyprland")
-    shell_process = next((item for item in processes if "quickshell" in str(item["name"]).lower()), None)
-    shell_name = str(shell_process["name"]) if shell_process else "quickshell"
+    failed_commands = [
+        " ".join(str(part) for part in item["argv"])
+        for item in commands
+        if item["exitCode"] != 0
+    ]
+    if failed_commands:
+        raise RuntimeError(f"identity commands failed: {', '.join(failed_commands)}")
+    if not any(
+        item.get("name") == "Hyprland" and item.get("executable") == HYPRLAND
+        for item in processes
+    ):
+        raise RuntimeError("live Hyprland process disappeared before report generation")
+    if not any(
+        item.get("name") == "quickshell" and item.get("executable") == QUICKSHELL
+        for item in processes
+    ):
+        raise RuntimeError(
+            "live quickshell process disappeared before report generation"
+        )
+    command_map = {tuple(item["argv"]): item for item in commands}
+    if str(command_map[("uname", "-m")]["stdout"]).strip() != "x86_64":
+        raise RuntimeError("uname identity is not x86_64")
+    if "hyprland" not in str(command_map[("hyprctl", "version")]["stdout"]).lower():
+        raise RuntimeError("hyprctl returned no Hyprland version identity")
+    try:
+        monitors = json.loads(str(command_map[("hyprctl", "monitors", "-j")]["stdout"]))
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            f"hyprctl monitor evidence is invalid JSON: {error}"
+        ) from error
+    if not monitor_contract_matches(monitors):
+        raise RuntimeError(
+            "Hyprland does not expose exactly one active, DPMS-on 1600x900 scale-1 monitor"
+        )
+    installed_version = str(command_map[("omarchy-version",)]["stdout"]).strip()
+    expected_version = str(provenance["upstream"]["version"])
+    if not omarchy_version_matches(installed_version, expected_version):
+        raise RuntimeError("omarchy-version does not match the pinned provenance")
+    hyprland_version = next(
+        item["stdout"] for item in commands if item["argv"] == ["hyprctl", "version"]
+    )
+    hyprland_version = (
+        str(hyprland_version).splitlines()[0]
+        if str(hyprland_version).strip()
+        else package_version("hyprland", environment)
+    )
+    shell_version = package_version("quickshell-git", environment)
+    if shell_version == "unknown":
+        raise RuntimeError("quickshell package identity is unavailable")
 
-    payload = {
+    return {
         "schemaVersion": 1,
-        "generatedAt": dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generatedAt": dt.datetime.now(tz=dt.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
         "provenance": {
             "repository": provenance["upstream"]["repository"],
             "commit": provenance["upstream"]["commit"],
@@ -136,34 +1154,116 @@ def main() -> None:
             "architecture": os.uname().machine,
             "distribution": "Arch Linux",
             "kernel": os.uname().release,
-            "sessionType": os.environ.get("XDG_SESSION_TYPE", "wayland"),
+            "sessionType": environment["XDG_SESSION_TYPE"],
         },
         "components": [
             {
                 "role": "compositor",
                 "name": "Hyprland",
                 "version": hyprland_version,
-                "executable": shutil.which("Hyprland") or "/usr/bin/Hyprland",
+                "executable": HYPRLAND,
             },
             {
                 "role": "shell",
-                "name": shell_name,
-                "version": package_version("quickshell-git"),
-                "executable": shutil.which("quickshell") or "/usr/bin/quickshell",
+                "name": "quickshell",
+                "version": shell_version,
+                "executable": QUICKSHELL,
             },
         ],
         "processes": processes,
         "commands": commands,
         "configs": [
-            {"path": path, "sha256": sha256(pathlib.Path(path)), "origin": "omarchy-upstream"}
+            {
+                "path": path,
+                "sha256": sha256(pathlib.Path(path)),
+                "origin": "omarchy-upstream",
+            }
             for path in CONFIGS
         ],
     }
-    REPORT.parent.mkdir(parents=True, exist_ok=True)
-    temporary = REPORT.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-    temporary.replace(REPORT)
-    emit_diagnostics(payload)
+
+
+def persist_report(
+    payload: dict[str, object],
+    *,
+    selected_report_path: pathlib.Path | None = None,
+) -> None:
+    selected = selected_report_path or report_path()
+    directory_fd = _open_private_directory(selected.parent)
+    try:
+        _persist_report_at(directory_fd, selected.name, payload)
+    finally:
+        os.close(directory_fd)
+
+
+def watch(
+    *,
+    wait: Callable[[], dict[str, str]] = wait_for_desktop,
+    read_environment: Callable[[], dict[str, str]] = user_manager_environment,
+    build: Callable[[dict[str, str]], dict[str, object]] = build_report,
+    emit: Callable[[dict[str, object], int], bool] = emit_report,
+    emit_stage: Callable[[Iterable[tuple[str, str, int, str]]], object] = emit_stages,
+    delivered: Callable[[], bool] = report_delivery_complete,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    if delivered():
+        return
+    environment = wait()
+    report_attempt = 0
+    while True:
+        report_attempt += 1
+        try:
+            environment = read_environment()
+            payload = build(environment)
+            if emit(payload, report_attempt):
+                return
+            emit_stage(
+                [
+                    (
+                        "report",
+                        "failed",
+                        report_attempt,
+                        "report is complete but no guest diagnostics device accepted it; retrying",
+                    )
+                ]
+            )
+        except PartialDiagnosticWrite:
+            raise
+        except Exception as error:  # keep evidence retryable on a slow/partial session
+            emit_stage(
+                [
+                    (
+                        "report",
+                        "failed",
+                        report_attempt,
+                        f"report generation failed: {type(error).__name__}: {error}",
+                    )
+                ]
+            )
+        sleep(min(30, 5 * report_attempt))
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--watch", action="store_true")
+    modes.add_argument("--stage", choices=sorted(STAGES))
+    parser.add_argument("--status", choices=sorted(STAGE_STATUSES))
+    parser.add_argument("--attempt", type=int, default=1)
+    parser.add_argument("--message", default="")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_arguments(sys.argv[1:] if argv is None else argv)
+    if args.stage:
+        if not args.status:
+            raise SystemExit("--stage requires --status")
+        emit_stages([(args.stage, args.status, args.attempt, args.message)])
+        return
+    if args.status or args.message or args.attempt != 1:
+        raise SystemExit("--status, --attempt, and --message require --stage")
+    watch()
 
 
 if __name__ == "__main__":

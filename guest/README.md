@@ -28,7 +28,70 @@ profile uses the same supported customization layers as an Omarchy user:
 `provenance.json` records normalized upstream and installed-tree digests. Once
 Hyprland and Quickshell are live, `omarchy-web-guest-probe` emits a
 `guest-report.json` and a single `OMARCHY_GUEST_REPORT` JSON line over the named
-`omarchy.web.diagnostics` virtio-serial port (falling back to ttyS0).
+`omarchy.web.diagnostics` virtio-serial port (falling back to ttyS0). Before
+that final evidence exists, the same observer emits strict
+`OMARCHY_GUEST_STAGE` JSON Lines for tty1 autologin, UWSM, Hyprland,
+Quickshell, and report generation. Each line has a locked, strictly increasing
+sequence and guest-monotonic timestamp. A separate stable lock protects an
+atomically replaced, fsynced state file in the user's private runtime
+directory, so an interrupted write fails closed instead of resetting the
+sequence. These stages are diagnostics only; they never substitute for the
+authenticated final report.
+
+## Slow WebAssembly startup diagnostics
+
+The native passing proof and browser guest execute the same command from the
+tty1 login profile:
+
+```sh
+exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
+```
+
+UWSM starts Hyprland through its upstream `wayland-wm@.service`, a
+`Type=notify` user unit. Its normal 30-second start timeout is reasonable on a
+native installation, but can terminate an authentic compositor which is still
+paging binaries and llvmpipe into a single-vCPU QEMU-Wasm guest. The web
+profile therefore adds only a `TimeoutStartSec=15min` drop-in; it does not
+replace the UWSM command, unit `ExecStart`, Hyprland, or Quickshell. The tty1
+getty retains normal restart behavior with a five-second backoff, avoiding a
+hot autologin/UWSM failure loop.
+
+Three concrete failure modes explained the otherwise silent tty1 state:
+
+- UWSM could time out the real Hyprland process after 30 seconds of slow TCG
+  paging, then tty1 autologin could immediately repeat the same attempt;
+- the evidence service was ordered after `graphical-session.target`, so it
+  could not report the UWSM/Hyprland failure that prevented that target; and
+- once started, the old probe abandoned report generation after one 45-second
+  readiness window instead of retaining diagnostic state and retrying.
+
+The tty1 profile asks systemd's user manager to own the observer immediately
+before it `exec`s UWSM. The observer does not wait for
+`graphical-session.target`, because that would hide the failure that prevented
+the target. It runs at idle I/O priority and the lowest CPU scheduling
+priority, polls `/proc` cheaply, invokes `hyprctl` only after the real Hyprland
+executable appears, records the exact UWSM unit failure state, and continues
+after the 15-minute diagnostic threshold. Once both authentic
+desktop processes are live, report generation and delivery retry with bounded
+backoff until a diagnostics device accepts the one final report line. A
+malformed or partial identity report is never emitted as success.
+
+The observer persists the completed report atomically, then reserves its
+SHA-256 digest under the same stable lock before writing any serial bytes. A
+zero-byte device failure can retry safely; a partial or interrupted delivery
+keeps the reservation and refuses a duplicate. After a complete write, the
+digest is marked delivered and the systemd service remains active-exited, so a
+later tty1 login cannot emit the evidence again. Report files and state use
+private UID-scoped directories, no-follow file opens, random exclusive
+temporaries, and directory fsyncs. Identity commands use absolute packaged
+paths with only the required Wayland/session environment, and report success
+requires the exact one-monitor 1600x900 scale-1 DPMS-on contract.
+
+The stage payload contract is one compact JSON object with exactly these keys:
+`schemaVersion`, `sequence`, `monotonicMs`, `stage`, `status`, `attempt`, and
+`message`. Stage names are `autologin`, `uwsm`, `hyprland`, `quickshell`, or
+`report`; statuses are `started`, `waiting`, `ready`, or `failed`; messages are
+single-line and at most 512 UTF-8 bytes.
 
 The trimmed image materializes the verified upstream payload, then registers
 that exact staged tree as a local `omarchy-web-runtime` Arch package providing
