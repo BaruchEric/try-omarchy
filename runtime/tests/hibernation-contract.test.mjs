@@ -671,6 +671,10 @@ test("package and verifier source recognize hibernation without mutating generat
     assert.match(source, /omarchy-hibernate\.qcow2/);
   }
   assert.match(verifierSource, /OMARCHY_HIBERNATION_REPORT/);
+  assert.match(workerSource, /const HIBERNATION_RESUME_TIMEOUT_MS = 600_000;/);
+  assert.match(workerSource, /const HIBERNATION_GUEST_REPORT_TIMEOUT_MS = 900_000;/);
+  assert.match(verifierSource, /HIBERNATION_RESUME_TIMEOUT_MS = 600_000/);
+  assert.match(verifierSource, /HIBERNATION_GUEST_REPORT_TIMEOUT_MS = 900_000/);
   const deferredFlush = workerSource.indexOf(
     "const deferredEvidence = this.#deferredHibernationEvidence.splice(0)",
   );

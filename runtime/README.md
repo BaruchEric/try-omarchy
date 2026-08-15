@@ -320,6 +320,13 @@ the raw stream in about 7.9 seconds and an exact fresh target auto-ran in 951 ms
 Those numbers establish artifact correctness, not browser speed; the Wasm
 restore and post-resume proof still require Chromium acceptance.
 
+The authenticated VirGL hibernation path uses separate fail-closed bounds: ten
+minutes for the ordered kernel/renderer/nonce resume evidence and fifteen
+minutes for the fresh live guest report. These bounds accommodate measured
+browser slow-TCG restore and desktop startup without treating a timeout as a
+successful cold fallback; browser performance acceptance remains a separate,
+strict latency and frame-cadence decision.
+
 The checkpoint is captured after the producer has authenticated the unique
 guest report and healthy 1600x900 source frame. QEMU does not replay that serial
 record on restore. Consequently `checkpoint-manifest.json` embeds the full

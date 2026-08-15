@@ -444,6 +444,8 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       productionWorker.includes("CHECKPOINT_DESKTOP_SETTLE_MIN_RUNNING_MS = 15_000") &&
       productionWorker.includes("CHECKPOINT_DESKTOP_SETTLE_MIN_FRAME_GAP_MS = 5_000") &&
       productionWorker.includes("CHECKPOINT_DESKTOP_SETTLE_TIMEOUT") &&
+      productionWorker.includes("HIBERNATION_RESUME_TIMEOUT_MS = 600_000") &&
+      productionWorker.includes("HIBERNATION_GUEST_REPORT_TIMEOUT_MS = 900_000") &&
       productionWorker.includes("DESKTOP_PROOF_DIGEST_TIMEOUT") &&
       productionWorker.includes("#commandInputComplete") &&
       productionWorker.includes("DESKTOP_PROOF_LIVENESS_TIMEOUT") &&
