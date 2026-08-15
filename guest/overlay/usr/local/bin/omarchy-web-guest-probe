@@ -538,12 +538,28 @@ class StateLease:
         self.directory_fd = _open_private_directory(selected.parent)
         self.lock_fd = -1
         try:
-            self.lock_fd = os.open(
-                f"{selected.name}.lock",
-                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
-                0o600,
-                dir_fd=self.directory_fd,
-            )
+            lock_name = f"{selected.name}.lock"
+            try:
+                self.lock_fd = os.open(
+                    lock_name,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_EXCL
+                    | os.O_NOFOLLOW
+                    | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=self.directory_fd,
+                )
+            except FileExistsError:
+                # Split creation from opening an existing lock. Besides making
+                # the symlink check explicit, this avoids Darwin openat(2)
+                # returning a transient ENOENT when several processes race on
+                # one O_CREAT|O_NOFOLLOW lock path.
+                self.lock_fd = os.open(
+                    lock_name,
+                    os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=self.directory_fd,
+                )
             _validate_private_file(self.lock_fd, f"{selected.name}.lock")
             fcntl.flock(self.lock_fd, fcntl.LOCK_EX)
         except Exception:
