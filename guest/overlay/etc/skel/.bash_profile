@@ -4,6 +4,10 @@ if [[ $(tty 2>/dev/null) == "/dev/tty1" && -z ${WAYLAND_DISPLAY:-} ]]; then
   export XDG_SESSION_TYPE=wayland
   export XDG_CURRENT_DESKTOP=Hyprland
   export XDG_SESSION_DESKTOP=Hyprland
+  # UWSM generates runtime timeout drop-ins for both its compositor and
+  # environment-wait units. Make that supported generator input agree with the
+  # web-only static fallback so generated precedence cannot restore 30 seconds.
+  export UWSM_WAIT_VARNAMES_TIMEOUT=900
 
   # Observe the exact upstream session without wrapping or replacing it. The
   # systemd-owned probe survives this login shell's exec and keeps retrying if

@@ -572,8 +572,11 @@ def test_static() -> None:
     exact_uwsm = "exec uwsm start -g -1 -e -D Hyprland hyprland.desktop"
     check(
         bash_profile.count(exact_uwsm) == 1
+        and bash_profile.count("export UWSM_WAIT_VARNAMES_TIMEOUT=900") == 1
+        and bash_profile.find("export UWSM_WAIT_VARNAMES_TIMEOUT=900")
+        < bash_profile.find(exact_uwsm)
         and bash_profile.find("omarchy-web-guest-probe.service") < bash_profile.find(exact_uwsm),
-        "tty1 diagnostics precede the unchanged upstream UWSM session command",
+        "tty1 diagnostics and bounded UWSM generator input precede the unchanged upstream session command",
     )
     probe_unit = (GUEST / "overlay/usr/lib/systemd/user/omarchy-web-guest-probe.service").read_text()
     check(
