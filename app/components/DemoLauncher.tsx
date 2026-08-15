@@ -32,6 +32,10 @@ type GuestReport = Record<string, unknown> & {
   provenance?: Record<string, unknown>;
 };
 
+type GuestReportOrigin =
+  | "live-guest-serial"
+  | "checkpoint-source-evidence";
+
 type GuestFrame = {
   sequence: number;
   source: string;
@@ -96,6 +100,8 @@ export function DemoLauncher() {
   const [sessionStarted, setSessionStarted] = useState(false);
   const [guestReady, setGuestReady] = useState(false);
   const [guestReport, setGuestReport] = useState<GuestReport | null>(null);
+  const [guestReportOrigin, setGuestReportOrigin] =
+    useState<GuestReportOrigin | null>(null);
   const [releaseIdentity, setReleaseIdentity] =
     useState<ReleaseIdentity | null>(null);
   const [lastFrame, setLastFrame] = useState<GuestFrame | null>(null);
@@ -209,6 +215,7 @@ export function DemoLauncher() {
           const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
             type: "release",
             release,
+            guestReportProvenance: message.guestReportProvenance,
           });
           desktopEvidenceRef.current = next;
           if (next.release !== release) {
@@ -258,6 +265,10 @@ export function DemoLauncher() {
           const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
             type: "guestreport",
             report,
+            origin: message.origin,
+            ...(message.sourceEvidence === undefined
+              ? {}
+              : { sourceEvidence: message.sourceEvidence }),
           });
           desktopEvidenceRef.current = next;
           if (next.report !== report) {
@@ -268,9 +279,10 @@ export function DemoLauncher() {
             break;
           }
           setGuestReport(report as GuestReport);
+          setGuestReportOrigin(message.origin as GuestReportOrigin);
           setGuestReady(false);
           addHostDiagnostic(
-            "[guest] Authenticity report matched the active release; waiting for the Worker's guest-acknowledged desktop-transition proof.",
+            `[guest] Authenticity report from ${message.origin} matched the active release; waiting for the Worker's guest-acknowledged desktop-transition proof.`,
           );
           break;
         }
@@ -350,6 +362,7 @@ export function DemoLauncher() {
       setSessionStarted(true);
       setGuestReady(false);
       setGuestReport(null);
+      setGuestReportOrigin(null);
       setReleaseIdentity(null);
       setLastFrame(null);
       setCanvasMetrics(null);
@@ -683,6 +696,10 @@ export function DemoLauncher() {
                     <span>
                       <b>Guest</b>
                       {identity}
+                    </span>
+                    <span>
+                      <b>Guest evidence</b>
+                      {guestReportOrigin ?? "waiting for authenticated provenance"}
                     </span>
                     <span>
                       <b>Release manifest</b>

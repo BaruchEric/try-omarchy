@@ -18,20 +18,25 @@ parent/iframe protocol:
 1. The SHA-256 of the fetched artifact manifest equals the release ID used by
    the iframe, and its repository, commit, version, and tree hash equal the
    pinned Basecamp Omarchy source.
-2. The guest-authored report proves Arch Linux x86_64, Wayland, live Hyprland
+2. Guest-report provenance is preserved across the Worker, isolated host, and
+   acceptance contract. Cold boot requires `live-guest-serial`. Checkpoint
+   resume requires `checkpoint-source-evidence` plus all four release-bound
+   source-evidence SHA-256 digests; omission, downgrade, mismatch, duplicate,
+   and stale-run replay fail closed.
+3. The guest-authored report proves Arch Linux x86_64, Wayland, live Hyprland
    and Quickshell processes, the required successful commands, one active
    1600×900 monitor, the installed Omarchy version, and upstream config hashes.
-3. After that exact report, the production Worker emits one strict
+4. After that exact report, the production Worker emits one strict
    `desktopproof`. It binds the release digest and hashed internal guest
    challenge to two already-observed 32×18 framebuffer samples. At least 29 of
    576 samples must change after Super+Return, and no color may dominate more
    than 547 samples. The Worker emits this only after the guest returns the
    exact challenge through its diagnostics device.
-4. A still-later qualifying QEMU guest frame arrives with a sequence greater
+5. A still-later qualifying QEMU guest frame arrives with a sequence greater
    than the proof response frame. The production canvas must also report
    pixel-perfect 1600×900 at DPR 1. `inputaccepted` queue acknowledgements are
    retained as diagnostics and never contribute to PASS.
-5. The final 1600×900 PNG contains at least 16 RGB colors and no single exact
+6. The final 1600×900 PNG contains at least 16 RGB colors and no single exact
    RGB color occupies more than 95% of its pixels.
 
 Duplicate identities/reports/proofs, malformed or replayed active-iframe

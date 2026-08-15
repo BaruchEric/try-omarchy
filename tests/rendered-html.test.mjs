@@ -17,6 +17,7 @@ import {
   DISPLAY_HEIGHT,
   DISPLAY_WIDTH,
   getPhasePresentation,
+  guestReportEvidenceMatchesRelease,
   guestReportMatchesRelease,
   inspectVmCapabilities,
   isActiveReleaseIdentity,
@@ -31,15 +32,57 @@ import {
 import {
   EXPECTED_UPSTREAM,
   fetchVerifiedWorkerBootstrap,
+  guestReportProvenanceMatches,
   isSelfContainedWorkerSource,
+  normalizeGuestReportProvenance,
   normalizedPointerForCanvas,
   normalizeRuntimeDesktopProof,
   normalizeRuntimeGuestFrame,
+  normalizeRuntimeGuestReport,
   normalizeRuntimeInputAccepted,
   validateRuntimeRelease,
 } from "../public/vm/host-utils.mjs";
 
 const FIXTURE_RELEASE_ID = "e".repeat(64);
+
+const COLD_GUEST_REPORT_PROVENANCE = Object.freeze({
+  origin: "live-guest-serial",
+});
+
+function checkpointSourceEvidence(overrides = {}) {
+  return {
+    normalizedGuestReportSha256: "1".repeat(64),
+    reportValidationSha256: "2".repeat(64),
+    checkpointFrameSha256: "3".repeat(64),
+    checkpointFrameHealthSha256: "4".repeat(64),
+    ...overrides,
+  };
+}
+
+function checkpointGuestReportProvenance(overrides = {}) {
+  return {
+    origin: "checkpoint-source-evidence",
+    sourceEvidence: checkpointSourceEvidence(overrides),
+  };
+}
+
+function liveGuestReportEvent(report) {
+  return { type: "guestreport", report, origin: "live-guest-serial" };
+}
+
+function desktopReleaseEvent(release, guestReportProvenance = COLD_GUEST_REPORT_PROVENANCE) {
+  return { type: "release", release, guestReportProvenance };
+}
+
+function normalizedJsonValue(value) {
+  if (Array.isArray(value)) return value.map(normalizedJsonValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, normalizedJsonValue(value[key])]),
+  );
+}
 
 function guestReport(overrides = {}) {
   return {
@@ -200,6 +243,10 @@ test("isolated VM document owns the only real 1600x900 guest canvas", async () =
     new RegExp(`const PROTOCOL_VERSION = ${VM_HOST_PROTOCOL.version}`),
   );
   assert.match(hostSource, /fetchVerifiedWorkerBootstrap/);
+  assert.match(hostSource, /normalizeRuntimeGuestReport/);
+  assert.match(hostSource, /guestReportProvenance: verifiedBootstrap\.guestReportProvenance/);
+  assert.match(hostUtilsSource, /Checkpoint guest report digest does not match/);
+  assert.match(hostUtilsSource, /guestReportProvenanceMatches/);
   assert.match(hostSource, /new Blob\(\[verifiedBootstrap\.workerBytes\]/);
   assert.match(hostSource, /new Worker\(runtimeWorkerBlobUrl/);
   assert.match(hostSource, /expectedReleaseId: releaseId/);
@@ -302,6 +349,7 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
     ...data,
     type: "release",
     ...releaseIdentity(),
+    guestReportProvenance: COLD_GUEST_REPORT_PROVENANCE,
   };
   assert.deepEqual(
     acceptVmHostMessage(
@@ -309,6 +357,20 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
       expected,
     ),
     release,
+  );
+  const { guestReportProvenance: ignoredProvenance, ...releaseWithoutProvenance } =
+    release;
+  assert.equal(ignoredProvenance, COLD_GUEST_REPORT_PROVENANCE);
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: releaseWithoutProvenance,
+      },
+      expected,
+    ),
+    null,
   );
   assert.equal(
     acceptVmHostMessage(
@@ -318,6 +380,74 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
         data: {
           ...release,
           upstream: { ...release.upstream, unexpected: true },
+        },
+      },
+      expected,
+    ),
+    null,
+  );
+  const liveReport = {
+    ...data,
+    ...liveGuestReportEvent(guestReport()),
+  };
+  assert.deepEqual(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source, data: liveReport },
+      expected,
+    ),
+    liveReport,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...liveReport, sourceEvidence: checkpointSourceEvidence() },
+      },
+      expected,
+    ),
+    null,
+  );
+  const checkpointReport = {
+    ...data,
+    type: "guestreport",
+    report: guestReport(),
+    ...checkpointGuestReportProvenance(),
+  };
+  assert.deepEqual(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source, data: checkpointReport },
+      expected,
+    ),
+    checkpointReport,
+  );
+  const {
+    checkpointFrameHealthSha256: ignoredCheckpointFrameHealthSha256,
+    ...incompleteSourceEvidence
+  } = checkpointReport.sourceEvidence;
+  assert.match(ignoredCheckpointFrameHealthSha256, /^[a-f0-9]{64}$/);
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...checkpointReport, sourceEvidence: incompleteSourceEvidence },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: {
+          ...checkpointReport,
+          sourceEvidence: {
+            ...checkpointReport.sourceEvidence,
+            reportValidationSha256: "A".repeat(64),
+          },
         },
       },
       expected,
@@ -729,8 +859,8 @@ test("desktop readiness requires release, report, one causal proof, then a later
   assert.equal(guestReportMatchesRelease(report, release, FIXTURE_RELEASE_ID), true);
 
   let evidence = createDesktopEvidence(FIXTURE_RELEASE_ID);
-  evidence = advanceDesktopEvidence(evidence, { type: "release", release });
-  evidence = advanceDesktopEvidence(evidence, { type: "guestreport", report });
+  evidence = advanceDesktopEvidence(evidence, desktopReleaseEvent(release));
+  evidence = advanceDesktopEvidence(evidence, liveGuestReportEvent(report));
   assert.equal(evidence.ready, false);
 
   const afterArbitraryInput = advanceDesktopEvidence(evidence, {
@@ -793,8 +923,8 @@ test("desktop readiness requires release, report, one causal proof, then a later
   assert.equal(terminal.ready, false, "terminal evidence must be irreversible");
 
   let duplicateProof = createDesktopEvidence(FIXTURE_RELEASE_ID);
-  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "release", release });
-  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "guestreport", report });
+  duplicateProof = advanceDesktopEvidence(duplicateProof, desktopReleaseEvent(release));
+  duplicateProof = advanceDesktopEvidence(duplicateProof, liveGuestReportEvent(report));
   duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "desktopproof", proof });
   duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "desktopproof", proof });
   duplicateProof = advanceDesktopEvidence(duplicateProof, {
@@ -805,8 +935,8 @@ test("desktop readiness requires release, report, one causal proof, then a later
   assert.equal(duplicateProof.ready, false);
 
   let wrongProof = createDesktopEvidence(FIXTURE_RELEASE_ID);
-  wrongProof = advanceDesktopEvidence(wrongProof, { type: "release", release });
-  wrongProof = advanceDesktopEvidence(wrongProof, { type: "guestreport", report });
+  wrongProof = advanceDesktopEvidence(wrongProof, desktopReleaseEvent(release));
+  wrongProof = advanceDesktopEvidence(wrongProof, liveGuestReportEvent(report));
   wrongProof = advanceDesktopEvidence(wrongProof, {
     type: "desktopproof",
     proof: { ...proof, artifactManifestSha256: "d".repeat(64) },
@@ -820,29 +950,116 @@ test("desktop readiness requires release, report, one causal proof, then a later
 
   let wrongRelease = createDesktopEvidence(FIXTURE_RELEASE_ID);
   wrongRelease = advanceDesktopEvidence(wrongRelease, {
-    type: "release",
-    release: {
+    ...desktopReleaseEvent({
       ...release,
       artifactManifestSha256: "d".repeat(64),
-    },
+    }),
   });
-  wrongRelease = advanceDesktopEvidence(wrongRelease, {
-    type: "guestreport",
-    report,
-  });
+  wrongRelease = advanceDesktopEvidence(wrongRelease, liveGuestReportEvent(report));
   assert.equal(wrongRelease.release, null);
   assert.equal(wrongRelease.report, null);
 
   let wrongReport = createDesktopEvidence(FIXTURE_RELEASE_ID);
-  wrongReport = advanceDesktopEvidence(wrongReport, { type: "release", release });
+  wrongReport = advanceDesktopEvidence(wrongReport, desktopReleaseEvent(release));
   wrongReport = advanceDesktopEvidence(wrongReport, {
-    type: "guestreport",
-    report: {
+    ...liveGuestReportEvent({
       ...report,
       provenance: { ...report.provenance, commit: "a".repeat(40) },
-    },
+    }),
   });
   assert.equal(wrongReport.report, null);
+});
+
+test("checkpoint report provenance cannot be omitted, downgraded, mismatched, or replayed", () => {
+  const report = guestReport();
+  const release = releaseIdentity();
+  const provenance = checkpointGuestReportProvenance();
+  assert.deepEqual(normalizeGuestReportProvenance(provenance), provenance);
+  assert.equal(
+    guestReportProvenanceMatches(provenance, {
+      ...provenance,
+      sourceEvidence: {
+        ...provenance.sourceEvidence,
+        checkpointFrameSha256: "9".repeat(64),
+      },
+    }),
+    false,
+  );
+  assert.equal(
+    guestReportEvidenceMatchesRelease(
+      { type: "guestreport", report, ...provenance },
+      release,
+      FIXTURE_RELEASE_ID,
+      provenance,
+    ),
+    true,
+  );
+
+  const beginCheckpoint = () =>
+    advanceDesktopEvidence(
+      createDesktopEvidence(FIXTURE_RELEASE_ID),
+      desktopReleaseEvent(release, provenance),
+    );
+  let missing = beginCheckpoint();
+  missing = advanceDesktopEvidence(missing, {
+    type: "guestreport",
+    report,
+    origin: "checkpoint-source-evidence",
+  });
+  assert.equal(missing.invalid, true);
+  assert.equal(missing.report, null);
+
+  let downgraded = beginCheckpoint();
+  downgraded = advanceDesktopEvidence(
+    downgraded,
+    liveGuestReportEvent(report),
+  );
+  assert.equal(downgraded.invalid, true);
+  assert.equal(downgraded.ready, false);
+
+  let mismatched = beginCheckpoint();
+  mismatched = advanceDesktopEvidence(mismatched, {
+    type: "guestreport",
+    report,
+    ...checkpointGuestReportProvenance({
+      checkpointFrameHealthSha256: "9".repeat(64),
+    }),
+  });
+  assert.equal(mismatched.invalid, true);
+  assert.equal(mismatched.report, null);
+
+  let replayed = beginCheckpoint();
+  replayed = advanceDesktopEvidence(replayed, {
+    type: "guestreport",
+    report,
+    ...provenance,
+  });
+  assert.equal(replayed.report, report);
+  assert.deepEqual(replayed.reportProvenance, provenance);
+  replayed = advanceDesktopEvidence(replayed, {
+    type: "guestreport",
+    report,
+    ...provenance,
+  });
+  assert.equal(replayed.invalid, true);
+  assert.equal(replayed.ready, false);
+  const afterTerminalReplay = advanceDesktopEvidence(replayed, {
+    type: "guestreport",
+    report,
+    ...provenance,
+  });
+  assert.equal(afterTerminalReplay.invalid, true);
+  assert.equal(afterTerminalReplay.ready, false);
+
+  let cold = advanceDesktopEvidence(
+    createDesktopEvidence(FIXTURE_RELEASE_ID),
+    desktopReleaseEvent(release),
+  );
+  cold = advanceDesktopEvidence(cold, {
+    ...liveGuestReportEvent(report),
+    sourceEvidence: provenance.sourceEvidence,
+  });
+  assert.equal(cold.invalid, true, "cold reports reject checkpoint-only fields");
 });
 
 test("fixed guest backing maps predictably at DPR 1 and DPR 2", () => {
@@ -941,6 +1158,11 @@ test("verified bootstrap pins exact manifest bytes and Worker bytes before Blob 
   assert.equal(bootstrap.workerArtifact.sha256, workerSha256);
   assert.deepEqual(bootstrap.upstream, EXPECTED_UPSTREAM);
   assert.deepEqual(Buffer.from(bootstrap.workerBytes), workerBytes);
+  assert.deepEqual(
+    bootstrap.guestReportProvenance,
+    COLD_GUEST_REPORT_PROVENANCE,
+  );
+  assert.equal(bootstrap.checkpointGuestReport, null);
   assert.equal(calls.length, 2);
   assert.equal(calls[0].init.cache, "no-store");
   assert.equal(calls[1].init.cache, "force-cache");
@@ -997,6 +1219,141 @@ test("verified bootstrap pins exact manifest bytes and Worker bytes before Blob 
   assert.equal(
     isSelfContainedWorkerSource("const loaded = import(absoluteUrl);"),
     true,
+  );
+});
+
+test("checkpoint bootstrap binds the exact source report and four evidence digests", async () => {
+  const workerBytes = Buffer.from("self.onmessage = () => {};\n");
+  const report = guestReport();
+  const normalizedGuestReportSha256 = createHash("sha256")
+    .update(JSON.stringify(normalizedJsonValue(report)))
+    .digest("hex");
+  const sourceEvidence = checkpointSourceEvidence({
+    normalizedGuestReportSha256,
+  });
+  const checkpointBytes = Buffer.from(`${JSON.stringify({
+    schemaVersion: 1,
+    kind: "omarchy-web-preboot-checkpoint",
+    sourceEvidence: { guestReport: report, ...sourceEvidence },
+  })}\n`);
+  const checkpointSha256 = createHash("sha256")
+    .update(checkpointBytes)
+    .digest("hex");
+  const runtimeBytes = Buffer.from(`${JSON.stringify({
+    schemaVersion: 2,
+    checkpoint: {
+      schemaVersion: 1,
+      mode: "preboot-resume",
+      producer: {
+        manifestArtifactPath: "checkpoint-manifest.json",
+        manifestBytes: checkpointBytes.byteLength,
+        manifestSha256: checkpointSha256,
+        qemuBinarySha256: "5".repeat(64),
+      },
+    },
+  })}\n`);
+  const records = [
+    {
+      path: "production-worker.mjs",
+      role: "host-worker",
+      mediaType: "text/javascript",
+      bytes: workerBytes.byteLength,
+      sha256: createHash("sha256").update(workerBytes).digest("hex"),
+    },
+    {
+      path: "runtime-manifest.json",
+      role: "runtime-config",
+      mediaType: "application/json",
+      bytes: runtimeBytes.byteLength,
+      sha256: createHash("sha256").update(runtimeBytes).digest("hex"),
+    },
+    {
+      path: "checkpoint-manifest.json",
+      role: "preboot-checkpoint-metadata",
+      mediaType: "application/json",
+      bytes: checkpointBytes.byteLength,
+      sha256: checkpointSha256,
+    },
+  ];
+  const manifestBytes = Buffer.from(`${JSON.stringify({
+    schemaVersion: 1,
+    upstream: { ...EXPECTED_UPSTREAM },
+    artifacts: records,
+  })}\n`);
+  const releaseId = createHash("sha256").update(manifestBytes).digest("hex");
+  const bodies = new Map([
+    ["artifact-manifest.json", manifestBytes],
+    ["production-worker.mjs", workerBytes],
+    ["runtime-manifest.json", runtimeBytes],
+    ["checkpoint-manifest.json", checkpointBytes],
+  ]);
+  const fetchImpl = async (url) => {
+    const name = new URL(url).pathname.split("/").at(-1);
+    const body = bodies.get(name);
+    return new Response(body, {
+      status: body ? 200 : 404,
+      headers: body
+        ? {
+            "Content-Type": name.endsWith(".json")
+              ? "application/json"
+              : "text/javascript",
+            "Content-Length": String(body.byteLength),
+          }
+        : {},
+    });
+  };
+  const bootstrap = await fetchVerifiedWorkerBootstrap({
+    releaseBaseUrl: new URL(
+      `https://try.example/omarchy/versions/${releaseId}/`,
+    ),
+    expectedReleaseId: releaseId,
+    fetchImpl,
+    cryptoScope: webcrypto,
+  });
+  const expectedProvenance = checkpointGuestReportProvenance({
+    normalizedGuestReportSha256,
+  });
+  assert.deepEqual(bootstrap.guestReportProvenance, expectedProvenance);
+  assert.deepEqual(bootstrap.checkpointGuestReport, report);
+
+  const runtimeEvent = {
+    type: "guestreport",
+    report,
+    ...expectedProvenance,
+  };
+  assert.deepEqual(
+    normalizeRuntimeGuestReport(runtimeEvent, bootstrap),
+    {
+      report,
+      ...expectedProvenance,
+    },
+  );
+  assert.equal(
+    normalizeRuntimeGuestReport(
+      {
+        ...runtimeEvent,
+        sourceEvidence: checkpointSourceEvidence({
+          normalizedGuestReportSha256,
+          checkpointFrameSha256: "9".repeat(64),
+        }),
+      },
+      bootstrap,
+    ),
+    null,
+    "a checkpoint digest mismatch must fail closed",
+  );
+  assert.equal(
+    normalizeRuntimeGuestReport(liveGuestReportEvent(report), bootstrap),
+    null,
+    "a checkpoint report cannot be downgraded to live serial",
+  );
+  assert.equal(
+    normalizeRuntimeGuestReport(
+      { ...runtimeEvent, report: { ...report, generatedAt: "2026-08-15T01:02:03Z" } },
+      bootstrap,
+    ),
+    null,
+    "a different report cannot replay the checkpoint digests",
   );
 });
 

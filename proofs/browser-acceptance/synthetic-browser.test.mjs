@@ -101,7 +101,7 @@ async function start(data) {
   postMessage({ type: "release", upstream, artifactManifestSha256 });
   postMessage({ type: "display", width: 1600, height: 900 });
   postMessage({ type: "phase", phase: "running" });
-  postMessage({ type: "guestreport", report });
+  postMessage({ type: "guestreport", report, origin: "live-guest-serial" });
   draw();
   guestFrame();
   draw(true);

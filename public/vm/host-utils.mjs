@@ -14,6 +14,13 @@ export const EXPECTED_UPSTREAM = Object.freeze({
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024;
 const MAX_WORKER_BYTES = 4 * 1024 * 1024;
+const MAX_BOOTSTRAP_BYTES = MAX_MANIFEST_BYTES * 3 + MAX_WORKER_BYTES;
+const CHECKPOINT_SOURCE_EVIDENCE_KEYS = Object.freeze([
+  "normalizedGuestReportSha256",
+  "reportValidationSha256",
+  "checkpointFrameSha256",
+  "checkpointFrameHealthSha256",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -25,6 +32,101 @@ function isRecord(value) {
 
 function hasOnlyKeys(value, allowedKeys) {
   return Object.keys(value).every((key) => allowedKeys.has(key));
+}
+
+function hasExactKeys(value, expectedKeys) {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === expectedKeys.length &&
+    expectedKeys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function normalizedJsonValue(value) {
+  if (Array.isArray(value)) return value.map((item) => normalizedJsonValue(item));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, normalizedJsonValue(value[key])]),
+  );
+}
+
+function normalizedJsonText(value) {
+  return JSON.stringify(normalizedJsonValue(value));
+}
+
+function sameJsonValue(left, right) {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameJsonValue(item, right[index]))
+    );
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] && sameJsonValue(left[key], right[key]),
+    )
+  );
+}
+
+function normalizeCheckpointDigests(value) {
+  if (!hasExactKeys(value, CHECKPOINT_SOURCE_EVIDENCE_KEYS)) return null;
+  if (
+    CHECKPOINT_SOURCE_EVIDENCE_KEYS.some(
+      (key) =>
+        typeof value[key] !== "string" ||
+        !SHA256_PATTERN.test(value[key]) ||
+        value[key] !== value[key].toLowerCase(),
+    )
+  ) {
+    return null;
+  }
+  return Object.freeze(
+    Object.fromEntries(
+      CHECKPOINT_SOURCE_EVIDENCE_KEYS.map((key) => [key, value[key]]),
+    ),
+  );
+}
+
+export function normalizeGuestReportProvenance(value) {
+  if (!isRecord(value) || typeof value.origin !== "string") return null;
+  if (value.origin === "live-guest-serial") {
+    return hasExactKeys(value, ["origin"])
+      ? Object.freeze({ origin: "live-guest-serial" })
+      : null;
+  }
+  if (
+    value.origin !== "checkpoint-source-evidence" ||
+    !hasExactKeys(value, ["origin", "sourceEvidence"])
+  ) {
+    return null;
+  }
+  const sourceEvidence = normalizeCheckpointDigests(value.sourceEvidence);
+  return sourceEvidence
+    ? Object.freeze({
+        origin: "checkpoint-source-evidence",
+        sourceEvidence,
+      })
+    : null;
+}
+
+export function guestReportProvenanceMatches(value, expected) {
+  const actual = normalizeGuestReportProvenance(value);
+  const required = normalizeGuestReportProvenance(expected);
+  if (!actual || !required || actual.origin !== required.origin) return false;
+  if (actual.origin === "live-guest-serial") return true;
+  return CHECKPOINT_SOURCE_EVIDENCE_KEYS.every(
+    (key) => actual.sourceEvidence[key] === required.sourceEvidence[key],
+  );
 }
 
 function mediaType(value) {
@@ -96,6 +198,196 @@ export function isSelfContainedWorkerSource(source) {
     !/(?:^|[;}\n])\s*import\s+(?!\()/m.test(source) &&
     !/(?:^|[;}\n])\s*export\s+[^;\n]+\s+from\s+["']/m.test(source)
   );
+}
+
+function jsonArtifactRecord(manifest, path, role, maximum) {
+  const records = manifest.artifacts.filter(
+    (artifact) => isRecord(artifact) && artifact.path === path,
+  );
+  if (records.length !== 1) {
+    fail(`Artifact manifest must contain exactly one ${path}.`);
+  }
+  const artifact = records[0];
+  if (
+    artifact.role !== role ||
+    mediaType(artifact.mediaType) !== "application/json" ||
+    !Number.isSafeInteger(artifact.bytes) ||
+    artifact.bytes <= 0 ||
+    artifact.bytes > maximum ||
+    typeof artifact.sha256 !== "string" ||
+    !SHA256_PATTERN.test(artifact.sha256)
+  ) {
+    fail(`${path} metadata is invalid.`);
+  }
+  return artifact;
+}
+
+async function fetchVerifiedJsonArtifact(
+  artifact,
+  releaseBaseUrl,
+  label,
+  fetchImpl,
+  cryptoScope,
+) {
+  const url = new URL(artifact.path, releaseBaseUrl);
+  const response = await fetchImpl(url, {
+    credentials: "same-origin",
+    cache: "force-cache",
+    redirect: "error",
+  });
+  if (!response.ok) {
+    fail(`${label} request failed with HTTP ${response.status}: ${url.pathname}`);
+  }
+  if (mediaType(response.headers.get("content-type")) !== "application/json") {
+    fail(`${label} has an unsafe Content-Type.`);
+  }
+  const bytes = await responseBytes(response, label, MAX_MANIFEST_BYTES);
+  if (bytes.byteLength !== artifact.bytes) {
+    fail(`${label} body length differs from the artifact manifest.`);
+  }
+  if ((await sha256Hex(bytes, cryptoScope)) !== artifact.sha256) {
+    fail(`${label} SHA-256 differs from the artifact manifest.`);
+  }
+  let value;
+  try {
+    value = JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    fail(`${label} is not valid JSON.`);
+  }
+  return { bytes, value };
+}
+
+async function verifiedGuestReportContract({
+  manifest,
+  releaseBaseUrl,
+  upstream,
+  fetchImpl,
+  cryptoScope,
+}) {
+  const runtimeRecords = manifest.artifacts.filter(
+    (artifact) => isRecord(artifact) && artifact.path === "runtime-manifest.json",
+  );
+  if (runtimeRecords.length === 0) {
+    return {
+      bytes: 0,
+      guestReportProvenance: Object.freeze({ origin: "live-guest-serial" }),
+      checkpointGuestReport: null,
+    };
+  }
+  const runtimeArtifact = jsonArtifactRecord(
+    manifest,
+    "runtime-manifest.json",
+    "runtime-config",
+    MAX_MANIFEST_BYTES,
+  );
+  const runtimeFile = await fetchVerifiedJsonArtifact(
+    runtimeArtifact,
+    releaseBaseUrl,
+    "Runtime manifest",
+    fetchImpl,
+    cryptoScope,
+  );
+  const runtimeManifest = runtimeFile.value;
+  if (!isRecord(runtimeManifest) || runtimeManifest.schemaVersion !== 2) {
+    fail("Runtime manifest has an unsupported schema.");
+  }
+  if (!Object.hasOwn(runtimeManifest, "checkpoint")) {
+    return {
+      bytes: runtimeFile.bytes.byteLength,
+      guestReportProvenance: Object.freeze({ origin: "live-guest-serial" }),
+      checkpointGuestReport: null,
+    };
+  }
+
+  const checkpoint = runtimeManifest.checkpoint;
+  if (
+    !isRecord(checkpoint) ||
+    checkpoint.schemaVersion !== 1 ||
+    checkpoint.mode !== "preboot-resume" ||
+    !isRecord(checkpoint.producer) ||
+    !hasExactKeys(checkpoint.producer, [
+      "manifestArtifactPath",
+      "manifestBytes",
+      "manifestSha256",
+      "qemuBinarySha256",
+    ]) ||
+    checkpoint.producer.manifestArtifactPath !== "checkpoint-manifest.json" ||
+    !Number.isSafeInteger(checkpoint.producer.manifestBytes) ||
+    checkpoint.producer.manifestBytes <= 0 ||
+    checkpoint.producer.manifestBytes > MAX_MANIFEST_BYTES ||
+    !SHA256_PATTERN.test(checkpoint.producer.manifestSha256 ?? "") ||
+    !SHA256_PATTERN.test(checkpoint.producer.qemuBinarySha256 ?? "")
+  ) {
+    fail("Runtime checkpoint producer metadata is invalid.");
+  }
+  const checkpointArtifact = jsonArtifactRecord(
+    manifest,
+    checkpoint.producer.manifestArtifactPath,
+    "preboot-checkpoint-metadata",
+    MAX_MANIFEST_BYTES,
+  );
+  if (
+    checkpointArtifact.bytes !== checkpoint.producer.manifestBytes ||
+    checkpointArtifact.sha256 !== checkpoint.producer.manifestSha256
+  ) {
+    fail("Checkpoint manifest differs from the verified runtime metadata.");
+  }
+  const checkpointFile = await fetchVerifiedJsonArtifact(
+    checkpointArtifact,
+    releaseBaseUrl,
+    "Checkpoint manifest",
+    fetchImpl,
+    cryptoScope,
+  );
+  const checkpointDocument = checkpointFile.value;
+  const sourceEvidence = checkpointDocument?.sourceEvidence;
+  if (
+    !isRecord(checkpointDocument) ||
+    checkpointDocument.schemaVersion !== 1 ||
+    checkpointDocument.kind !== "omarchy-web-preboot-checkpoint" ||
+    !hasExactKeys(sourceEvidence, [
+      "guestReport",
+      ...CHECKPOINT_SOURCE_EVIDENCE_KEYS,
+    ]) ||
+    !isRecord(sourceEvidence.guestReport)
+  ) {
+    fail("Checkpoint source evidence is malformed.");
+  }
+  const guestReport = sourceEvidence.guestReport;
+  if (
+    guestReport.schemaVersion !== 1 ||
+    !isRecord(guestReport.provenance) ||
+    !Object.entries(upstream).every(
+      ([key, expected]) => guestReport.provenance[key] === expected,
+    )
+  ) {
+    fail("Checkpoint guest report does not match the verified release.");
+  }
+  const sourceDigests = Object.fromEntries(
+    CHECKPOINT_SOURCE_EVIDENCE_KEYS.map((key) => [key, sourceEvidence[key]]),
+  );
+  const guestReportProvenance = normalizeGuestReportProvenance({
+    origin: "checkpoint-source-evidence",
+    sourceEvidence: sourceDigests,
+  });
+  if (!guestReportProvenance) {
+    fail("Checkpoint source-evidence digests are malformed.");
+  }
+  const normalizedGuestReportSha256 = await sha256Hex(
+    new TextEncoder().encode(normalizedJsonText(guestReport)),
+    cryptoScope,
+  );
+  if (
+    normalizedGuestReportSha256 !==
+    guestReportProvenance.sourceEvidence.normalizedGuestReportSha256
+  ) {
+    fail("Checkpoint guest report digest does not match its source evidence.");
+  }
+  return {
+    bytes: runtimeFile.bytes.byteLength + checkpointFile.bytes.byteLength,
+    guestReportProvenance,
+    checkpointGuestReport: guestReport,
+  };
 }
 
 export async function fetchVerifiedWorkerBootstrap({
@@ -214,6 +506,21 @@ export async function fetchVerifiedWorkerBootstrap({
       "Production Worker is not a self-contained module and cannot be verified before execution.",
     );
   }
+  const guestReportContract = await verifiedGuestReportContract({
+    manifest,
+    releaseBaseUrl,
+    upstream,
+    fetchImpl,
+    cryptoScope,
+  });
+  if (
+    manifestBytes.byteLength +
+      workerBytes.byteLength +
+      guestReportContract.bytes >
+    MAX_BOOTSTRAP_BYTES
+  ) {
+    fail("Verified bootstrap exceeds its aggregate byte limit.");
+  }
 
   return Object.freeze({
     upstream: Object.freeze(upstream),
@@ -223,6 +530,8 @@ export async function fetchVerifiedWorkerBootstrap({
       sha256: workerArtifact.sha256,
     }),
     workerBytes,
+    guestReportProvenance: guestReportContract.guestReportProvenance,
+    checkpointGuestReport: guestReportContract.checkpointGuestReport,
   });
 }
 
@@ -246,6 +555,44 @@ export function validateRuntimeRelease(value, expected) {
   return {
     upstream: { ...EXPECTED_UPSTREAM },
     artifactManifestSha256: value.artifactManifestSha256,
+  };
+}
+
+export function normalizeRuntimeGuestReport(value, expected) {
+  const suppliedProvenance = isRecord(value) && value.origin === "checkpoint-source-evidence"
+    ? { origin: value.origin, sourceEvidence: value.sourceEvidence }
+    : { origin: value?.origin };
+  if (
+    !isRecord(value) ||
+    value.type !== "guestreport" ||
+    !isRecord(value.report) ||
+    !expected ||
+    !guestReportProvenanceMatches(
+      suppliedProvenance,
+      expected.guestReportProvenance,
+    )
+  ) {
+    return null;
+  }
+  const provenance = normalizeGuestReportProvenance(suppliedProvenance);
+  if (!provenance) return null;
+  const expectedKeys = provenance.origin === "live-guest-serial"
+    ? ["type", "report", "origin"]
+    : ["type", "report", "origin", "sourceEvidence"];
+  if (!hasExactKeys(value, expectedKeys)) return null;
+  if (
+    provenance.origin === "checkpoint-source-evidence" &&
+    (!isRecord(expected.checkpointGuestReport) ||
+      !sameJsonValue(value.report, expected.checkpointGuestReport))
+  ) {
+    return null;
+  }
+  return {
+    report: value.report,
+    origin: provenance.origin,
+    ...(provenance.origin === "checkpoint-source-evidence"
+      ? { sourceEvidence: provenance.sourceEvidence }
+      : {}),
   };
 }
 

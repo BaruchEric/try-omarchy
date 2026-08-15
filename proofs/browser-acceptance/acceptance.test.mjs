@@ -24,6 +24,26 @@ import {
 
 const RELEASE_ID = "a".repeat(64);
 const RUN_NONCE = "browser_acceptance_nonce_123456";
+const COLD_GUEST_REPORT_PROVENANCE = Object.freeze({
+  origin: "live-guest-serial",
+});
+
+function checkpointSourceEvidence(overrides = {}) {
+  return {
+    normalizedGuestReportSha256: "1".repeat(64),
+    reportValidationSha256: "2".repeat(64),
+    checkpointFrameSha256: "3".repeat(64),
+    checkpointFrameHealthSha256: "4".repeat(64),
+    ...overrides,
+  };
+}
+
+function checkpointGuestReportProvenance(overrides = {}) {
+  return {
+    origin: "checkpoint-source-evidence",
+    sourceEvidence: checkpointSourceEvidence(overrides),
+  };
+}
 
 function report() {
   return {
@@ -60,12 +80,20 @@ function report() {
   };
 }
 
-function release() {
+function release(guestReportProvenance = COLD_GUEST_REPORT_PROVENANCE) {
   return {
     type: "release",
     upstream: { ...ACTIVE_UPSTREAM },
     artifactManifestSha256: RELEASE_ID,
+    guestReportProvenance,
   };
+}
+
+function guestReportMessage(
+  provenance = COLD_GUEST_REPORT_PROVENANCE,
+  guestReport = report(),
+) {
+  return { type: "guestreport", report: guestReport, ...provenance };
 }
 
 function frame(sequence, overrides = {}) {
@@ -169,7 +197,7 @@ function stateThroughProof() {
   let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   state = advanceAcceptance(state, { type: "ready" }, 1);
   state = advanceAcceptance(state, release(), 2);
-  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
+  state = advanceAcceptance(state, guestReportMessage(), 3);
   state = advanceAcceptance(state, frame(10), 4);
   state = advanceAcceptance(state, frame(11), 5);
   return advanceAcceptance(state, desktopProof(), 6);
@@ -180,7 +208,7 @@ test("acceptance requires release, exact report, causal desktop proof, and a lat
   state = advanceAcceptance(state, metrics(), 0.5);
   state = advanceAcceptance(state, { type: "ready" }, 1);
   state = advanceAcceptance(state, release(), 2);
-  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
+  state = advanceAcceptance(state, guestReportMessage(), 3);
   state = advanceAcceptance(state, {
     type: "inputaccepted",
     readinessProbe: false,
@@ -201,6 +229,64 @@ test("acceptance requires release, exact report, causal desktop proof, and a lat
   const revoked = advanceAcceptance(state, desktopProof(), 9);
   assert.equal(revoked.stage, "failed");
   assert.match(revoked.failure.reason, /after.*completed/);
+});
+
+test("checkpoint acceptance preserves exact provenance and rejects downgrade or replay", () => {
+  const provenance = checkpointGuestReportProvenance();
+  const begin = () => {
+    let state = createAcceptanceState({
+      releaseId: RELEASE_ID,
+      runNonce: RUN_NONCE,
+    });
+    state = advanceAcceptance(state, { type: "ready" }, 1);
+    return advanceAcceptance(state, release(provenance), 2);
+  };
+
+  let missing = begin();
+  missing = advanceAcceptance(missing, {
+    type: "guestreport",
+    report: report(),
+    origin: "checkpoint-source-evidence",
+  }, 3);
+  assert.equal(missing.stage, "failed");
+  assert.match(missing.failure.reason, /authentically prove/);
+
+  let downgraded = begin();
+  downgraded = advanceAcceptance(downgraded, guestReportMessage(), 3);
+  assert.equal(downgraded.stage, "failed");
+  assert.match(downgraded.failure.reason, /authentically prove/);
+
+  let mismatched = begin();
+  mismatched = advanceAcceptance(
+    mismatched,
+    guestReportMessage(
+      checkpointGuestReportProvenance({
+        reportValidationSha256: "9".repeat(64),
+      }),
+    ),
+    3,
+  );
+  assert.equal(mismatched.stage, "failed");
+
+  let state = begin();
+  state = advanceAcceptance(state, guestReportMessage(provenance), 3);
+  assert.equal(state.stage, "waiting-desktop-proof");
+  assert.equal(state.report.value.origin, "checkpoint-source-evidence");
+  assert.deepEqual(state.report.value.sourceEvidence, provenance.sourceEvidence);
+  const replayed = advanceAcceptance(
+    state,
+    guestReportMessage(provenance),
+    4,
+  );
+  assert.equal(replayed.stage, "failed");
+  assert.match(replayed.failure.reason, /more than once/);
+
+  state = advanceAcceptance(state, frame(10), 4);
+  state = advanceAcceptance(state, frame(11), 5);
+  state = advanceAcceptance(state, desktopProof(), 6);
+  state = advanceAcceptance(state, metrics(), 7);
+  state = advanceAcceptance(state, frame(12), 8);
+  assert.equal(state.stage, "passed");
 });
 
 test("final evidence recheck rejects a terminal event after provisional PASS", () => {
@@ -248,7 +334,7 @@ test("input queue acknowledgements and frames cannot replace desktop proof", () 
   let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   state = advanceAcceptance(state, { type: "ready" }, 1);
   state = advanceAcceptance(state, release(), 2);
-  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
+  state = advanceAcceptance(state, guestReportMessage(), 3);
   state = advanceAcceptance(state, {
     type: "inputaccepted",
     readinessProbe: false,
@@ -267,7 +353,7 @@ test("acceptance rejects wrong, duplicate, unobserved, and unchanged proof evide
   let wrongRelease = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   wrongRelease = advanceAcceptance(wrongRelease, { type: "ready" }, 1);
   wrongRelease = advanceAcceptance(wrongRelease, release(), 2);
-  wrongRelease = advanceAcceptance(wrongRelease, { type: "guestreport", report: report() }, 3);
+  wrongRelease = advanceAcceptance(wrongRelease, guestReportMessage(), 3);
   wrongRelease = advanceAcceptance(wrongRelease, frame(10), 4);
   wrongRelease = advanceAcceptance(wrongRelease, frame(11), 5);
   wrongRelease = advanceAcceptance(
@@ -281,7 +367,7 @@ test("acceptance rejects wrong, duplicate, unobserved, and unchanged proof evide
   let unchangedVisual = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   unchangedVisual = advanceAcceptance(unchangedVisual, { type: "ready" }, 1);
   unchangedVisual = advanceAcceptance(unchangedVisual, release(), 2);
-  unchangedVisual = advanceAcceptance(unchangedVisual, { type: "guestreport", report: report() }, 3);
+  unchangedVisual = advanceAcceptance(unchangedVisual, guestReportMessage(), 3);
   unchangedVisual = advanceAcceptance(unchangedVisual, frame(10), 4);
   unchangedVisual = advanceAcceptance(unchangedVisual, frame(11), 5);
   unchangedVisual = advanceAcceptance(
@@ -295,7 +381,7 @@ test("acceptance rejects wrong, duplicate, unobserved, and unchanged proof evide
   let impossibleDominant = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   impossibleDominant = advanceAcceptance(impossibleDominant, { type: "ready" }, 1);
   impossibleDominant = advanceAcceptance(impossibleDominant, release(), 2);
-  impossibleDominant = advanceAcceptance(impossibleDominant, { type: "guestreport", report: report() }, 3);
+  impossibleDominant = advanceAcceptance(impossibleDominant, guestReportMessage(), 3);
   impossibleDominant = advanceAcceptance(impossibleDominant, frame(10), 4);
   impossibleDominant = advanceAcceptance(impossibleDominant, frame(11), 5);
   impossibleDominant = advanceAcceptance(
@@ -314,7 +400,7 @@ test("acceptance rejects wrong, duplicate, unobserved, and unchanged proof evide
   let unobserved = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   unobserved = advanceAcceptance(unobserved, { type: "ready" }, 1);
   unobserved = advanceAcceptance(unobserved, release(), 2);
-  unobserved = advanceAcceptance(unobserved, { type: "guestreport", report: report() }, 3);
+  unobserved = advanceAcceptance(unobserved, guestReportMessage(), 3);
   unobserved = advanceAcceptance(unobserved, desktopProof(), 4);
   assert.equal(unobserved.stage, "failed");
   assert.match(unobserved.failure.reason, /observed after/);

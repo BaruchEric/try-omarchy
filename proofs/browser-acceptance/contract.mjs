@@ -4,7 +4,7 @@ import {
 } from "../../app/components/vm-host-protocol.mjs";
 import {
   ACTIVE_UPSTREAM,
-  guestReportMatchesRelease,
+  guestReportEvidenceMatchesRelease,
   isActiveReleaseIdentity,
   isGuestDisplayFrame,
 } from "../../app/components/vm-ui-state.mjs";
@@ -12,10 +12,11 @@ import {
   DESKTOP_PROOF_SAMPLE_PIXELS,
   isDesktopProof,
 } from "../../public/vm/desktop-proof.mjs";
+import { normalizeGuestReportProvenance } from "../../public/vm/host-utils.mjs";
 
 export { acceptVmHostMessage, createVmHostCommand };
 
-export const ACCEPTANCE_SCHEMA_VERSION = 2;
+export const ACCEPTANCE_SCHEMA_VERSION = 3;
 export const FRAME_SAMPLE_PIXELS = DESKTOP_PROOF_SAMPLE_PIXELS;
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -24,6 +25,14 @@ const TERMINAL_STAGES = new Set(["passed", "failed"]);
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value, expected) {
+  return (
+    isRecord(value) &&
+    Object.keys(value).length === expected.length &&
+    expected.every((key) => Object.hasOwn(value, key))
+  );
 }
 
 function validMetrics(metrics) {
@@ -119,6 +128,7 @@ export function createAcceptanceState({ releaseId, runNonce, now = 0 } = {}) {
     eventOrdinal: 0,
     hostReady: null,
     release: null,
+    guestReportProvenance: null,
     report: null,
     metrics: null,
     desktopProof: null,
@@ -265,10 +275,34 @@ export function advanceAcceptance(state, message, now) {
       upstream: message.upstream,
       artifactManifestSha256: message.artifactManifestSha256,
     };
+    const guestReportProvenance = normalizeGuestReportProvenance(
+      message.guestReportProvenance,
+    );
+    if (
+      !hasExactKeys(message, [
+        "type",
+        "upstream",
+        "artifactManifestSha256",
+        "guestReportProvenance",
+      ])
+    ) {
+      return failAcceptance(
+        next,
+        "Release identity had an unexpected or incomplete shape.",
+        now,
+      );
+    }
     if (!isActiveReleaseIdentity(release, state.releaseId)) {
       return failAcceptance(
         next,
         "Release identity did not exactly match the supplied manifest digest and pinned Omarchy source.",
+        now,
+      );
+    }
+    if (!guestReportProvenance) {
+      return failAcceptance(
+        next,
+        "Release identity omitted or malformed its guest-report provenance contract.",
         now,
       );
     }
@@ -280,6 +314,7 @@ export function advanceAcceptance(state, message, now) {
         artifactManifestSha256: message.artifactManifestSha256,
       }),
     );
+    next.guestReportProvenance = guestReportProvenance;
     return withStage(next, "waiting-report", now);
   }
 
@@ -299,10 +334,11 @@ export function advanceAcceptance(state, message, now) {
       );
     }
     if (
-      !guestReportMatchesRelease(
-        message.report,
+      !guestReportEvidenceMatchesRelease(
+        message,
         state.release.value,
         state.releaseId,
+        state.guestReportProvenance,
       )
     ) {
       return failAcceptance(
@@ -311,7 +347,17 @@ export function advanceAcceptance(state, message, now) {
         now,
       );
     }
-    next.report = milestone(ordinal, now, Object.freeze(message.report));
+    next.report = milestone(
+      ordinal,
+      now,
+      Object.freeze({
+        report: Object.freeze(message.report),
+        origin: message.origin,
+        ...(message.sourceEvidence === undefined
+          ? {}
+          : { sourceEvidence: Object.freeze({ ...message.sourceEvidence }) }),
+      }),
+    );
     return withStage(next, "waiting-desktop-proof", now);
   }
 

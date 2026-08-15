@@ -2,6 +2,10 @@ import {
   DESKTOP_PROOF_SAMPLE_PIXELS,
   isDesktopProof,
 } from "../../public/vm/desktop-proof.mjs";
+import {
+  guestReportProvenanceMatches,
+  normalizeGuestReportProvenance,
+} from "../../public/vm/host-utils.mjs";
 
 export const DISPLAY_WIDTH = 1600;
 export const DISPLAY_HEIGHT = 900;
@@ -281,6 +285,33 @@ export function guestReportMatchesRelease(
   );
 }
 
+export function guestReportEvidenceMatchesRelease(
+  evidence,
+  release,
+  expectedReleaseId = ACTIVE_RELEASE_ID,
+  expectedProvenance,
+) {
+  if (
+    !isRecord(evidence) ||
+    !guestReportMatchesRelease(evidence.report, release, expectedReleaseId) ||
+    !guestReportProvenanceMatches(
+      evidence.origin === "checkpoint-source-evidence"
+        ? {
+            origin: evidence.origin,
+            sourceEvidence: evidence.sourceEvidence,
+          }
+        : { origin: evidence.origin },
+      expectedProvenance,
+    )
+  ) {
+    return false;
+  }
+  const expectedKeys = evidence.origin === "checkpoint-source-evidence"
+    ? new Set(["type", "report", "origin", "sourceEvidence"])
+    : new Set(["type", "report", "origin"]);
+  return hasOnlyKeys(evidence, expectedKeys);
+}
+
 /**
  * A phase named `running` only proves that QEMU started. The UI may claim the
  * desktop is ready exclusively after this guest-originated evidence arrives.
@@ -444,7 +475,9 @@ export function createDesktopEvidence(expectedReleaseId = ACTIVE_RELEASE_ID) {
     eventOrdinal: 0,
     release: null,
     releaseOrdinal: null,
+    guestReportProvenance: null,
     report: null,
+    reportProvenance: null,
     reportOrdinal: null,
     desktopProof: null,
     desktopProofOrdinal: null,
@@ -481,9 +514,17 @@ export function advanceDesktopEvidence(evidence, event) {
   if (current.invalid) return { ...current, eventOrdinal, ready: false };
 
   if (event?.type === "release") {
+    const guestReportProvenance = normalizeGuestReportProvenance(
+      event.guestReportProvenance,
+    );
     if (
+      !hasOnlyKeys(
+        event,
+        new Set(["type", "release", "guestReportProvenance"]),
+      ) ||
       current.release !== null ||
-      !isActiveReleaseIdentity(event.release, current.expectedReleaseId)
+      !isActiveReleaseIdentity(event.release, current.expectedReleaseId) ||
+      guestReportProvenance === null
     ) {
       return { ...current, eventOrdinal, invalid: true, ready: false };
     }
@@ -492,7 +533,9 @@ export function advanceDesktopEvidence(evidence, event) {
       eventOrdinal,
       release: event.release,
       releaseOrdinal: eventOrdinal,
+      guestReportProvenance,
       report: null,
+      reportProvenance: null,
       reportOrdinal: null,
       desktopProof: null,
       desktopProofOrdinal: null,
@@ -507,11 +550,13 @@ export function advanceDesktopEvidence(evidence, event) {
   if (event?.type === "guestreport") {
     if (
       current.release === null ||
+      current.guestReportProvenance === null ||
       current.report !== null ||
-      !guestReportMatchesRelease(
-        event.report,
+      !guestReportEvidenceMatchesRelease(
+        event,
         current.release,
         current.expectedReleaseId,
+        current.guestReportProvenance,
       )
     ) {
       return { ...current, eventOrdinal, invalid: true, ready: false };
@@ -520,6 +565,7 @@ export function advanceDesktopEvidence(evidence, event) {
       ...current,
       eventOrdinal,
       report: event.report,
+      reportProvenance: current.guestReportProvenance,
       reportOrdinal: eventOrdinal,
       desktopProof: null,
       desktopProofOrdinal: null,
@@ -573,6 +619,11 @@ export function advanceDesktopEvidence(evidence, event) {
         !current.invalid &&
         (current.ready ||
           (current.report !== null &&
+            current.reportProvenance !== null &&
+            guestReportProvenanceMatches(
+              current.reportProvenance,
+              current.guestReportProvenance,
+            ) &&
             current.desktopProof !== null &&
             current.reportOrdinal < current.desktopProofOrdinal &&
             current.desktopProofOrdinal < eventOrdinal &&

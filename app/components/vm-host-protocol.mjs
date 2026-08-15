@@ -2,6 +2,7 @@ import {
   DESKTOP_PROOF_SAMPLE_PIXELS,
   isDesktopProof,
 } from "../../public/vm/desktop-proof.mjs";
+import { normalizeGuestReportProvenance } from "../../public/vm/host-utils.mjs";
 
 export const VM_HOST_PROTOCOL = Object.freeze({
   channel: "omarchy-vm-host",
@@ -153,18 +154,33 @@ function validateHostPayload(value, expectedNonce) {
         ...common,
         "upstream",
         "artifactManifestSha256",
+        "guestReportProvenance",
       ]);
       return hasEnvelope(value, expectedNonce, keys) &&
         isReleaseIdentity({
           upstream: value.upstream,
           artifactManifestSha256: value.artifactManifestSha256,
-        })
+        }) &&
+        normalizeGuestReportProvenance(value.guestReportProvenance) !== null
         ? value
         : null;
     }
     case "guestreport": {
-      const keys = new Set([...common, "report"]);
-      return hasEnvelope(value, expectedNonce, keys) && isRecord(value.report)
+      const provenance = value.origin === "checkpoint-source-evidence"
+        ? { origin: value.origin, sourceEvidence: value.sourceEvidence }
+        : { origin: value.origin };
+      const normalizedProvenance = normalizeGuestReportProvenance(provenance);
+      const keys = new Set([
+        ...common,
+        "report",
+        "origin",
+        ...(normalizedProvenance?.origin === "checkpoint-source-evidence"
+          ? ["sourceEvidence"]
+          : []),
+      ]);
+      return hasEnvelope(value, expectedNonce, keys) &&
+        isRecord(value.report) &&
+        normalizedProvenance !== null
         ? value
         : null;
     }

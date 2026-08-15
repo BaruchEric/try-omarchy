@@ -3,6 +3,7 @@ import {
   normalizedPointerForCanvas,
   normalizeRuntimeDesktopProof,
   normalizeRuntimeGuestFrame,
+  normalizeRuntimeGuestReport,
   normalizeRuntimeInputAccepted,
   validateRuntimeRelease,
 } from "/vm/host-utils.mjs";
@@ -186,23 +187,35 @@ function bindWorker(worker) {
           break;
         }
         verifiedRuntimeRelease = release;
-        post("release", release);
+        post("release", {
+          ...release,
+          guestReportProvenance: verifiedBootstrap.guestReportProvenance,
+        });
         break;
       }
-      case "guestreport":
+      case "guestreport": {
         if (!verifiedRuntimeRelease) {
           rejectWorkerMessage(
             "The Worker emitted guest evidence before its release identity.",
           );
         } else if (guestReportSeen) {
           rejectWorkerMessage("The Worker emitted more than one guest report.");
-        } else if (isRecord(detail.report)) {
-          guestReportSeen = true;
-          post("guestreport", { report: detail.report });
         } else {
-          rejectWorkerMessage("The Worker emitted a non-object guest report.");
+          const guestReport = normalizeRuntimeGuestReport(
+            detail,
+            verifiedBootstrap,
+          );
+          if (!guestReport) {
+            rejectWorkerMessage(
+              "The Worker emitted guest evidence with missing, mismatched, or downgraded provenance.",
+            );
+            break;
+          }
+          guestReportSeen = true;
+          post("guestreport", guestReport);
         }
         break;
+      }
       case "guestreporterror":
         latchRuntimeTerminal();
         postError(detail.error, "The guest authenticity report could not be parsed.");
