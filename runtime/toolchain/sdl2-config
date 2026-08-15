@@ -1,0 +1,22 @@
+#!/usr/bin/env sh
+set -eu
+
+# Meson asks sdl2-config for host flags. Emscripten provides SDL2 as a system
+# port rather than a pkg-config package, so expose the port as a config tool.
+for argument in "$@"; do
+  case "$argument" in
+    --version)
+      printf '%s\n' '2.0.22'
+      ;;
+    --cflags|--libs|--static-libs)
+      printf '%s\n' '-sUSE_SDL=2'
+      ;;
+    --prefix|--exec-prefix)
+      printf '%s\n' '/emsdk/upstream/emscripten/cache/sysroot'
+      ;;
+    *)
+      printf 'unsupported sdl2-config argument: %s\n' "$argument" >&2
+      exit 2
+      ;;
+  esac
+done

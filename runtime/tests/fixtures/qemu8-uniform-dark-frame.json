@@ -1,0 +1,12 @@
+{
+  "source": "20260815T040545Z-qemu8-2vcpu-mttcg-ab",
+  "description": "Authenticated QEMU 8.2 desktop failure: 99.986% RGB(17,17,17), no Foot window after Super+Return",
+  "fullFrameDominantFraction": 0.99986,
+  "guestWidth": 1600,
+  "guestHeight": 900,
+  "sampledPixels": 576,
+  "nonBlackPixels": 576,
+  "proofFrame": 2,
+  "changedPixels": 0,
+  "dominantPixels": 576
+}

@@ -1,0 +1,273 @@
+diff --git a/include/ui/sdl2.h b/include/ui/sdl2.h
+--- a/include/ui/sdl2.h
++++ b/include/ui/sdl2.h
+@@ -48,6 +48,11 @@
+     QemuGLShader *gls;
+     egl_fb guest_fb;
+     egl_fb win_fb;
++#ifdef __EMSCRIPTEN__
++    egl_fb proof_fb;
++    double proof_last_sample_ms;
++    double gl_present_metrics_start_ms;
++    uint64_t gl_present_count;
++    uint64_t gl_present_metrics_start_count;
++#endif
+     bool y0_top;
+     bool scanout_mode;
+ #endif
+@@ -70,6 +75,19 @@
+ bool sdl2_2d_check_format(DisplayChangeListener *dcl,
+                           pixman_format_code_t format);
+ 
++#ifdef __EMSCRIPTEN__
++#define OMARCHY_GL_FRAME_SAMPLE_COLUMNS 32
++#define OMARCHY_GL_FRAME_SAMPLE_ROWS 18
++#define OMARCHY_GL_FRAME_SAMPLE_COUNT \
++    (OMARCHY_GL_FRAME_SAMPLE_COLUMNS * OMARCHY_GL_FRAME_SAMPLE_ROWS)
++
++extern int omarchy_desktop_proof_state;
++extern uint32_t
++    omarchy_desktop_baseline[OMARCHY_GL_FRAME_SAMPLE_COUNT];
++int omarchy_count_dominant_pixels(
++    const uint32_t samples[OMARCHY_GL_FRAME_SAMPLE_COUNT]);
++#endif
++
+ void sdl2_gl_update(DisplayChangeListener *dcl,
+                     int x, int y, int w, int h);
+ void sdl2_gl_switch(DisplayChangeListener *dcl,
+diff --git a/ui/sdl2-2d.c b/ui/sdl2-2d.c
+--- a/ui/sdl2-2d.c
++++ b/ui/sdl2-2d.c
+@@ -55,8 +55,8 @@
+     OMARCHY_DESKTOP_PROOF_FRAME_RESPONSE = 2,
+ };
+ 
+-static int omarchy_desktop_proof_state;
+-static uint32_t omarchy_desktop_baseline[OMARCHY_FRAME_SAMPLE_COUNT];
++int omarchy_desktop_proof_state;
++uint32_t omarchy_desktop_baseline[OMARCHY_FRAME_SAMPLE_COUNT];
+ 
+ static uint8_t omarchy_scale_component(uint32_t pixel, uint32_t mask,
+                                        uint8_t shift, uint8_t maximum)
+@@ -113,7 +113,7 @@
+     return sampled;
+ }
+ 
+-static int omarchy_count_dominant_pixels(
++int omarchy_count_dominant_pixels(
+     const uint32_t samples[OMARCHY_FRAME_SAMPLE_COUNT])
+ {
+     int dominant = 0;
+diff --git a/ui/sdl2-gl.c b/ui/sdl2-gl.c
+--- a/ui/sdl2-gl.c
++++ b/ui/sdl2-gl.c
+@@ -31,9 +31,167 @@
+ #include "ui/sdl2.h"
+ 
+ #ifdef __EMSCRIPTEN__
++#include <emscripten.h>
+ #include <emscripten/html5_webgl.h>
++#include "qemu/atomic.h"
++#include "sysemu/runstate.h"
+ #endif
+ 
++#ifdef __EMSCRIPTEN__
++enum OmarchyGlDesktopProofState {
++    OMARCHY_GL_PROOF_AWAITING_BASELINE = 1,
++    OMARCHY_GL_PROOF_BASELINE_CAPTURED = 2,
++    OMARCHY_GL_PROOF_AWAITING_RESPONSE = 3,
++    OMARCHY_GL_PROOF_RESPONSE_CAPTURED = 4,
++};
++
++enum OmarchyGlDesktopProofFrame {
++    OMARCHY_GL_PROOF_FRAME_NONE = 0,
++    OMARCHY_GL_PROOF_FRAME_BASELINE = 1,
++    OMARCHY_GL_PROOF_FRAME_RESPONSE = 2,
++};
++
++#define OMARCHY_GL_DESKTOP_WIDTH 1600
++#define OMARCHY_GL_DESKTOP_HEIGHT 900
++#define OMARCHY_GL_DESKTOP_MIN_CHANGED_PIXELS 29
++#define OMARCHY_GL_DESKTOP_MAX_DOMINANT_PIXELS 547
++#define OMARCHY_GL_SAMPLE_INTERVAL_MS 250.0
++
++static int sdl2_gl_sample_scanout(
++    struct sdl2_console *scon,
++    uint32_t samples[OMARCHY_GL_FRAME_SAMPLE_COUNT],
++    int *non_black_pixels)
++{
++    uint8_t rgba[OMARCHY_GL_FRAME_SAMPLE_COUNT * 4];
++    int non_black = 0;
++
++    if (scon->proof_fb.width != OMARCHY_GL_FRAME_SAMPLE_COLUMNS ||
++        scon->proof_fb.height != OMARCHY_GL_FRAME_SAMPLE_ROWS ||
++        !scon->proof_fb.framebuffer) {
++        GLuint texture;
++
++        egl_fb_destroy(&scon->proof_fb);
++        glGenTextures(1, &texture);
++        glBindTexture(GL_TEXTURE_2D, texture);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
++                     OMARCHY_GL_FRAME_SAMPLE_COLUMNS,
++                     OMARCHY_GL_FRAME_SAMPLE_ROWS, 0, GL_RGBA,
++                     GL_UNSIGNED_BYTE, NULL);
++        egl_fb_setup_for_tex(&scon->proof_fb,
++                             OMARCHY_GL_FRAME_SAMPLE_COLUMNS,
++                             OMARCHY_GL_FRAME_SAMPLE_ROWS, texture, true);
++        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) !=
++            GL_FRAMEBUFFER_COMPLETE) {
++            fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                    "webgl2-proof-framebuffer-incomplete\n");
++            fflush(stderr);
++            egl_fb_destroy(&scon->proof_fb);
++            *non_black_pixels = 0;
++            return 0;
++        }
++    }
++
++    egl_fb_blit(&scon->proof_fb, &scon->guest_fb, !scon->y0_top);
++    glBindFramebuffer(GL_READ_FRAMEBUFFER, scon->proof_fb.framebuffer);
++    glReadBuffer(GL_COLOR_ATTACHMENT0);
++    for (int stale = 0; stale < 8 && glGetError() != GL_NO_ERROR; stale++) {
++        /* Do not attribute an older VirGL error to this bounded readback. */
++    }
++    glReadPixels(0, 0, OMARCHY_GL_FRAME_SAMPLE_COLUMNS,
++                 OMARCHY_GL_FRAME_SAMPLE_ROWS, GL_RGBA,
++                 GL_UNSIGNED_BYTE, rgba);
++    if (glGetError() != GL_NO_ERROR) {
++        glBindFramebuffer(GL_FRAMEBUFFER, 0);
++        *non_black_pixels = 0;
++        return 0;
++    }
++    glBindFramebuffer(GL_FRAMEBUFFER, 0);
++
++    for (int index = 0; index < OMARCHY_GL_FRAME_SAMPLE_COUNT; index++) {
++        uint32_t rgb = ((uint32_t)rgba[index * 4] << 16) |
++                       ((uint32_t)rgba[index * 4 + 1] << 8) |
++                       rgba[index * 4 + 2];
++
++        samples[index] = rgb;
++        if (rgb) {
++            non_black++;
++        }
++    }
++    *non_black_pixels = non_black;
++    return OMARCHY_GL_FRAME_SAMPLE_COUNT;
++}
++
++static void sdl2_gl_publish_scanout(struct sdl2_console *scon)
++{
++    uint32_t samples[OMARCHY_GL_FRAME_SAMPLE_COUNT];
++    double now = emscripten_get_now();
++    int proof_state = qatomic_read(&omarchy_desktop_proof_state);
++    int sampled_pixels;
++    int non_black_pixels;
++    int proof_frame = OMARCHY_GL_PROOF_FRAME_NONE;
++    int changed_pixels = 0;
++    int dominant_pixels = 0;
++    bool proof_pending = proof_state == OMARCHY_GL_PROOF_AWAITING_BASELINE ||
++                         proof_state == OMARCHY_GL_PROOF_AWAITING_RESPONSE;
++
++    scon->gl_present_count++;
++    if (scon->gl_present_metrics_start_ms == 0.0) {
++        scon->gl_present_metrics_start_ms = now;
++        scon->gl_present_metrics_start_count = scon->gl_present_count;
++    } else if (now - scon->gl_present_metrics_start_ms >= 5000.0) {
++        double elapsed_ms = now - scon->gl_present_metrics_start_ms;
++        uint64_t presented = scon->gl_present_count -
++                             scon->gl_present_metrics_start_count;
++
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-present-cadence frames=%" PRIu64
++                " elapsed-ms=%.3f fps=%.3f width=%d height=%d\n",
++                presented, elapsed_ms, presented * 1000.0 / elapsed_ms,
++                scon->w, scon->h);
++        fflush(stderr);
++        scon->gl_present_metrics_start_ms = now;
++        scon->gl_present_metrics_start_count = scon->gl_present_count;
++    }
++    if (scon->gl_present_count <= 16 ||
++        (scon->gl_present_count & (scon->gl_present_count - 1)) == 0) {
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-frame-presented sequence=%" PRIu64
++                " monotonic-ms=%.3f width=%d height=%d running=%d\n",
++                scon->gl_present_count, now, scon->w, scon->h,
++                runstate_is_running());
++        fflush(stderr);
++    }
++
++    if (scon->w != OMARCHY_GL_DESKTOP_WIDTH ||
++        scon->h != OMARCHY_GL_DESKTOP_HEIGHT ||
++        (!proof_pending &&
++         now - scon->proof_last_sample_ms < OMARCHY_GL_SAMPLE_INTERVAL_MS)) {
++        return;
++    }
++
++    sampled_pixels = sdl2_gl_sample_scanout(
++        scon, samples, &non_black_pixels);
++    if (sampled_pixels != OMARCHY_GL_FRAME_SAMPLE_COUNT) {
++        return;
++    }
++    scon->proof_last_sample_ms = now;
++
++    if (proof_state == OMARCHY_GL_PROOF_AWAITING_BASELINE &&
++        runstate_is_running()) {
++        memcpy(omarchy_desktop_baseline, samples,
++               sizeof(omarchy_desktop_baseline));
++        qatomic_set(&omarchy_desktop_proof_state,
++                    OMARCHY_GL_PROOF_BASELINE_CAPTURED);
++        proof_frame = OMARCHY_GL_PROOF_FRAME_BASELINE;
++    } else if (proof_state == OMARCHY_GL_PROOF_AWAITING_RESPONSE) {
++        for (int index = 0; index < OMARCHY_GL_FRAME_SAMPLE_COUNT; index++) {
++            if (samples[index] != omarchy_desktop_baseline[index]) {
++                changed_pixels++;
++            }
++        }
++        dominant_pixels = omarchy_count_dominant_pixels(samples);
++        if (changed_pixels >= OMARCHY_GL_DESKTOP_MIN_CHANGED_PIXELS &&
++            dominant_pixels >= 1 &&
++            dominant_pixels <= OMARCHY_GL_DESKTOP_MAX_DOMINANT_PIXELS &&
++            qatomic_cmpxchg(&omarchy_desktop_proof_state,
++                OMARCHY_GL_PROOF_AWAITING_RESPONSE,
++                OMARCHY_GL_PROOF_RESPONSE_CAPTURED) ==
++                OMARCHY_GL_PROOF_AWAITING_RESPONSE) {
++            proof_frame = OMARCHY_GL_PROOF_FRAME_RESPONSE;
++        }
++    }
++
++    MAIN_THREAD_ASYNC_EM_ASM({
++        if (typeof Module !== 'undefined' && Module['onGuestFrame']) {
++            Module['onGuestFrame']($0, $1, $2, $3, $4, $5, $6);
++        }
++    }, scon->w, scon->h, sampled_pixels, non_black_pixels, proof_frame,
++       changed_pixels, dominant_pixels);
++}
++#endif
++
+ static void sdl2_set_scanout_mode(struct sdl2_console *scon, bool scanout)
+ {
+     if (scon->scanout_mode == scanout) {
+@@ -43,6 +201,9 @@
+     scon->scanout_mode = scanout;
+     if (!scon->scanout_mode) {
+         egl_fb_destroy(&scon->guest_fb);
++#ifdef __EMSCRIPTEN__
++        egl_fb_destroy(&scon->proof_fb);
++#endif
+         if (scon->surface) {
+             surface_gl_destroy_texture(scon->gls, scon->surface);
+             surface_gl_create_texture(scon->gls, scon->surface);
+@@ -359,5 +520,9 @@
+     egl_fb_setup_default(&scon->win_fb, ww, wh);
+     egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
+ 
++#ifdef __EMSCRIPTEN__
++    sdl2_gl_publish_scanout(scon);
++#endif
++
+     sdl2_gl_window_context_swap(scon);
+ }

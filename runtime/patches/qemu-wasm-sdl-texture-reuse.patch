@@ -1,0 +1,92 @@
+--- a/ui/sdl2-2d.c
++++ b/ui/sdl2-2d.c
+@@ -278,6 +278,9 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+     struct sdl2_console *scon = container_of(dcl, struct sdl2_console, dcl);
+     DisplaySurface *old_surface = scon->surface;
+     int format = 0;
++#ifdef __EMSCRIPTEN__
++    bool reuse_texture = false;
++#endif
+ 
+     assert(!scon->opengl);
+ 
+@@ -292,12 +295,11 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+ #endif
+     scon->surface = new_surface;
+ 
+-    if (scon->texture) {
+-        SDL_DestroyTexture(scon->texture);
+-        scon->texture = NULL;
+-    }
+-
+     if (is_placeholder(new_surface) && qemu_console_get_index(dcl->con)) {
++        if (scon->texture) {
++            SDL_DestroyTexture(scon->texture);
++            scon->texture = NULL;
++        }
+         sdl2_window_destroy(scon);
+         return;
+     }
+@@ -342,15 +344,54 @@ void sdl2_2d_switch(DisplayChangeListener *dcl,
+     default:
+         g_assert_not_reached();
+     }
+-    scon->texture = SDL_CreateTexture(scon->real_renderer, format,
+-                                      SDL_TEXTUREACCESS_STREAMING,
+-                                      surface_width(new_surface),
+-                                      surface_height(new_surface));
++#ifdef __EMSCRIPTEN__
++    if (scon->texture) {
++        Uint32 texture_format;
++        int texture_access;
++        int texture_width;
++        int texture_height;
++
++        reuse_texture = SDL_QueryTexture(
++            scon->texture, &texture_format, &texture_access,
++            &texture_width, &texture_height) == 0 &&
++            texture_format == (Uint32)format &&
++            texture_access == SDL_TEXTUREACCESS_STREAMING &&
++            texture_width == surface_width(new_surface) &&
++            texture_height == surface_height(new_surface);
++        if (!reuse_texture) {
++            SDL_DestroyTexture(scon->texture);
++            scon->texture = NULL;
++        }
++    }
++#else
++    if (scon->texture) {
++        SDL_DestroyTexture(scon->texture);
++        scon->texture = NULL;
++    }
++#endif
++    if (!scon->texture) {
++        scon->texture = SDL_CreateTexture(scon->real_renderer, format,
++                                          SDL_TEXTUREACCESS_STREAMING,
++                                          surface_width(new_surface),
++                                          surface_height(new_surface));
+ #ifdef __EMSCRIPTEN__
+-    fprintf(stderr,
+-            "OMARCHY_RUNTIME_DIAGNOSTIC sdl-texture-created texture=%p error=%s\n",
+-            scon->texture, scon->texture ? "none" : SDL_GetError());
+-    fflush(stderr);
++        fprintf(stderr,
++                "OMARCHY_RUNTIME_DIAGNOSTIC sdl-texture-created monotonic-ms=%.3f texture=%p width=%d height=%d format=%d error=%s\n",
++                emscripten_get_now(), scon->texture,
++                surface_width(new_surface), surface_height(new_surface),
++                format, scon->texture ? "none" : SDL_GetError());
++        fflush(stderr);
++#endif
++    }
++#ifdef __EMSCRIPTEN__
++    if (reuse_texture) {
++        fprintf(stderr,
++                "OMARCHY_RUNTIME_DIAGNOSTIC sdl-texture-reused monotonic-ms=%.3f texture=%p width=%d height=%d format=%d\n",
++                emscripten_get_now(), scon->texture,
++                surface_width(new_surface), surface_height(new_surface),
++                format);
++        fflush(stderr);
++    }
+ #endif
+     sdl2_2d_redraw(scon);
+ }

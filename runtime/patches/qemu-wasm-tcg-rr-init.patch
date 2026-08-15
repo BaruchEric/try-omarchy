@@ -1,0 +1,28 @@
+diff --git a/accel/tcg/tcg-accel-ops-rr.c b/accel/tcg/tcg-accel-ops-rr.c
+--- a/accel/tcg/tcg-accel-ops-rr.c
++++ b/accel/tcg/tcg-accel-ops-rr.c
+@@ -37,6 +37,10 @@
+ #include "tcg-accel-ops-rr.h"
+ #include "tcg-accel-ops-icount.h"
+ 
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++#include "../../tcg/wasm32.h"
++#endif
++
+ /* Kick all RR vCPUs */
+ void rr_kick_vcpu_thread(CPUState *unused)
+ {
+@@ -182,6 +186,13 @@ static void *rr_cpu_thread_fn(void *arg)
+     Notifier force_rcu;
+     CPUState *cpu = arg;
+ 
++#if defined(EMSCRIPTEN) && !defined(CONFIG_TCG_INTERPRETER)
++    /* The Wasm TCG context is thread-local, including its JavaScript bridge. */
++    init_wasm32();
++    fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++            "wasm32-tcg-thread-initialized mode=rr\n");
++#endif
++
+     assert(tcg_enabled());
+     rcu_register_thread();
+     force_rcu.notify = rr_force_rcu;

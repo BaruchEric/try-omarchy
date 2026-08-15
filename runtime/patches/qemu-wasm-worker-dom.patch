@@ -1,0 +1,52 @@
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -197,9 +197,12 @@ static void sdl_update_caption(struct sdl2_console *scon)
+         snprintf(icon_title, sizeof(icon_title), "QEMU");
+     }
+ 
++#ifndef __EMSCRIPTEN__
++    /* A dedicated Worker has no document title; the site owns its own chrome. */
+     if (scon->real_window) {
+         SDL_SetWindowTitle(scon->real_window, win_title);
+     }
++#endif
+ }
+ 
+ static void sdl_hide_cursor(struct sdl2_console *scon)
+@@ -799,8 +802,10 @@ static const DisplayChangeListenerOps dcl_2d_ops = {
+     .dpy_gfx_switch       = sdl2_2d_switch,
+     .dpy_gfx_check_format = sdl2_2d_check_format,
+     .dpy_refresh          = sdl2_2d_refresh,
++#ifndef __EMSCRIPTEN__
+     .dpy_mouse_set        = sdl_mouse_warp,
+     .dpy_cursor_define    = sdl_mouse_define,
++#endif
+ };
+ 
+ #ifdef CONFIG_OPENGL
+@@ -811,8 +816,10 @@ static const DisplayChangeListenerOps dcl_gl_ops = {
+     .dpy_gfx_switch          = sdl2_gl_switch,
+     .dpy_gfx_check_format    = console_gl_check_format,
+     .dpy_refresh             = sdl2_gl_refresh,
++#ifndef __EMSCRIPTEN__
+     .dpy_mouse_set           = sdl_mouse_warp,
+     .dpy_cursor_define       = sdl_mouse_define,
++#endif
+ 
+     .dpy_gl_scanout_disable  = sdl2_gl_scanout_disable,
+     .dpy_gl_scanout_texture  = sdl2_gl_scanout_texture,
+@@ -953,8 +960,14 @@ static void sdl2_display_init(DisplayState *ds, DisplayOptions *o)
+     mouse_mode_notifier.notify = sdl_mouse_mode_change;
+     qemu_add_mouse_mode_change_notifier(&mouse_mode_notifier);
+ 
++#ifdef __EMSCRIPTEN__
++    fprintf(stderr,
++            "OMARCHY_RUNTIME_DIAGNOSTIC worker-dom-cursor-hooks-disabled\n");
++    fflush(stderr);
++#else
+     sdl_cursor_hidden = SDL_CreateCursor(&data, &data, 8, 1, 0, 0);
+     sdl_cursor_normal = SDL_GetCursor();
++#endif
+ 
+     if (gui_fullscreen) {
+         sdl_grab_start(&sdl2_console[0]);

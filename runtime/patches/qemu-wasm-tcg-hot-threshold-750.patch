@@ -1,0 +1,25 @@
+diff --git a/tcg/wasm32.h b/tcg/wasm32.h
+--- a/tcg/wasm32.h
++++ b/tcg/wasm32.h
+@@ -38,6 +38,6 @@ void init_wasm32();
+ 
+-/* Instrumented baseline; the upstream hot threshold remains unchanged. */
+-#define OMARCHY_WASM_TCG_HOT_THRESHOLD 1500
++/* Isolated hotness A/B: compile only TBs that execute at least 750 times. */
++#define OMARCHY_WASM_TCG_HOT_THRESHOLD 750
+ #define OMARCHY_WASM_TCG_METRICS_SCHEMA 2
+ #define INSTANTIATE_NUM OMARCHY_WASM_TCG_HOT_THRESHOLD
+ 
+diff --git a/tcg/wasm32.c b/tcg/wasm32.c
+--- a/tcg/wasm32.c
++++ b/tcg/wasm32.c
+@@ -389,8 +389,8 @@ void init_wasm32()
+         omarchy_wasm_tcg_metrics_next_report_ms =
+             emscripten_get_now() + OMARCHY_WASM_TCG_METRICS_REPORT_MS;
+         fprintf(stderr,
+                 "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment "
+-                "threshold=1500 metrics-schema=2 core=%d\n",
++                "threshold=750 metrics-schema=2 core=%d\n",
+                 cur_core_num);
+         fflush(stderr);
+         omarchy_wasm_tcg_metrics_report("init");

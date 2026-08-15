@@ -1,0 +1,10 @@
+prefix=/build/target
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libdrm
+Description: Empty browser build compatibility dependency
+Version: 2.4.120
+Libs:
+Cflags:

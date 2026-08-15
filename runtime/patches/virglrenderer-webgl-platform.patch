@@ -1,0 +1,42 @@
+--- a/src/mesa/util/os_misc.c
++++ b/src/mesa/util/os_misc.c
+@@ -68,6 +68,9 @@
+ #  include <kernel/OS.h>
+ #elif DETECT_OS_WINDOWS
+ #  include <windows.h>
++#elif defined(__EMSCRIPTEN__)
++#  include <emscripten/heap.h>
++#  include <unistd.h>
+ #else
+ #error unexpected platform in os_sysinfo.c
+ #endif
+@@ -268,6 +271,9 @@
+    ret = GlobalMemoryStatusEx(&status);
+    *size = status.ullTotalPhys;
+    return (ret == TRUE);
++#elif defined(__EMSCRIPTEN__)
++   *size = (uint64_t)emscripten_get_heap_size();
++   return true;
+ #else
+ #error unexpected platform in os_sysinfo.c
+    return false;
+@@ -297,6 +303,9 @@
+ 
+    free(meminfo);
+    return false;
++#elif defined(__EMSCRIPTEN__)
++   *size = (uint64_t)emscripten_get_heap_size();
++   return true;
+ #elif DETECT_OS_OPENBSD || DETECT_OS_FREEBSD
+    struct rlimit rl;
+ #if DETECT_OS_OPENBSD
+@@ -354,6 +363,9 @@
+    mib[0] = CTL_HW;
+    mib[1] = HW_PAGESIZE;
+    return (sysctl(mib, 2, size, &len, NULL, 0) == 0);
++#elif defined(__EMSCRIPTEN__)
++   *size = 64 * 1024;
++   return true;
+ #else
+ #error unexpected platform in os_sysinfo.c
+    return false;

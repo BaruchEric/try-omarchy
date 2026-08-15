@@ -1,0 +1,248 @@
+diff --git a/include/ui/sdl2.h b/include/ui/sdl2.h
+--- a/include/ui/sdl2.h
++++ b/include/ui/sdl2.h
+@@ -77,6 +77,11 @@
+ void sdl2_gl_refresh(DisplayChangeListener *dcl);
+ void sdl2_gl_redraw(struct sdl2_console *scon);
+ 
++SDL_GLContext sdl2_gl_window_context_create(struct sdl2_console *scon);
++void sdl2_gl_window_context_destroy(SDL_GLContext ctx);
++int sdl2_gl_window_context_make_current(struct sdl2_console *scon,
++                                        SDL_GLContext ctx);
++void sdl2_gl_window_context_swap(struct sdl2_console *scon);
+ QEMUGLContext sdl2_gl_create_context(DisplayGLCtx *dgc,
+                                      QEMUGLParams *params);
+ void sdl2_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx);
+diff --git a/ui/sdl2.c b/ui/sdl2.c
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -327,1 +327,6 @@
+-        scon->winctx = SDL_GL_CreateContext(scon->real_window);
++        scon->winctx = sdl2_gl_window_context_create(scon);
++        if (!scon->winctx) {
++            fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                    "webgl2-context-create-failed\n");
++            abort();
++        }
+@@ -363,1 +368,1 @@
+-        SDL_GL_DeleteContext(scon->winctx);
++        sdl2_gl_window_context_destroy(scon->winctx);
+diff --git a/ui/sdl2-gl.c b/ui/sdl2-gl.c
+--- a/ui/sdl2-gl.c
++++ b/ui/sdl2-gl.c
+@@ -30,6 +30,10 @@
+ #include "ui/input.h"
+ #include "ui/sdl2.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten/html5_webgl.h>
++#endif
++
+ static void sdl2_set_scanout_mode(struct sdl2_console *scon, bool scanout)
+ {
+     if (scon->scanout_mode == scanout) {
+@@ -46,18 +50,102 @@
+     }
+ }
+ 
++SDL_GLContext sdl2_gl_window_context_create(struct sdl2_console *scon)
++{
++#ifdef __EMSCRIPTEN__
++    EmscriptenWebGLContextAttributes attrs;
++    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE ctx;
++    EMSCRIPTEN_RESULT result;
++
++    (void)scon;
++    emscripten_webgl_init_context_attributes(&attrs);
++    attrs.alpha = EM_FALSE;
++    attrs.depth = EM_TRUE;
++    attrs.stencil = EM_TRUE;
++    attrs.antialias = EM_FALSE;
++    attrs.premultipliedAlpha = EM_FALSE;
++    attrs.preserveDrawingBuffer = EM_FALSE;
++    attrs.powerPreference = EM_WEBGL_POWER_PREFERENCE_HIGH_PERFORMANCE;
++    attrs.failIfMajorPerformanceCaveat = EM_TRUE;
++    attrs.majorVersion = 2;
++    attrs.minorVersion = 0;
++    attrs.enableExtensionsByDefault = EM_FALSE;
++    attrs.explicitSwapControl = EM_TRUE;
++    attrs.proxyContextToMainThread = EMSCRIPTEN_WEBGL_CONTEXT_PROXY_DISALLOW;
++    attrs.renderViaOffscreenBackBuffer = EM_FALSE;
++
++    ctx = emscripten_webgl_create_context("#canvas", &attrs);
++    if (ctx <= 0) {
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-context-create-failed result=%ld\n", (long)ctx);
++        return NULL;
++    }
++    result = emscripten_webgl_make_context_current(ctx);
++    if (result != EMSCRIPTEN_RESULT_SUCCESS) {
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-context-current-failed result=%d\n", result);
++        emscripten_webgl_destroy_context(ctx);
++        return NULL;
++    }
++    fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++            "webgl2-context-created handle=%ld proxy=disallow\n", (long)ctx);
++    return (SDL_GLContext)(intptr_t)ctx;
++#else
++    return SDL_GL_CreateContext(scon->real_window);
++#endif
++}
++
++void sdl2_gl_window_context_destroy(SDL_GLContext ctx)
++{
++#ifdef __EMSCRIPTEN__
++    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE handle = (intptr_t)ctx;
++
++    if (handle > 0) {
++        emscripten_webgl_destroy_context(handle);
++    }
++#else
++    SDL_GL_DeleteContext(ctx);
++#endif
++}
++
++int sdl2_gl_window_context_make_current(struct sdl2_console *scon,
++                                        SDL_GLContext ctx)
++{
++#ifdef __EMSCRIPTEN__
++    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE handle = (intptr_t)ctx;
++
++    (void)scon;
++    return emscripten_webgl_make_context_current(handle) ==
++           EMSCRIPTEN_RESULT_SUCCESS ? 0 : -1;
++#else
++    return SDL_GL_MakeCurrent(scon->real_window, ctx);
++#endif
++}
++
++void sdl2_gl_window_context_swap(struct sdl2_console *scon)
++{
++#ifdef __EMSCRIPTEN__
++    EMSCRIPTEN_RESULT result = emscripten_webgl_commit_frame();
++
++    (void)scon;
++    if (result != EMSCRIPTEN_RESULT_SUCCESS) {
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-frame-commit-failed result=%d\n", result);
++    }
++#else
++    SDL_GL_SwapWindow(scon->real_window);
++#endif
++}
++
+ static void sdl2_gl_render_surface(struct sdl2_console *scon)
+ {
+     int ww, wh;
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    sdl2_gl_window_context_make_current(scon, scon->winctx);
+     sdl2_set_scanout_mode(scon, false);
+ 
+     SDL_GetWindowSize(scon->real_window, &ww, &wh);
+     surface_gl_setup_viewport(scon->gls, scon->surface, ww, wh);
+ 
+     surface_gl_render_texture(scon->gls, scon->surface);
+-    SDL_GL_SwapWindow(scon->real_window);
++    sdl2_gl_window_context_swap(scon);
+ }
+ 
+ void sdl2_gl_update(DisplayChangeListener *dcl,
+@@ -71,7 +159,7 @@
+         return;
+     }
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    sdl2_gl_window_context_make_current(scon, scon->winctx);
+     surface_gl_update_texture(scon->gls, scon->surface, x, y, w, h);
+     scon->updates++;
+ }
+@@ -84,7 +172,7 @@
+ 
+     assert(scon->opengl);
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    sdl2_gl_window_context_make_current(scon, scon->winctx);
+     surface_gl_destroy_texture(scon->gls, scon->surface);
+ 
+     scon->surface = new_surface;
+@@ -144,8 +232,19 @@
+ 
+     assert(scon->opengl);
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    if (sdl2_gl_window_context_make_current(scon, scon->winctx) != 0) {
++        return NULL;
++    }
+ 
++#ifdef __EMSCRIPTEN__
++    /* WebGL has no native share groups. VirGL keeps guest GL objects inside
++     * one host GL context, so reuse the QEMU display context explicitly. */
++    (void)ctx;
++    fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++            "webgl2-context-reused major=%d minor=%d\n",
++            params->major_ver, params->minor_ver);
++    return (QEMUGLContext)scon->winctx;
++#else
++
+     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT, 1);
+     if (scon->opts->gl == DISPLAYGL_MODE_ON ||
+         scon->opts->gl == DISPLAYGL_MODE_CORE) {
+@@ -169,12 +268,20 @@
+         ctx = SDL_GL_CreateContext(scon->real_window);
+     }
+     return (QEMUGLContext)ctx;
++#endif
+ }
+ 
+ void sdl2_gl_destroy_context(DisplayGLCtx *dgc, QEMUGLContext ctx)
+ {
+     SDL_GLContext sdlctx = (SDL_GLContext)ctx;
+ 
++#ifdef __EMSCRIPTEN__
++    struct sdl2_console *scon = container_of(dgc, struct sdl2_console, dgc);
++
++    if (sdlctx != scon->winctx) {
++        fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
++                "webgl2-context-destroy-mismatch\n");
++        abort();
++    }
++    return;
++#else
+     SDL_GL_DeleteContext(sdlctx);
++#endif
+ }
+ 
+@@ -186,7 +293,7 @@
+ 
+     assert(scon->opengl);
+ 
+-    return SDL_GL_MakeCurrent(scon->real_window, sdlctx);
++    return sdl2_gl_window_context_make_current(scon, sdlctx);
+ }
+ 
+ void sdl2_gl_scanout_disable(DisplayChangeListener *dcl)
+@@ -217,7 +324,7 @@
+     scon->h = h;
+     scon->y0_top = backing_y_0_top;
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    sdl2_gl_window_context_make_current(scon, scon->winctx);
+ 
+     sdl2_set_scanout_mode(scon, true);
+     egl_fb_setup_for_tex(&scon->guest_fb, backing_width, backing_height,
+@@ -238,11 +345,11 @@
+         return;
+     }
+ 
+-    SDL_GL_MakeCurrent(scon->real_window, scon->winctx);
++    sdl2_gl_window_context_make_current(scon, scon->winctx);
+ 
+     SDL_GetWindowSize(scon->real_window, &ww, &wh);
+     egl_fb_setup_default(&scon->win_fb, ww, wh);
+     egl_fb_blit(&scon->win_fb, &scon->guest_fb, !scon->y0_top);
+ 
+-    SDL_GL_SwapWindow(scon->real_window);
++    sdl2_gl_window_context_swap(scon);
+ }
