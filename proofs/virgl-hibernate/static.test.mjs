@@ -259,6 +259,8 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
     "TimeoutStartSec=infinity",
     "[[ ! -d /sys/module/virtio_gpu ]]",
     "mkswap --force --uuid",
+    "stat -Lc '0x%t 0x%T'",
+    "resume-device-mismatch",
     "536870912 >/sys/power/image_size",
     "shutdown >/sys/power/disk",
     "disk >/sys/power/state",
@@ -267,6 +269,11 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
     "OMARCHY_HIBERNATION_COLD_BOOT",
     "ConditionPathExists=/var/lib/omarchy-hibernate/armed",
   ]) assert.ok(late.includes(token), `producer is missing ${token}`);
+  assert.ok(
+    late.indexOf("mkswap --force --uuid") < late.indexOf('>/sys/power/resume') &&
+      late.indexOf('>/sys/power/resume') < late.indexOf(">/sys/power/state"),
+    "the producer must bind the persistent swap device before entering swsusp",
+  );
   assert.doesNotMatch(late, /systemctl\s+hibernate|hibernate\.target\s+(unmask|start)/);
   for (const variable of ["LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER", "WLR_RENDERER_ALLOW_SOFTWARE"]) {
     assert.match(late, new RegExp(`\\^${variable}=`));
