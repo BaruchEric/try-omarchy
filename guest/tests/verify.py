@@ -589,11 +589,24 @@ def test_static() -> None:
         and "ConditionEnvironment" not in probe_unit,
         "startup observer runs before graphical readiness, fails closed, and remains active after delivery",
     )
-    uwsm_dropin = (GUEST / "overlay/etc/systemd/user/wayland-wm@.service.d/90-omarchy-web-slow-tcg.conf").read_text()
+    uwsm_dropins = [
+        (
+            GUEST
+            / "overlay/etc/systemd/user"
+            / unit
+            / "90-omarchy-web-slow-tcg.conf"
+        ).read_text()
+        for unit in (
+            "wayland-wm@.service.d",
+            "wayland-session-waitenv.service.d",
+        )
+    ]
     check(
-        "TimeoutStartSec=15min" in uwsm_dropin
-        and "ExecStart" not in uwsm_dropin,
-        "web-only UWSM drop-in extends only the bounded Type=notify startup timeout",
+        all(
+            "TimeoutStartSec=15min" in dropin and "ExecStart" not in dropin
+            for dropin in uwsm_dropins
+        ),
+        "web-only UWSM drop-ins extend only the bounded compositor and environment startup timeouts",
     )
     autologin_dropin = (GUEST / "overlay/etc/systemd/system/getty@tty1.service.d/autologin.conf").read_text()
     check("RestartSec=5s" in autologin_dropin, "tty1 autologin retry loop has a bounded backoff")

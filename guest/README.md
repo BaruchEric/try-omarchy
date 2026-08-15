@@ -48,13 +48,15 @@ exec uwsm start -g -1 -e -D Hyprland hyprland.desktop
 ```
 
 UWSM starts Hyprland through its upstream `wayland-wm@.service`, a
-`Type=notify` user unit. Its normal 30-second start timeout is reasonable on a
-native installation, but can terminate an authentic compositor which is still
-paging binaries and llvmpipe into a single-vCPU QEMU-Wasm guest. The web
-profile therefore adds only a `TimeoutStartSec=15min` drop-in; it does not
-replace the UWSM command, unit `ExecStart`, Hyprland, or Quickshell. The tty1
-getty retains normal restart behavior with a five-second backoff, avoiding a
-hot autologin/UWSM failure loop.
+`Type=notify` user unit, and waits for the compositor's environment through
+`wayland-session-waitenv.service`. UWSM normally gives both units 30 seconds.
+That is reasonable on a native installation, but can terminate an authentic
+compositor which is still paging binaries and llvmpipe into a single-vCPU
+QEMU-Wasm guest. The web profile therefore adds matching
+`TimeoutStartSec=15min` drop-ins for both units; it does not replace the UWSM
+command, either unit's `ExecStart`, Hyprland, or Quickshell. The tty1 getty
+retains normal restart behavior with a five-second backoff, avoiding a hot
+autologin/UWSM failure loop.
 
 Three concrete failure modes explained the otherwise silent tty1 state:
 
