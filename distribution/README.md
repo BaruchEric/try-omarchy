@@ -99,6 +99,45 @@ set, not a way to accept arbitrary terms. A failed audit reports every
 unresolved installed package in one run so the review file can be completed
 without repeatedly rebuilding the guest.
 
+## Generate a package-license review skeleton
+
+Use the extracted final rootfs to turn a large unresolved package set into a
+deterministic, editable evidence report:
+
+```sh
+node distribution/license-review.mjs \
+  --rootfs /private/tmp/omarchy-license-review-root \
+  --output /tmp/omarchy-license-review.todo.json
+```
+
+Omit `--output` to write JSON to stdout. When `--output` is used, the command
+creates a new file and refuses to replace an existing review. The rootfs must
+contain `/var/lib/pacman/local`; package-specific candidates are read from
+`/usr/share/licenses`, including safe links into the extracted
+`/usr/share/doc` tree.
+
+The report includes only packages the builder cannot resolve from its
+conservative built-in SPDX rules. It groups packages by the exact, ordered
+array of raw pacman `%LICENSE%` values while retaining package-specific name,
+version, base package, metadata path and digest, candidate search paths, and
+candidate file sizes, SHA-256 digests, resolved paths, and symlink evidence.
+Missing declarations form their own empty-array group. No timestamp or host
+path is recorded, so identical extracted inputs produce byte-identical JSON.
+
+Every package starts with `review.status: "TODO"`, `review.concluded: null`,
+and `review.licenseFiles: null`. Candidate filenames are evidence to inspect,
+not proposed conclusions. The skeleton is intentionally not a
+`packageLicenseOverrides` object and cannot clear the distribution build.
+After a qualified human reviews a package, transfer the decision explicitly
+into `licenses.packageLicenseOverrides` in the distribution input; do not
+mechanically turn a declaration group into one shared conclusion. Re-run the
+generator whenever the package inventory changes and use
+`inputFingerprints.packageMetadataSha256` to detect a stale review.
+
+The generated `legalStatus` remains `NOT_CLEARED`, and
+`generatedConclusions` remains zero. Generating or completing this worksheet
+does not constitute legal advice or release approval.
+
 ## Release assembler handoff
 
 Point the existing release input at these outputs:
