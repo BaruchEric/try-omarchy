@@ -224,6 +224,43 @@ async function cancelBody(response) {
   }
 }
 
+async function readExactBoundedBody(response, expectedBytes, stage) {
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
+    fail("INVALID_LENGTH", `${stage} has an invalid expected body length.`);
+  }
+  const reader = response?.body?.getReader?.();
+  if (!reader) {
+    fail("UNSTREAMABLE_RESPONSE", `${stage} did not expose a bounded response stream.`);
+  }
+
+  const bytes = new Uint8Array(expectedBytes);
+  let received = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      if (!Number.isSafeInteger(received + chunk.byteLength) ||
+          received + chunk.byteLength > expectedBytes) {
+        try {
+          await reader.cancel("bounded range response exceeded its declared length");
+        } catch {
+          // Preserve the deterministic bounded-body error below.
+        }
+        fail("INVALID_LENGTH", `${stage} body exceeded its declared byte length.`);
+      }
+      bytes.set(chunk, received);
+      received += chunk.byteLength;
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  if (received !== expectedBytes) {
+    fail("INVALID_LENGTH", `${stage} body length is invalid.`);
+  }
+  return bytes;
+}
+
 export function validatePagedDiskDescriptor(input, options = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     fail("INVALID_DESCRIPTOR", "Paged disk descriptor must be an object.");
@@ -335,10 +372,7 @@ export async function preflightPagedDisk(input, options = {}) {
       await cancelBody(probe);
       throw error;
     }
-    const bytes = new Uint8Array(await probe.arrayBuffer());
-    if (bytes.byteLength !== 1) {
-      fail("INVALID_LENGTH", "Guest disk range probe body was not exactly one byte.");
-    }
+    const bytes = await readExactBoundedBody(probe, 1, "Guest disk range probe");
     probeRequest.responseBytes = bytes.byteLength;
   } catch (error) {
     probeRequest.error = error instanceof Error ? error.message : String(error);
@@ -418,6 +452,7 @@ export function createPagedDiskPreRun(ticket, options = {}) {
       fail("INVALID_CHUNK", `Invalid guest disk chunk ${chunkNumber}.`);
     }
     const end = Math.min(start + descriptor.chunkBytes, descriptor.byteLength) - 1;
+    const expectedBytes = end - start + 1;
     const range = `bytes=${start}-${end}`;
     const xhr = new scope.XMLHttpRequest();
     let headerFailure = null;
@@ -434,6 +469,24 @@ export function createPagedDiskPreRun(ticket, options = {}) {
         validateRangeHeaders(responseMeta, descriptor, start, end, `Guest disk chunk ${chunkNumber}`);
       } catch (error) {
         headerFailure = error;
+        xhr.abort();
+      }
+    };
+    // Synchronous XHR consumes the response as one byte sequence by standard,
+    // so headers are the primary browser-enforced bound. Some implementations
+    // and test doubles additionally surface progress while receiving it; abort
+    // immediately if those observations exceed the exact requested range.
+    xhr.onprogress = (event) => {
+      if (headerFailure) return;
+      const loaded = event?.loaded;
+      const total = event?.total;
+      if (!Number.isSafeInteger(loaded) || loaded < 0 || loaded > expectedBytes ||
+          (event?.lengthComputable === true &&
+           (!Number.isSafeInteger(total) || total !== expectedBytes))) {
+        headerFailure = new PagedDiskError(
+          "INVALID_LENGTH",
+          `Guest disk chunk ${chunkNumber} exceeded its bounded response length.`,
+        );
         xhr.abort();
       }
     };
@@ -462,7 +515,7 @@ export function createPagedDiskPreRun(ticket, options = {}) {
       fail("INVALID_BODY", `Guest disk chunk ${chunkNumber} did not return an ArrayBuffer.`);
     }
     const bytes = new Uint8Array(xhr.response);
-    if (bytes.byteLength !== end - start + 1) {
+    if (bytes.byteLength !== expectedBytes) {
       fail("INVALID_LENGTH", `Guest disk chunk ${chunkNumber} body length is invalid.`);
     }
     state.rangeRequests += 1;

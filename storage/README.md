@@ -9,12 +9,17 @@ The adapter has two deliberately separate phases:
 1. `preflightPagedDisk` asynchronously performs one `HEAD` and one
    `Range: bytes=0-0` request. It verifies the release byte length, identity,
    identity encoding, `Accept-Ranges`, HTTP 206, `Content-Range`, response
-   length, and same-origin URL.
+   length, and same-origin URL. The probe body is read as a bounded stream and
+   cancelled as soon as it exceeds the declared one byte; it is never
+   aggregated with `Response.arrayBuffer()`.
 2. `createPagedDiskPreRun` returns a synchronous Emscripten `preRun` hook. Each
    read fetches only the required aligned range with a strict `If-Match`
    validator. A server that ignores a range is aborted as soon as response
-   headers arrive. The immutable clean-chunk cache is LRU-bounded and may evict
-   and re-fetch data. The adapter replaces Emscripten 3.1.50's byte-at-a-time
+   headers arrive. Exact response headers are the primary bound for the
+   synchronous Worker XHR path; any available progress observation that exceeds
+   the requested range is also aborted, and the final ArrayBuffer length must
+   still match exactly. The immutable clean-chunk cache is LRU-bounded and may
+   evict and re-fetch data. The adapter replaces Emscripten 3.1.50's byte-at-a-time
    lazy `stream_ops.read` with chunk-granular typed-array copies, so a bulk QEMU
    disk read performs cache work once per chunk rather than once per byte.
 

@@ -39,12 +39,26 @@ function headers({
 }
 
 function response({ status, responseHeaders, bytes = new Uint8Array(0), url = URL, onCancel } = {}) {
+  const stream = new ReadableStream({
+    start(controller) {
+      if (bytes.byteLength > 0) controller.enqueue(bytes);
+      controller.close();
+    },
+    cancel() { onCancel?.(); },
+  });
+  const body = {
+    getReader(...arguments_) { return stream.getReader(...arguments_); },
+    async cancel(reason) {
+      onCancel?.();
+      return stream.cancel(reason);
+    },
+  };
   return {
     ok: status >= 200 && status < 300,
     status,
     headers: responseHeaders,
     url,
-    body: { async cancel() { onCancel?.(); } },
+    body,
     async arrayBuffer() {
       return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
     },
@@ -225,6 +239,49 @@ test("preflight fails closed when Range is ignored and cancels before reading th
   assert.equal(arrayBufferRead, false);
 });
 
+test("preflight stream-caps a lying one-byte response before retaining excess body chunks", async () => {
+  let cancelled = false;
+  let arrayBufferRead = false;
+  let reads = 0;
+  const fetch = async (_url, options) => {
+    if (options.method === "HEAD") {
+      return response({ status: 200, responseHeaders: headers() });
+    }
+    return {
+      ok: true,
+      status: 206,
+      headers: headers({ length: 1, range: `bytes 0-0/${BYTE_LENGTH}` }),
+      url: URL,
+      body: {
+        getReader() {
+          return {
+            async read() {
+              reads += 1;
+              if (reads === 1) return { done: false, value: Uint8Array.of(0) };
+              return { done: false, value: new Uint8Array(64 * 1024) };
+            },
+            async cancel() { cancelled = true; },
+            releaseLock() {},
+          };
+        },
+      },
+      async arrayBuffer() {
+        arrayBufferRead = true;
+        throw new Error("the bounded preflight must never aggregate with arrayBuffer()");
+      },
+    };
+  };
+
+  await assert.rejects(
+    preflightPagedDisk(descriptor(), { origin: ORIGIN, fetch, scope: {} }),
+    (error) => error instanceof PagedDiskError && error.code === "INVALID_LENGTH" &&
+      /exceeded its declared byte length/.test(error.message),
+  );
+  assert.equal(reads, 2);
+  assert.equal(cancelled, true);
+  assert.equal(arrayBufferRead, false);
+});
+
 test("preflight rejects incorrect size, encoding, identity, and Content-Range", async (t) => {
   const cases = [
     {
@@ -322,7 +379,11 @@ function fakeFs() {
   return fs;
 }
 
-function fakeXhrScope(disk, log, { ignoreRange = false, etag = ETAG, reprDigest = null } = {}) {
+function fakeXhrScope(
+  disk,
+  log,
+  { ignoreRange = false, etag = ETAG, reprDigest = null, oversizedProgressBytes = 0 } = {},
+) {
   class FakeXMLHttpRequest {
     requestHeaders = {};
     responseHeaders = new Headers();
@@ -386,6 +447,15 @@ function fakeXhrScope(disk, log, { ignoreRange = false, etag = ETAG, reprDigest 
       const start = Number(match[1]);
       const end = Number(match[2]);
       const body = disk.subarray(start, end + 1);
+      if (oversizedProgressBytes > 0) {
+        this.onprogress?.({
+          loaded: body.byteLength + oversizedProgressBytes,
+          total: body.byteLength,
+          lengthComputable: true,
+        });
+        request.abortedAtProgress = this.aborted;
+        if (this.aborted) return;
+      }
       this.response = body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
       this.readyState = 4;
       this.onreadystatechange?.();
@@ -501,6 +571,21 @@ test("synchronous loader aborts an ignored Range response at headers before read
   assert.equal(requests.length, 1);
   assert.equal(requests[0].range, "bytes=0-65535");
   assert.equal(requests[0].abortedAtHeaders, true);
+  assert.equal(requests[0].responseBytes, undefined);
+});
+
+test("synchronous loader aborts an oversized progress observation before exposing a body", async () => {
+  const { fs, requests } = await mountedFixture({
+    xhrOptions: { oversizedProgressBytes: 1 },
+  });
+  assert.throws(
+    () => fs.node.contents.get(0),
+    (error) => error instanceof PagedDiskError && error.code === "INVALID_LENGTH" &&
+      /bounded response length/.test(error.message),
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].abortedAtHeaders, false);
+  assert.equal(requests[0].abortedAtProgress, true);
   assert.equal(requests[0].responseBytes, undefined);
 });
 
