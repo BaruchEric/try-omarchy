@@ -14,11 +14,19 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { validateProductionRuntimeContract } from "./runtime-contract.mjs";
+import { validateQcow2BackingFile } from "./qcow2-contract.mjs";
+import {
+  checkpointArtifactRecords,
+  validateCheckpointGuestManifestDocument,
+  validateCheckpointProducerDocument,
+  validateExactProductionRuntimeProfile,
+  validateProductionRuntimeContract,
+} from "./runtime-contract.mjs";
 
 const REQUIRED_LICENSE_COMPONENTS = new Set(["omarchy", "qemu-wasm", "linux"]);
 const SHA256 = /^[0-9a-f]{64}$/i;
 const BUILDER_DIGEST = /^sha256:[0-9a-f]{64}$/i;
+const MAX_CHECKPOINT_METADATA_BYTES = 4 * 1024 * 1024;
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -41,6 +49,39 @@ function safeRelativePath(value, label = "artifact path") {
 
 async function readJson(filePath) {
   return JSON.parse(await readFile(filePath, "utf8"));
+}
+
+async function readCheckpointProducer(runtimeManifest, guestDirectory, expectedUpstream) {
+  if (!Object.hasOwn(runtimeManifest, "checkpoint")) return null;
+  const descriptor = runtimeManifest.checkpoint.producer;
+  const filePath = path.join(guestDirectory, descriptor.manifestArtifactPath);
+  const info = await lstat(filePath);
+  invariant(info.isFile(), "checkpoint producer manifest must be a regular file");
+  invariant(
+    info.size === descriptor.manifestBytes,
+    "checkpoint producer manifest byte length differs from runtime manifest",
+  );
+  invariant(
+    info.size <= MAX_CHECKPOINT_METADATA_BYTES,
+    "checkpoint producer manifest exceeds the 4 MiB browser verification limit",
+  );
+  const bytes = await readFile(filePath);
+  invariant(
+    createHash("sha256").update(bytes).digest("hex") === descriptor.manifestSha256,
+    "checkpoint producer manifest SHA-256 differs from runtime manifest",
+  );
+  let document;
+  try {
+    document = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`checkpoint producer manifest is not valid JSON: ${error.message}`);
+  }
+  await validateCheckpointProducerDocument(
+    document,
+    runtimeManifest.checkpoint,
+    expectedUpstream,
+  );
+  return document;
 }
 
 async function sha256(filePath) {
@@ -181,6 +222,25 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
   ]);
   validateFragment(runtimeBuild, "runtime");
   validateFragment(guestFragment, "guest");
+  validateExactProductionRuntimeProfile(runtimeManifest);
+  const checkpointArtifacts = checkpointArtifactRecords(runtimeManifest);
+  await readCheckpointProducer(runtimeManifest, guestDirectory, guestFragment.upstream);
+  if (Object.hasOwn(runtimeManifest, "checkpoint")) {
+    validateCheckpointGuestManifestDocument(guestFragment, runtimeManifest.checkpoint);
+    const rootfsRecords = guestFragment.artifacts.filter(
+      ({ path: artifactPath }) => artifactPath === runtimeManifest.guest.rootfs.artifactPath,
+    );
+    invariant(rootfsRecords.length === 1, "checkpoint backing rootfs must be recorded exactly once");
+    await validateQcow2BackingFile(
+      path.join(guestDirectory, runtimeManifest.checkpoint.bootDelta.artifactPath),
+      {
+        expectedFilename: runtimeManifest.checkpoint.bootDelta.backingFilename,
+        expectedFormat: runtimeManifest.checkpoint.bootDelta.backingFormat,
+        expectedBytes: runtimeManifest.checkpoint.bootDelta.bytes,
+        expectedVirtualBytes: rootfsRecords[0].bytes,
+      },
+    );
+  }
 
   invariant(runtimeBuild.component?.name === "QEMU-Wasm", "runtime fragment is not QEMU-Wasm");
   invariant(/^[0-9a-f]{40}$/i.test(runtimeBuild.component?.commit ?? ""), "runtime commit is not immutable");
@@ -209,6 +269,12 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
     artifacts.push(
       ...(await copyVerifiedFragmentArtifacts(runtimeBuild, runtimeDirectory, stagingRoot, paths)),
       ...(await copyVerifiedFragmentArtifacts(guestFragment, guestDirectory, stagingRoot, paths)),
+      ...(await copyVerifiedFragmentArtifacts(
+        { artifacts: checkpointArtifacts },
+        guestDirectory,
+        stagingRoot,
+        paths,
+      )),
     );
 
     const extras = [

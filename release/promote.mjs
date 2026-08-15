@@ -16,8 +16,14 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { verifyReleaseApprovals } from "./approvals.mjs";
+import { validateQcow2BackingFile } from "./qcow2-contract.mjs";
 import { R2S3Store } from "./r2-s3-store.mjs";
-import { validateProductionRuntimeContract } from "./runtime-contract.mjs";
+import {
+  validateCheckpointGuestManifestDocument,
+  validateCheckpointProducerDocument,
+  validateExactProductionRuntimeProfile,
+  validateProductionRuntimeContract,
+} from "./runtime-contract.mjs";
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
@@ -25,6 +31,7 @@ const DEFAULT_CONCURRENCY = 3;
 const MANIFEST_NAME = "artifact-manifest.json";
 const CLEARANCE_NAME = "clearance.json";
 const RESERVED_ARTIFACT_PATHS = new Set([MANIFEST_NAME, CLEARANCE_NAME]);
+const MAX_CHECKPOINT_METADATA_BYTES = 4 * 1024 * 1024;
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -208,6 +215,68 @@ async function readVerifiedRuntimeManifest(runtimeManifestItem) {
   }
 }
 
+async function readVerifiedJsonArtifact(item, label, maximumBytes) {
+  invariant(item, `${label} is not packaged`);
+  invariant(item.bytes <= maximumBytes, `${label} exceeds the ${maximumBytes}-byte verification limit`);
+  const bytes = await readFile(item.filePath);
+  invariant(bytes.byteLength === item.bytes, `${label} size changed after artifact verification`);
+  invariant(
+    createHash("sha256").update(bytes).digest("hex") === item.sha256,
+    `${label} digest changed after artifact verification`,
+  );
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error.message}`);
+  }
+}
+
+async function validateVerifiedCheckpointProducer(runtimeManifest, artifacts) {
+  if (!Object.hasOwn(runtimeManifest, "checkpoint")) return null;
+  const checkpoint = runtimeManifest.checkpoint;
+  const producerItem = artifacts.find(
+    ({ path: artifactPath }) => artifactPath === checkpoint.producer.manifestArtifactPath,
+  );
+  const guestManifestItem = artifacts.find(
+    ({ path: artifactPath }) => artifactPath === "guest-manifest.json",
+  );
+  const [producerDocument, guestManifestDocument] = await Promise.all([
+    readVerifiedJsonArtifact(
+      producerItem,
+      "checkpoint producer manifest",
+      MAX_CHECKPOINT_METADATA_BYTES,
+    ),
+    readVerifiedJsonArtifact(
+      guestManifestItem,
+      "checkpoint base guest manifest",
+      MAX_CHECKPOINT_METADATA_BYTES,
+    ),
+  ]);
+  await validateCheckpointProducerDocument(
+    producerDocument,
+    checkpoint,
+    guestManifestDocument.upstream,
+  );
+  return guestManifestDocument;
+}
+
+async function validateVerifiedCheckpointQcow2(runtimeManifest, artifacts) {
+  if (!Object.hasOwn(runtimeManifest, "checkpoint")) return;
+  const descriptor = runtimeManifest.checkpoint.bootDelta;
+  const item = artifacts.find(({ path: artifactPath }) => artifactPath === descriptor.artifactPath);
+  const rootfs = artifacts.find(
+    ({ path: artifactPath }) => artifactPath === runtimeManifest.guest.rootfs.artifactPath,
+  );
+  invariant(item, "checkpoint boot delta is not packaged");
+  invariant(rootfs, "checkpoint backing rootfs is not packaged");
+  await validateQcow2BackingFile(item.filePath, {
+    expectedFilename: descriptor.backingFilename,
+    expectedFormat: descriptor.backingFormat,
+    expectedBytes: descriptor.bytes,
+    expectedVirtualBytes: rootfs.bytes,
+  });
+}
+
 function metadataFor(item) {
   return Object.freeze({
     httpMetadata: Object.freeze({
@@ -309,21 +378,44 @@ export async function verifyDeployedRelease(
     await verifyHttpResponseMetadata(response, item, url.href);
   });
 
-  const rootfs = items.find((item) => item.role === "guest-rootfs");
-  invariant(rootfs, "release has no guest root filesystem");
-  const rootfsUrl = new URL(rootfs.path, releaseRoot);
-  const expectedEtag = `"sha256-${rootfs.sha256}"`;
-  const response = await fetchImpl(rootfsUrl, {
-    method: "GET",
-    headers: { Range: "bytes=0-0", "If-Match": expectedEtag },
-    redirect: "error",
-  });
-  invariant(response.status === 206, `deployed rootfs range failed (${response.status}): ${rootfsUrl.href}`);
-  invariant(response.headers.get("content-range") === `bytes 0-0/${rootfs.bytes}`, "deployed rootfs returned the wrong range");
-  invariant(response.headers.get("content-length") === "1", "deployed rootfs range returned the wrong length");
-  invariant(response.headers.get("content-encoding") === "identity", "deployed rootfs range is encoded");
-  invariant(response.headers.get("etag") === expectedEtag, "deployed rootfs range ETag is wrong");
-  invariant((await response.arrayBuffer()).byteLength === 1, "deployed rootfs range body is not one byte");
+  const rootfs = items.filter((item) => item.role === "guest-rootfs");
+  invariant(rootfs.length === 1, "release must have exactly one guest root filesystem");
+  const checkpointPaged = items.filter((item) =>
+    item.role === "preboot-vmstate" || item.role === "preboot-disk-delta");
+  invariant(
+    checkpointPaged.length === 0 || checkpointPaged.length === 2,
+    "deployed checkpoint range artifacts are partial",
+  );
+  for (const item of [...rootfs, ...checkpointPaged]) {
+    const url = new URL(item.path, releaseRoot);
+    const expectedEtag = `"sha256-${item.sha256}"`;
+    const response = await fetchImpl(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0", "If-Match": expectedEtag },
+      redirect: "error",
+    });
+    invariant(response.status === 206, `deployed range failed (${response.status}): ${url.href}`);
+    invariant(
+      response.headers.get("content-range") === `bytes 0-0/${item.bytes}`,
+      `deployed artifact returned the wrong range: ${url.href}`,
+    );
+    invariant(
+      response.headers.get("content-length") === "1",
+      `deployed artifact range returned the wrong length: ${url.href}`,
+    );
+    invariant(
+      response.headers.get("content-encoding") === "identity",
+      `deployed artifact range is encoded: ${url.href}`,
+    );
+    invariant(
+      response.headers.get("etag") === expectedEtag,
+      `deployed artifact range ETag is wrong: ${url.href}`,
+    );
+    invariant(
+      (await response.arrayBuffer()).byteLength === 1,
+      `deployed artifact range body is not one byte: ${url.href}`,
+    );
+  }
 }
 
 export async function prepareRelease(releaseDirectory, { concurrency = DEFAULT_CONCURRENCY } = {}) {
@@ -366,7 +458,19 @@ export async function prepareRelease(releaseDirectory, { concurrency = DEFAULT_C
   );
   invariant(runtimeManifestItem, "artifact manifest must package runtime-manifest.json");
   const runtimeManifest = await readVerifiedRuntimeManifest(runtimeManifestItem);
+  validateExactProductionRuntimeProfile(runtimeManifest);
+  const checkpointGuestManifest = await validateVerifiedCheckpointProducer(
+    runtimeManifest,
+    verifiedArtifacts,
+  );
   validateProductionRuntimeContract(runtimeManifest, verifiedArtifacts);
+  await validateVerifiedCheckpointQcow2(runtimeManifest, verifiedArtifacts);
+  if (checkpointGuestManifest !== null) {
+    validateCheckpointGuestManifestDocument(
+      checkpointGuestManifest,
+      runtimeManifest.checkpoint,
+    );
+  }
   const manifestItem = Object.freeze({
     path: MANIFEST_NAME,
     role: "artifact-manifest",

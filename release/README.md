@@ -22,6 +22,56 @@ both enforce this relationship. Removing, aliasing, relabelling, changing the
 media type of, or tampering with the bounded overlay therefore fails before a
 release can be published.
 
+`runtime/config/demo.json` is the single checked-in production VM profile.
+Assembly and promotion deep-compare the packaged runtime manifest with that
+source: object keys and values must be exact, and arrays (especially QEMU
+arguments) must have the exact reviewed order and length. This pins the 1 GiB,
+two-vCPU, multi-threaded TCG profile with a 128 MiB translation buffer;
+graphical display and input devices; kernel, initramfs, and command line; paged
+rootfs descriptor; diagnostic channels; and disabled network. QEMU's
+last-option-wins parsing means even an otherwise valid duplicate or appended
+`-m`, `-smp`, `-nic`, or `-display` option is rejected as profile drift.
+
+The checked-in profile is always the exact cold-boot fallback. A packaged
+runtime may add one optional schema-1 `checkpoint` block, but only as the exact
+`preboot-resume` contract produced by `runtime/scripts/prepare-runtime-manifest.mjs`.
+No individual checkpoint field or artifact is optional once that block exists.
+Assembly adds these three files from the guest artifact directory, and both
+assembly and promotion require their exact path, role, media type, positive
+length, and lowercase SHA-256:
+
+- `omarchy-preboot.vmstate` as `preboot-vmstate` with
+  `application/vnd.qemu.vmstate`;
+- `checkpoint-overlay.qcow2` as `preboot-disk-delta` with
+  `application/vnd.qemu.qcow2`; and
+- `checkpoint-manifest.json` as `preboot-checkpoint-metadata` with
+  `application/json`.
+
+The producer document is parsed rather than trusted as opaque metadata. It
+must bind the raw QEMU 8.2 migration stream, qcow2 delta, native producer
+binary, exact QEMU source/version and two-vCPU MTTCG machine profile, and an
+immediately auto-running restore that requires no QMP `cont`. The qcow2 backing
+filename must be the relative `rootfs.ext4` with raw backing format. Assembly
+and promotion confirm both values from a bounded parse of the actual qcow2 v3
+header and backing-format extension, and require its virtual size to equal the
+verified rootfs byte length. These checks do not trust descriptor metadata. The
+producer must also contain the authenticated source guest report and its recursively
+key-sorted compact-JSON digest, plus the source report-validation and healthy
+checkpoint-frame evidence digests. Release validation applies the same
+official-Omarchy provenance, Arch/Wayland, live Hyprland/shell, successful
+command, 1600×900 monitor, and upstream-config gates as the browser Worker.
+The normalized checkpoint block additionally pins the exact base
+`guest-manifest.json`, rootfs, guest provenance, and browser `qemu.wasm`
+digests. Those five release records are independently checked by assembly and
+promotion; the two JSON metadata files are capped at the browser's 4 MiB
+verification limit.
+
+Absence of the complete three-file set produces the explicit cold manifest at
+runtime packaging. In release handling, a partial block, a declared-but-missing
+file, an undeclared checkpoint artifact/role, a mismatched producer document,
+or any backing/provenance/QEMU identity drift fails closed. It never silently
+falls back to cold boot.
+
 Copy `release-input.example.json` outside the repository's tracked files,
 replace the example source URL with the immutable deployed corresponding-source
 URL, and run:
@@ -83,7 +133,7 @@ The upload path is fail-closed:
 1. Every manifest path component must be a real directory/file rather than a
    symlink. Every byte length and SHA-256 is checked before any storage request,
    and the verified runtime manifest is bound again to the exact four
-   production bootstrap/storage records above.
+   production bootstrap/storage records and canonical VM profile above.
 2. Four exact gate records are verified with Ed25519 keys from a policy whose
    file digest must match `OMARCHY_APPROVAL_POLICY_SHA256`. The all-zero example
    sentinel is always rejected.
@@ -106,8 +156,9 @@ The upload path is fail-closed:
    conditionally created. Its strict schema binds the release ID to the exact
    approval evidence and approval-policy digests.
 9. Immediately after clearance, every deployed object (including clearance)
-   must pass `HEAD`; the rootfs must also pass `Range: bytes=0-0` with its
-   synthetic strong SHA-256 `If-Match` validator.
+   must pass `HEAD`; the rootfs and, when declared, checkpoint vmstate and
+   qcow2 delta must also pass `Range: bytes=0-0` with their synthetic strong
+   SHA-256 `If-Match` validators.
 
 R2 does not provide a transaction spanning multiple objects, and its S3 API
 does not provide a conditional `CompleteMultipartUpload` operation. The

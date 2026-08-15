@@ -6,9 +6,20 @@ import path from "node:path";
 import test from "node:test";
 
 import { assembleRelease } from "../assemble.mjs";
+import {
+  CANONICAL_CHECKPOINT_IDENTITY,
+  CANONICAL_PRODUCTION_RUNTIME_MANIFEST,
+} from "../runtime-contract.mjs";
 import { verifyArtifactManifest } from "../../scripts/verification/verify-artifact-manifest.mjs";
+import { checkpointSourceEvidence, qcow2Fixture } from "./checkpoint-fixture.mjs";
 
 const BUILDER_DIGEST = `sha256:${"a".repeat(64)}`;
+const FIXTURE_UPSTREAM = Object.freeze({
+  repository: "https://github.com/basecamp/omarchy",
+  commit: "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
+  version: "4.0.0.alpha",
+  treeSha256: "b".repeat(64),
+});
 
 function digest(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -45,31 +56,13 @@ async function fixture() {
     ["bounded-overlay.mjs", "snapshot-overlay-guard", "text/javascript", "bounded-overlay-fixture"],
     ["firmware/bios-256k.bin", "firmware", "application/octet-stream", "bios-fixture"],
     ["firmware/vgabios-virtio.bin", "firmware", "application/octet-stream", "vgabios-fixture"],
+    ["firmware/kvmvapic.bin", "firmware", "application/octet-stream", "kvmvapic-fixture"],
+    ["firmware/linuxboot_dma.bin", "firmware", "application/octet-stream", "linuxboot-fixture"],
   ]) {
     runtimeArtifacts.push({ ...(await put(runtime, name, value)), role, mediaType });
   }
 
-  const runtimeManifest = {
-    schemaVersion: 2,
-    runtimeMode: "worker-paged",
-    assets: {
-      module: "qemu.mjs",
-      hostWorker: "production-worker.mjs",
-      workerInput: "worker-input.mjs",
-      pagedDisk: "paged-disk.mjs",
-      boundedOverlay: "bounded-overlay.mjs",
-      locate: { "qemu-system-x86_64.wasm": "qemu.wasm", "qemu-system-x86_64.worker.js": "qemu.worker.js" },
-      firmware: {
-        "bios-256k.bin": "firmware/bios-256k.bin",
-        "vgabios-virtio.bin": "firmware/vgabios-virtio.bin",
-      },
-    },
-    guest: {
-      rootfs: { artifactPath: "rootfs.ext4", mountPath: "/pack/rootfs.ext4" },
-      kernel: { artifactPath: "vmlinuz-linux", mountPath: "/pack/vmlinuz-linux" },
-      initramfs: { artifactPath: "initramfs-linux.img", mountPath: "/pack/initramfs-linux.img" },
-    },
-  };
+  const runtimeManifest = structuredClone(CANONICAL_PRODUCTION_RUNTIME_MANIFEST);
   const runtimeBuild = {
     schemaVersion: 1,
     generatedAt: "2026-08-14T12:00:00.000Z",
@@ -97,9 +90,7 @@ async function fixture() {
   const guestManifest = {
     schemaVersion: 1,
     upstream: {
-      repository: "https://github.com/basecamp/omarchy",
-      commit: "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
-      version: "4.0.0.alpha",
+      ...FIXTURE_UPSTREAM,
       license: "MIT",
     },
     normalizedUpstreamTree: { sha256: "b".repeat(64) },
@@ -140,7 +131,77 @@ async function fixture() {
       { component: "Linux", spdx: "GPL-2.0-only", noticePath: "THIRD_PARTY_NOTICES.tar.zst", sourceUrl: "https://kernel.org" },
     ],
   };
-  return { root, runtime, outputDirectory, config };
+  return { root, runtime, guest, outputDirectory, config };
+}
+
+function checkpointProfile({ vmstate, bootDelta, producerBytes = null }) {
+  return {
+    schemaVersion: 1,
+    mode: "preboot-resume",
+    vmstate: {
+      artifactPath: "omarchy-preboot.vmstate",
+      mountPath: "/pack/omarchy-preboot.vmstate",
+      bytes: vmstate.byteLength,
+      sha256: digest(vmstate),
+      format: "qemu-8.2-migration",
+      compression: "none",
+      incomingMode: "file",
+    },
+    bootDelta: {
+      artifactPath: "checkpoint-overlay.qcow2",
+      mountPath: "/pack/checkpoint-overlay.qcow2",
+      bytes: bootDelta.byteLength,
+      sha256: digest(bootDelta),
+      format: "qcow2",
+      backingFilename: "rootfs.ext4",
+      backingFormat: "raw",
+    },
+    producer: {
+      manifestArtifactPath: "checkpoint-manifest.json",
+      manifestBytes: producerBytes?.byteLength ?? 1,
+      manifestSha256: producerBytes ? digest(producerBytes) : "3".repeat(64),
+      qemuBinarySha256: "4".repeat(64),
+    },
+    identity: structuredClone(CANONICAL_CHECKPOINT_IDENTITY),
+  };
+}
+
+function checkpointProducerDocument(checkpoint) {
+  return {
+    schemaVersion: 1,
+    kind: "omarchy-web-preboot-checkpoint",
+    vmstate: {
+      path: checkpoint.vmstate.artifactPath,
+      bytes: checkpoint.vmstate.bytes,
+      sha256: checkpoint.vmstate.sha256,
+      format: checkpoint.vmstate.format,
+      compression: checkpoint.vmstate.compression,
+      incomingMode: checkpoint.vmstate.incomingMode,
+    },
+    bootDelta: {
+      path: checkpoint.bootDelta.artifactPath,
+      bytes: checkpoint.bootDelta.bytes,
+      sha256: checkpoint.bootDelta.sha256,
+      format: checkpoint.bootDelta.format,
+      backingFilename: checkpoint.bootDelta.backingFilename,
+      backingFormat: checkpoint.bootDelta.backingFormat,
+    },
+    producer: { qemuBinarySha256: checkpoint.producer.qemuBinarySha256 },
+    identity: {
+      baseGuestManifestSha256: checkpoint.identity.baseGuestManifestSha256,
+      rootfsSha256: checkpoint.identity.rootfsSha256,
+      guestProvenanceSha256: checkpoint.identity.guestProvenanceSha256,
+    },
+    qemu: { ...checkpoint.identity.qemu },
+    machine: { ...checkpoint.identity.machine },
+    restoreContract: {
+      sourceRunstate: "running",
+      immediateIncomingAutoRuns: true,
+      qmpContRequired: false,
+      disposableWrites: "target -snapshot layer over immutable boot delta",
+    },
+    sourceEvidence: checkpointSourceEvidence(FIXTURE_UPSTREAM),
+  };
 }
 
 test("assembles verified fragments into a validator-clean atomic release", async () => {
@@ -192,7 +253,114 @@ test("refuses legacy preload runtimes and missing paged guest artifacts", async 
   delete manifest.assets.preload;
   manifest.guest.rootfs.artifactPath = "missing-rootfs.ext4";
   await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
-  await assert.rejects(assembleRelease(config), /unpackaged guest artifact: missing-rootfs\.ext4/);
+  await assert.rejects(
+    assembleRelease(config),
+    /guest\.rootfs\.artifactPath must exactly match the canonical production runtime profile/,
+  );
+});
+
+test("rejects QEMU last-one-wins overrides and every production profile drift", async (t) => {
+  const hostileProfiles = [
+    ["-m 4096 override", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-m") + 1] = "4096";
+    }],
+    ["-smp 8 override", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1] = "8";
+    }],
+    ["-nic user override", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-nic") + 1] = "user";
+    }],
+    ["-display none override", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-display") + 1] = "none";
+    }],
+    ["appended duplicate option", (manifest) => {
+      manifest.qemu.arguments.push("-m", "4096");
+    }],
+    ["memory metadata override", (manifest) => {
+      manifest.qemu.memoryMiB = 4096;
+    }],
+    ["extra QEMU key", (manifest) => {
+      manifest.qemu.unreviewedArguments = ["-nic", "user"];
+    }],
+    ["kernel command-line drift", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-append") + 1] += " init=/bin/sh";
+    }],
+    ["storage descriptor drift", (manifest) => {
+      manifest.guest.rootfs.mountPath = "/pack/attacker.ext4";
+    }],
+    ["diagnostic channel drift", (manifest) => {
+      const index = manifest.qemu.arguments.indexOf(
+        "virtserialport,chardev=omarchy-diag,name=omarchy.web.diagnostics",
+      );
+      manifest.qemu.arguments[index] = "virtserialport,chardev=omarchy-diag,name=attacker.channel";
+    }],
+  ];
+
+  for (const [name, mutate] of hostileProfiles) {
+    await t.test(name, async () => {
+      const { runtime, outputDirectory, config } = await fixture();
+      const manifestPath = path.join(runtime, "runtime-manifest.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      mutate(manifest);
+      await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+      await assert.rejects(
+        assembleRelease(config),
+        /canonical production runtime profile|canonical entries|canonical keys/,
+      );
+      await assert.rejects(stat(outputDirectory), { code: "ENOENT" });
+    });
+  }
+});
+
+test("assembly fails closed on partial checkpoint declarations and source sets", async (t) => {
+  await t.test("partial runtime block", async () => {
+    const { runtime, config } = await fixture();
+    const manifestPath = path.join(runtime, "runtime-manifest.json");
+    const manifest = structuredClone(CANONICAL_PRODUCTION_RUNTIME_MANIFEST);
+    manifest.checkpoint = { schemaVersion: 1, mode: "preboot-resume" };
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /runtime manifest checkpoint must contain exactly the canonical keys/,
+    );
+  });
+
+  await t.test("declared artifacts absent", async () => {
+    const { runtime, config } = await fixture();
+    const manifestPath = path.join(runtime, "runtime-manifest.json");
+    const manifest = structuredClone(CANONICAL_PRODUCTION_RUNTIME_MANIFEST);
+    manifest.checkpoint = checkpointProfile({
+      vmstate: Buffer.from("vmstate"),
+      bootDelta: Buffer.from("qcow2"),
+    });
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await assert.rejects(assembleRelease(config), /ENOENT|checkpoint-manifest\.json/);
+  });
+
+  await t.test("canonical guest/rootfs identity mismatch", async () => {
+    const { runtime, guest, config } = await fixture();
+    const vmstate = Buffer.from("vmstate-fixture");
+    const bootDelta = qcow2Fixture({ virtualBytes: Buffer.byteLength("rootfs-fixture") });
+    const checkpoint = checkpointProfile({ vmstate, bootDelta });
+    const producerBytes = Buffer.from(
+      `${JSON.stringify(checkpointProducerDocument(checkpoint))}\n`,
+    );
+    checkpoint.producer.manifestBytes = producerBytes.byteLength;
+    checkpoint.producer.manifestSha256 = digest(producerBytes);
+    await Promise.all([
+      writeFile(path.join(guest, "omarchy-preboot.vmstate"), vmstate),
+      writeFile(path.join(guest, "checkpoint-overlay.qcow2"), bootDelta),
+      writeFile(path.join(guest, "checkpoint-manifest.json"), producerBytes),
+      writeFile(
+        path.join(runtime, "runtime-manifest.json"),
+        `${JSON.stringify({ ...structuredClone(CANONICAL_PRODUCTION_RUNTIME_MANIFEST), checkpoint })}\n`,
+      ),
+    ]);
+    await assert.rejects(
+      assembleRelease(config),
+      /checkpoint base guest manifest rootfs SHA-256 does not match checkpoint identity/,
+    );
+  });
 });
 
 test("requires one exact bounded-overlay runtime artifact", async (t) => {
