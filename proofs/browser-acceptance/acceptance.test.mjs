@@ -79,7 +79,8 @@ function hibernationResumeMessage(overrides = {}) {
       kernelEvidence: [
         "PM: Image signature found, resuming",
         "PM: Image loading done",
-        "Hibernation image restored successfully",
+        "PM: Image successfully loaded",
+        "PM: hibernation: hibernation exit",
       ],
       runtimeDisplay: "sdl,gl=es,show-cursor=on",
       derivedInitramfsSha256: "8".repeat(64),
@@ -371,7 +372,8 @@ test("hibernation acceptance requires ordered authenticated resume before a fres
     ["kernel order", { kernelEvidence: [
       "PM: Image loading done",
       "PM: Image signature found, resuming",
-      "Hibernation image restored successfully",
+      "PM: Image successfully loaded",
+      "PM: hibernation: hibernation exit",
     ] }],
   ]) {
     let hostile = begin();

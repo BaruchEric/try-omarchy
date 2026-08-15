@@ -94,7 +94,8 @@ export const HIBERNATION_RESUME_NONCE = "ab".repeat(32);
 export const HIBERNATION_KERNEL_EVIDENCE = Object.freeze([
   "PM: Image signature found, resuming",
   "PM: Image loading done",
-  "Hibernation image restored successfully",
+  "PM: Image successfully loaded",
+  "PM: hibernation: hibernation exit",
 ]);
 
 export function normalizedJsonSha256(value) {

@@ -195,7 +195,8 @@ assert.doesNotMatch(targetLog, /^OMARCHY_HIBERNATION_COLD_BOOT /m);
 const requiredKernelEvidence = [
   "PM: Image signature found, resuming",
   "PM: Image loading done",
-  "PM: hibernation: Hibernation image restored successfully.",
+  "PM: Image successfully loaded",
+  "PM: hibernation: hibernation exit",
 ];
 let previous = -1;
 for (const line of requiredKernelEvidence) {

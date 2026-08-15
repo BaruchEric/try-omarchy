@@ -32,7 +32,8 @@ const HIBERNATION_RESUME_BINDING_KEYS = Object.freeze([
 const HIBERNATION_KERNEL_EVIDENCE = Object.freeze([
   "PM: Image signature found, resuming",
   "PM: Image loading done",
-  "Hibernation image restored successfully",
+  "PM: Image successfully loaded",
+  "PM: hibernation: hibernation exit",
 ]);
 
 function fail(message) {

@@ -264,6 +264,7 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
     "536870912 >/sys/power/image_size",
     "shutdown >/sys/power/disk",
     "disk >/sys/power/state",
+    "missing-hibernation-exit-proof",
     "OMARCHY_HIBERNATION_ENTER",
     "OMARCHY_HIBERNATION_FAILURE",
     "OMARCHY_HIBERNATION_COLD_BOOT",
@@ -274,6 +275,16 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
       late.indexOf('>/sys/power/resume') < late.indexOf('swapon "$swap_device"') &&
       late.indexOf('swapon "$swap_device"') < late.indexOf(">/sys/power/state"),
     "the producer must bind the persistent swap device before entering swsusp",
+  );
+  assert.doesNotMatch(
+    late,
+    /missing-image-load-proof|missing-restore-proof|Hibernation image restored successfully/,
+    "restored userspace cannot authenticate pre-restore target messages from its replaced dmesg buffer",
+  );
+  assert.ok(
+    late.indexOf(">/sys/power/state") < late.indexOf("missing-hibernation-exit-proof") &&
+      late.indexOf("missing-hibernation-exit-proof") < late.indexOf("modprobe virtio_gpu"),
+    "the restored branch must prove hibernation exit before binding the GPU",
   );
   assert.doesNotMatch(late, /systemctl\s+hibernate|hibernate\.target\s+(unmask|start)/);
   for (const variable of ["LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER", "WLR_RENDERER_ALLOW_SOFTWARE"]) {
@@ -335,12 +346,12 @@ test("fresh target cannot launch without an armed persistent swsusp header", asy
     "bs=4096",
     "count=1",
     "tail -c 10",
-    "swap_header_signature == S1SUSPEND",
+    "swap_header_signature == 533153555350454e4400",
   ]) assert.ok(runner.includes(token), `persistent swap header gate is missing ${token}`);
 
   const sourceImageDone = runner.indexOf("source kernel did not finish saving the image");
   const headerExtract = runner.indexOf('"$qemu_img" dd');
-  const signatureGate = runner.indexOf("swap_header_signature == S1SUSPEND");
+  const signatureGate = runner.indexOf("swap_header_signature == 533153555350454e4400");
   const targetDefinition = runner.indexOf("target_args=(");
   assert.ok(sourceImageDone >= 0 && headerExtract >= 0 && signatureGate >= 0 && targetDefinition >= 0);
   assert.ok(

@@ -102,12 +102,13 @@ emit "OMARCHY_HIBERNATION_ENTER {\"schemaVersion\":1,\"nonce\":\"$nonce\",\"sour
 # after a fresh kernel/initramfs restores the image.
 printf '%s\n' disk >/sys/power/state
 
+# A successful return is itself the restored execution boundary.  The fresh
+# target kernel's pre-restore log buffer is replaced by the saved source RAM,
+# so those early resume lines are authenticated externally on the serial
+# stream rather than (incorrectly) expected in this restored dmesg buffer.
 dmesg >"$state_dir/post-resume-dmesg.log"
-grep -Fq 'PM: Image loading done' "$state_dir/post-resume-dmesg.log" \
-  || fail_closed missing-image-load-proof
-grep -Fq 'PM: hibernation: Hibernation image restored successfully.' \
-  "$state_dir/post-resume-dmesg.log" \
-  || fail_closed missing-restore-proof
+grep -Fq 'PM: hibernation: hibernation exit' "$state_dir/post-resume-dmesg.log" \
+  || fail_closed missing-hibernation-exit-proof
 [[ ! -d /sys/module/virtio_gpu ]] || fail_closed gpu-restored-from-image
 [[ $(</proc/sys/kernel/random/boot_id) == "$source_boot_id" ]] || fail_closed boot-id-mismatch
 

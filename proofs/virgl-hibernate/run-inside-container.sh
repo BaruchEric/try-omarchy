@@ -315,9 +315,9 @@ swap_header_page="$evidence_dir/.omarchy-hibernate-page0.bin"
   || fail "could not extract the persistent swap header"
 [[ $(stat -c %s "$swap_header_page") -eq 4096 ]] \
   || fail "persistent swap header extraction was not exactly one guest page"
-swap_header_signature=$(tail -c 10 "$swap_header_page")
+swap_header_signature=$(tail -c 10 "$swap_header_page" | od -An -tx1 | tr -d '[:space:]')
 rm -f "$swap_header_page"
-[[ $swap_header_signature == S1SUSPEND ]] \
+[[ $swap_header_signature == 533153555350454e4400 ]] \
   || fail "persistent swap does not contain an armed S1SUSPEND image"
 "$qemu_img" info --output=json "$evidence_dir/hibernate-root-overlay.qcow2" \
   >"$evidence_dir/hibernate-root-overlay-info.json"
@@ -375,8 +375,10 @@ grep -Fq 'PM: Image signature found, resuming' "$evidence_dir/target-diagnostics
   || fail "target kernel did not find the hibernation signature"
 grep -Fq 'PM: Image loading done' "$evidence_dir/target-diagnostics.log" \
   || fail "target kernel did not finish loading the image"
-grep -Fq 'PM: hibernation: Hibernation image restored successfully.' "$evidence_dir/target-diagnostics.log" \
+grep -Fq 'PM: Image successfully loaded' "$evidence_dir/target-diagnostics.log" \
   || fail "target kernel did not authenticate a successful restore"
+grep -Fq 'PM: hibernation: hibernation exit' "$evidence_dir/target-diagnostics.log" \
+  || fail "restored kernel did not exit hibernation"
 [[ $(grep -c '^OMARCHY_HIBERNATION_REPORT ' "$evidence_dir/target-diagnostics.log") -eq 1 ]] \
   || fail "target did not emit exactly one resumed marker"
 ! grep -q '^OMARCHY_HIBERNATION_FAILURE ' "$evidence_dir/target-diagnostics.log" \
@@ -520,7 +522,8 @@ if (!/virgl/i.test(rendererReport.renderer) || hibernationReport.renderer !== "v
 const requiredKernelEvidence = [
   "PM: Image signature found, resuming",
   "PM: Image loading done",
-  "PM: hibernation: Hibernation image restored successfully.",
+  "PM: Image successfully loaded",
+  "PM: hibernation: hibernation exit",
 ];
 let previousKernelIndex = -1;
 for (const line of requiredKernelEvidence) {

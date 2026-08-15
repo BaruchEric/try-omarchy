@@ -338,7 +338,8 @@ test("hibernation resume gate accepts only ordered kernel proof plus the nonce-b
   gate.begin();
   assert.equal(gate.handleSerialLine("PM: Image signature found, resuming"), true);
   assert.equal(gate.handleSerialLine("PM: Image loading done"), true);
-  assert.equal(gate.handleSerialLine("Hibernation image restored successfully"), true);
+  assert.equal(gate.handleSerialLine("PM: Image successfully loaded"), true);
+  assert.equal(gate.handleSerialLine("PM: hibernation: hibernation exit"), true);
   assert.equal(gate.handleSerialLine(`OMARCHY_RENDERER_REPORT ${JSON.stringify(rendererReport)}`), true);
   assert.equal(gate.handleSerialLine(`OMARCHY_HIBERNATION_REPORT ${JSON.stringify(marker)}`), true);
   const evidence = await gate.wait();
@@ -346,7 +347,8 @@ test("hibernation resume gate accepts only ordered kernel proof plus the nonce-b
   assert.deepEqual(evidence.kernelEvidence, [
     "PM: Image signature found, resuming",
     "PM: Image loading done",
-    "Hibernation image restored successfully",
+    "PM: Image successfully loaded",
+    "PM: hibernation: hibernation exit",
   ]);
   assert.equal(Object.hasOwn(evidence, "rendererReport"), false);
   assert.equal(
@@ -492,7 +494,8 @@ test("hibernation resume gate never exposes nonce-bearing serial input in failur
   await assertSanitizedFailure((gate) => {
     gate.handleSerialLine("PM: Image signature found, resuming");
     gate.handleSerialLine("PM: Image loading done");
-    gate.handleSerialLine("Hibernation image restored successfully");
+    gate.handleSerialLine("PM: Image successfully loaded");
+    gate.handleSerialLine("PM: hibernation: hibernation exit");
     gate.handleSerialLine(rendererLine);
     gate.handleSerialLine(`OMARCHY_HIBERNATION_REPORT {"nonce":"${NONCE}",`);
   });

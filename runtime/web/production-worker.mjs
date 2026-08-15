@@ -72,7 +72,8 @@ export const HIBERNATION_SWAP_VIRTUAL_BYTES = 1_610_612_736;
 const HIBERNATION_KERNEL_EVIDENCE = Object.freeze([
   "PM: Image signature found, resuming",
   "PM: Image loading done",
-  "Hibernation image restored successfully",
+  "PM: Image successfully loaded",
+  "PM: hibernation: hibernation exit",
 ]);
 const HIBERNATION_KERNEL_FAILURE = /(?:hibernation|PM:).*(?:image (?:not found|mismatch|loading failed)|resume failed|error)/i;
 
