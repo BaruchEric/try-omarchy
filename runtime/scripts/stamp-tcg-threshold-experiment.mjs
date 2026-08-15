@@ -11,7 +11,7 @@ const EXPERIMENTS = Object.freeze({
   "250": Object.freeze({ threshold: 250, metricsSchemaVersion: 1 }),
   "750": Object.freeze({ threshold: 750, metricsSchemaVersion: 2 }),
   "1500-metrics": Object.freeze({ threshold: 1500, metricsSchemaVersion: 2 }),
-  "1500-clock": Object.freeze({ threshold: 1500, metricsSchemaVersion: 3 }),
+  "1500-clock": Object.freeze({ threshold: 1500, metricsSchemaVersion: 4 }),
 });
 
 function experimentProfile(value) {

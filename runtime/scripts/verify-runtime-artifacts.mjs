@@ -30,13 +30,16 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
   "1500-clock": Object.freeze({
     kind: "qemu-wasm-tcg-bounded-clock",
     instantiateThreshold: 1500,
-    metricsSchemaVersion: 3,
+    metricsSchemaVersion: 4,
     cachePolicy: Object.freeze({
-      kind: "bounded-clock-v1",
+      kind: "bounded-clock-v2",
       activeCap: 15000,
       replacementCredit: 256,
       retainedCap: 15256,
       gcPressureBytes: 4 * 1024 * 1024,
+      gcPressureInterval: 64,
+      gcPressureRetryMilliseconds: 1000,
+      gcPressureHold: "next-task",
     }),
   }),
 });
@@ -44,8 +47,9 @@ const TCG_EXPERIMENT_MARKER_PREFIX =
   "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=";
 const TCG_METRICS_MARKER = "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics ";
 const TCG_BOUNDED_CLOCK_MARKER =
-  "cache=bounded-clock-v1 active-cap=%d replacement-credit=%d " +
-  "retained-cap=%d gc-pressure-bytes=%d core=%d";
+  "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 " +
+  "retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 " +
+  "gc-pressure-retry-ms=1000 gc-pressure-hold=next-task";
 const VIRGL_GRAPHICS_EXPERIMENT = "virgl-webgl2";
 const WEBGL2_PRESENT_EXPERIMENT = "webgl2-present";
 const HIBERNATION_MODE = "guest-hibernation-resume";
@@ -411,6 +415,11 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
     nestedTcgModuleLayoutGuard:
       moduleSource.includes("OMARCHY_TCG_MODULE_LAYOUT_INVALID") &&
       moduleSource.includes("OMARCHY_TCG_MODULE_MAGIC_INVALID"),
+    ...(tcgExperiment?.cachePolicy !== undefined ? {
+      tcgGcPressureNextTask:
+        moduleSource.includes("gc_pressure=pressure;setTimeout(") &&
+        !moduleSource.includes("gc_pressure=pressure;queueMicrotask("),
+    } : {}),
   };
   if (manifest.schemaVersion === 2) {
     const productionWorker = await readFile(join(outputDirectory, manifest.assets.hostWorker), "utf8");

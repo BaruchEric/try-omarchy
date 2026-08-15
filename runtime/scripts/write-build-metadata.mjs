@@ -36,14 +36,16 @@ const tcgExperimentProfiles = Object.freeze({
   "1500-clock": Object.freeze({
     kind: "qemu-wasm-tcg-bounded-clock",
     instantiateThreshold: 1500,
-    metricsSchemaVersion: 3,
+    metricsSchemaVersion: 4,
     cachePolicy: Object.freeze({
-      kind: "bounded-clock-v1",
+      kind: "bounded-clock-v2",
       activeCap: 15000,
       replacementCredit: 256,
       retainedCap: 15256,
       gcPressureBytes: 4 * 1024 * 1024,
       gcPressureInterval: 64,
+      gcPressureRetryMilliseconds: 1000,
+      gcPressureHold: "next-task",
     }),
     patches: [
       "patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch",
@@ -138,6 +140,10 @@ if (tcgExperimentProfile !== null) {
               replacementCredit: tcgExperimentProfile.cachePolicy.replacementCredit,
               retainedCap: tcgExperimentProfile.cachePolicy.retainedCap,
               gcPressureBytes: tcgExperimentProfile.cachePolicy.gcPressureBytes,
+              gcPressureInterval: tcgExperimentProfile.cachePolicy.gcPressureInterval,
+              gcPressureRetryMilliseconds:
+                tcgExperimentProfile.cachePolicy.gcPressureRetryMilliseconds,
+              gcPressureHold: tcgExperimentProfile.cachePolicy.gcPressureHold,
             }))) ||
       verification?.wasm?.tcgExperimentArtifactSha256 !== wasmArtifact?.sha256) {
     throw new Error("TCG experiment build metadata is not backed by verified QEMU Wasm bytes");
@@ -204,7 +210,7 @@ const tcgExperimentMetadata = tcgExperimentProfile === null ? null : {
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=${tcgExperimentProfile.instantiateThreshold} metrics-schema=${tcgExperimentProfile.metricsSchemaVersion}`,
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics schema=${tcgExperimentProfile.metricsSchemaVersion} threshold=${tcgExperimentProfile.instantiateThreshold}`,
     ...(tcgExperimentProfile.cachePolicy !== undefined
-      ? ["cache=bounded-clock-v1 active-cap=%d replacement-credit=%d retained-cap=%d gc-pressure-bytes=%d core=%d"]
+      ? ["cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task"]
       : []),
   ],
 };

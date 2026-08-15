@@ -8,17 +8,20 @@ import { pathToFileURL } from "node:url";
 
 const EXPECTED_QEMU_COMMIT = "0ef7b4e2814b231705d8371dd7997f5b72e70baf";
 const CLOCK_POLICY = Object.freeze({
-  kind: "bounded-clock-v1",
+  kind: "bounded-clock-v2",
   activeCap: 15000,
   replacementCredit: 256,
   retainedCap: 15256,
   gcPressureBytes: 4 * 1024 * 1024,
+  gcPressureInterval: 64,
+  gcPressureRetryMilliseconds: 1000,
+  gcPressureHold: "next-task",
 });
 const REQUIRED_WASM_MARKERS = Object.freeze([
   "virtio-vga-gl",
   "virgl",
-  "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=1500 metrics-schema=3",
-  "cache=bounded-clock-v1 active-cap=%d replacement-credit=%d retained-cap=%d gc-pressure-bytes=%d core=%d",
+  "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=1500 metrics-schema=4",
+  "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task",
 ]);
 
 function invariant(condition, message) {
@@ -73,14 +76,15 @@ export async function validateBrowserCandidate(wasmPath) {
   assert.deepEqual(verifiedClock, {
     kind: "qemu-wasm-tcg-bounded-clock",
     instantiateThreshold: 1500,
-    metricsSchemaVersion: 3,
+    metricsSchemaVersion: 4,
     cachePolicy: CLOCK_POLICY,
   }, "candidate verification does not prove the exact bounded CLOCK policy");
   invariant(verification.wasm.tcgExperimentArtifactSha256 === wasmSha256,
     "candidate bounded CLOCK verification is bound to different Wasm bytes");
   invariant(verification.javascript?.webgl2Loader === true &&
     verification.javascript?.graphicsExperimentWorkerIdentity === true &&
-    verification.javascript?.tcgExperimentWorkerIdentity === true,
+    verification.javascript?.tcgExperimentWorkerIdentity === true &&
+    verification.javascript?.tcgGcPressureNextTask === true,
   "candidate JavaScript verification lacks VirGL/bounded-CLOCK worker identity");
 
   invariant(build.schemaVersion === 1 && build.component?.name === "QEMU-Wasm" &&
@@ -94,9 +98,9 @@ export async function validateBrowserCandidate(wasmPath) {
   invariant(buildGraphics.promotionEligible === false && buildGraphics.browserApi === "WebGL2" &&
     buildGraphics.renderer?.version === "0.10.4",
   "candidate build metadata does not describe non-promotable VirGL/WebGL2");
-  assert.deepEqual(buildClock.cachePolicy, { ...CLOCK_POLICY, gcPressureInterval: 64 },
+  assert.deepEqual(buildClock.cachePolicy, CLOCK_POLICY,
     "candidate build metadata has the wrong bounded CLOCK limits");
-  invariant(buildClock.instantiateThreshold === 1500 && buildClock.metricsSchemaVersion === 3 &&
+  invariant(buildClock.instantiateThreshold === 1500 && buildClock.metricsSchemaVersion === 4 &&
     buildClock.promotionEligible === false,
   "candidate build metadata has the wrong bounded CLOCK profile");
   for (const patch of [

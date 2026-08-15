@@ -621,7 +621,7 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   }
   if (experimentValue === "1500-clock") {
     process.stdout.write(
-      "runtime experiment: qemu-wasm-tcg-bounded-clock threshold=1500 promotion-eligible=false\n",
+      "runtime experiment: qemu-wasm-tcg-bounded-clock threshold=1500 metrics-schema=4 cache=bounded-clock-v2 promotion-eligible=false\n",
     );
   }
   if (graphicsExperiment === "virgl-webgl2") {

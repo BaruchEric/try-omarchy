@@ -37,22 +37,38 @@ function markerWasm(markers) {
   ]);
 }
 
-async function writeCandidateFixture(directory, { markers = true, graphics = true, clock = true } = {}) {
+async function writeCandidateFixture(
+  directory,
+  { markers = true, graphics = true, clock = true, clockVersion = 2 } = {},
+) {
   await mkdir(directory, { recursive: true });
-  const wasm = markerWasm(markers ? [
-    "virtio-vga-gl",
-    "virgl",
-    "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=1500 metrics-schema=3",
-    "cache=bounded-clock-v1 active-cap=%d replacement-credit=%d retained-cap=%d gc-pressure-bytes=%d core=%d",
-  ] : ["arbitrary-software-wasm"]);
-  const wasmSha256 = createHash("sha256").update(wasm).digest("hex");
-  const cachePolicy = {
+  const metricsSchemaVersion = clockVersion === 2 ? 4 : 3;
+  const cachePolicy = clockVersion === 2 ? {
+    kind: "bounded-clock-v2",
+    activeCap: 15000,
+    replacementCredit: 256,
+    retainedCap: 15256,
+    gcPressureBytes: 4 * 1024 * 1024,
+    gcPressureInterval: 64,
+    gcPressureRetryMilliseconds: 1000,
+    gcPressureHold: "next-task",
+  } : {
     kind: "bounded-clock-v1",
     activeCap: 15000,
     replacementCredit: 256,
     retainedCap: 15256,
     gcPressureBytes: 4 * 1024 * 1024,
+    gcPressureInterval: 64,
   };
+  const wasm = markerWasm(markers ? [
+    "virtio-vga-gl",
+    "virgl",
+    `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=1500 metrics-schema=${metricsSchemaVersion}`,
+    clockVersion === 2
+      ? "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task"
+      : "cache=bounded-clock-v1 active-cap=%d replacement-credit=%d retained-cap=%d gc-pressure-bytes=%d core=%d",
+  ] : ["arbitrary-software-wasm"]);
+  const wasmSha256 = createHash("sha256").update(wasm).digest("hex");
   const verification = {
     schemaVersion: 1,
     wasm: {
@@ -68,7 +84,7 @@ async function writeCandidateFixture(directory, { markers = true, graphics = tru
         tcgExperiment: {
           kind: "qemu-wasm-tcg-bounded-clock",
           instantiateThreshold: 1500,
-          metricsSchemaVersion: 3,
+          metricsSchemaVersion,
           cachePolicy,
         },
         tcgExperimentArtifactSha256: wasmSha256,
@@ -78,6 +94,7 @@ async function writeCandidateFixture(directory, { markers = true, graphics = tru
       webgl2Loader: true,
       graphicsExperimentWorkerIdentity: true,
       tcgExperimentWorkerIdentity: true,
+      tcgGcPressureNextTask: true,
     },
   };
   const experiments = [
@@ -90,9 +107,9 @@ async function writeCandidateFixture(directory, { markers = true, graphics = tru
     ...(clock ? [{
       kind: "qemu-wasm-tcg-bounded-clock",
       instantiateThreshold: 1500,
-      metricsSchemaVersion: 3,
+      metricsSchemaVersion,
       promotionEligible: false,
-      cachePolicy: { ...cachePolicy, gcPressureInterval: 64 },
+      cachePolicy,
     }] : []),
   ];
   const build = {
@@ -176,6 +193,8 @@ test("browser candidate gate accepts only hash-bound VirGL plus bounded CLOCK", 
   await assert.rejects(validateBrowserCandidate(software), /VirGL|graphics/i);
   const unbounded = await writeCandidateFixture(path.join(root, "unbounded"), { clock: false });
   await assert.rejects(validateBrowserCandidate(unbounded), /bounded CLOCK|tcg/i);
+  const legacy = await writeCandidateFixture(path.join(root, "legacy"), { clockVersion: 1 });
+  await assert.rejects(validateBrowserCandidate(legacy), /missing marker|bounded CLOCK|profile/i);
 });
 
 test("the source-only proof stays bounded and generated artifacts are ignored", async () => {

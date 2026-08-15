@@ -95,7 +95,7 @@ bind. The proof intentionally rejects `runtime/dist/qemu.wasm`, plain VirGL,
 the 750-threshold/4-vCPU experiment, and arbitrary Wasm. The selected directory
 must include hash-consistent `runtime-verification.json`, `runtime-build.json`,
 and `runtime-manifest.json` proving the exact non-promotable VirGL/WebGL2 plus
-bounded-CLOCK-v1 profile and the two-vCPU hibernation topology.
+bounded-CLOCK-v2/schema-4 profile and the two-vCPU hibernation topology.
 
 ```sh
 make -C runtime build-virgl-webgl2-tcg-bounded-clock

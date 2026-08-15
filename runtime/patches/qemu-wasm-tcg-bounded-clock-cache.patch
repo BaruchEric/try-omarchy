@@ -27,11 +27,11 @@
 +            pressure[offset] = (offset >>> 12) & 0xff;
 +        }
 +        state.gc_pressure = pressure;
-+        queueMicrotask(() => {
++        setTimeout(() => {
 +            if (state.gc_pressure === pressure) {
 +                state.gc_pressure = null;
 +            }
-+        });
++        }, 0);
 +    });
 +
  int instance_alive_global = 0;
@@ -41,7 +41,7 @@
  __thread int instance_alive_local = 0;
  __thread int instance_running_local = 0;
  __thread uint32_t instance_garbage_collected_local = 0;
-@@ -114,15 +136,21 @@
+@@ -114,15 +136,35 @@
  struct instance_info {
      uint8_t *tb;
      int fidx;
@@ -57,18 +57,32 @@
 +#define INSTANCE_RUNNING_LEN MAX_INSTANCE_ACTIVE
 +#define CLOCK_GC_PRESSURE_INTERVAL 64
 +#define CLOCK_GC_PRESSURE_BYTES (4 * 1024 * 1024)
++#define CLOCK_GC_PRESSURE_RETRY_MS 1000
++#define OMARCHY_WASM_TCG_CLOCK_POLICY_MARKER \
++    "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 " \
++    "retained-cap=15256 gc-pressure-bytes=4194304 " \
++    "gc-pressure-interval=64 gc-pressure-retry-ms=1000 " \
++    "gc-pressure-hold=next-task"
++_Static_assert(MAX_INSTANCE_ACTIVE == 15000, "bounded CLOCK active cap drifted");
++_Static_assert(MAX_INSTANCE_REPLACEMENT_CREDIT == 256,
++               "bounded CLOCK replacement credit drifted");
++_Static_assert(MAX_INSTANCE_RETAINED == 15256, "bounded CLOCK retained cap drifted");
++_Static_assert(CLOCK_GC_PRESSURE_BYTES == 4194304, "bounded CLOCK pressure size drifted");
++_Static_assert(CLOCK_GC_PRESSURE_INTERVAL == 64, "bounded CLOCK pressure interval drifted");
++_Static_assert(CLOCK_GC_PRESSURE_RETRY_MS == 1000, "bounded CLOCK pressure retry drifted");
  __thread struct instance_info instance_running[INSTANCE_RUNNING_LEN];
 -__thread int instance_running_begin = 0;
 -__thread int instance_running_end = 0;
 +__thread int instance_clock_hand = 0;
 +__thread int instance_insert_hand = 0;
++__thread double instance_gc_pressure_retry_after_ms = 0.0;
  
 -#define TO_REMOVE_INSTANCE_SIZE 50000
 +#define TO_REMOVE_INSTANCE_SIZE 1
  __thread static int to_remove_instance[TO_REMOVE_INSTANCE_SIZE];
  __thread static int to_remove_instance_idx = 0;
  
-@@ -139,6 +167,14 @@
+@@ -139,6 +181,15 @@
      uint64_t modules;
      uint64_t evictions;
      uint64_t gc_collected;
@@ -78,12 +92,13 @@
 +    uint64_t clock_scans;
 +    uint64_t clock_second_chances;
 +    uint64_t gc_pressure_requests;
++    uint64_t gc_pressure_saturation_retries;
 +    uint64_t gc_pressure_bytes;
 +    uint64_t table_slots_cleared;
      uint64_t fallback_tci;
      uint64_t source_bytes;
      uint64_t source_bytes_max;
-@@ -147,6 +183,8 @@
+@@ -147,6 +198,8 @@
      uint64_t compile_us_histogram[10];
      uint32_t live_local_peak;
      uint32_t live_global_peak;
@@ -92,7 +107,7 @@
      uint32_t wasm_table_length;
      uint32_t wasm_table_length_peak;
  };
-@@ -168,8 +206,17 @@
+@@ -168,8 +221,18 @@
              "cross-500=%" PRIu64 " cross-750=%" PRIu64 " cross-1000=%" PRIu64 " cross-1500=%" PRIu64 " "
              "modules=%" PRIu64 " live-local=%d running-local=%d "
              "pending-gc-local=%d live-global=%d "
@@ -105,12 +120,13 @@
 +            "retained-capacity-denials=%" PRIu64 " "
 +            "clock-scans=%" PRIu64 " clock-second-chances=%" PRIu64 " "
 +            "gc-pressure-requests=%" PRIu64 " "
++            "gc-pressure-saturation-retries=%" PRIu64 " "
 +            "gc-pressure-bytes=%" PRIu64 " "
 +            "table-slots-cleared=%" PRIu64 " "
              "fallback-tci=%" PRIu64 " source-bytes=%" PRIu64 " "
              "source-bytes-max=%" PRIu64 " compile-us-total=%" PRIu64 " "
              "compile-us-max=%" PRIu64 " compile-us-lt250=%" PRIu64 " "
-@@ -187,8 +234,16 @@
+@@ -187,8 +250,17 @@
              m->modules, instance_alive_local, instance_running_local,
              instance_alive_local - instance_running_local,
              qatomic_read(&instance_alive_global),
@@ -123,12 +139,13 @@
 +            m->replacement_reservations,
 +            m->active_capacity_denials, m->retained_capacity_denials,
 +            m->clock_scans, m->clock_second_chances,
-+            m->gc_pressure_requests, m->gc_pressure_bytes,
++            m->gc_pressure_requests, m->gc_pressure_saturation_retries,
++            m->gc_pressure_bytes,
 +            m->table_slots_cleared, m->fallback_tci,
              m->source_bytes, m->source_bytes_max,
              m->compile_us_total, m->compile_us_max,
              m->compile_us_histogram[0], m->compile_us_histogram[1],
-@@ -234,11 +289,75 @@
+@@ -234,11 +306,93 @@
      omarchy_wasm_tcg_metrics_tick();
  }
  
@@ -137,6 +154,24 @@
 +    OMARCHY_WASM_TCG_ACTIVE_CAPACITY_BLOCKED,
 +    OMARCHY_WASM_TCG_RETAINED_CAPACITY_BLOCKED,
 +};
++
++static bool omarchy_wasm_tcg_request_gc_pressure(bool saturation_retry)
++{
++    double now = emscripten_get_now();
++
++    if (now < instance_gc_pressure_retry_after_ms) {
++        return false;
++    }
++    instance_gc_pressure_retry_after_ms =
++        now + CLOCK_GC_PRESSURE_RETRY_MS;
++    request_module_gc_pressure_js(CLOCK_GC_PRESSURE_BYTES);
++    omarchy_wasm_tcg_metrics.gc_pressure_requests++;
++    omarchy_wasm_tcg_metrics.gc_pressure_saturation_retries +=
++        saturation_retry;
++    omarchy_wasm_tcg_metrics.gc_pressure_bytes +=
++        CLOCK_GC_PRESSURE_BYTES;
++    return true;
++}
 +
 +static enum omarchy_wasm_tcg_capacity_block instance_capacity_block(void)
 +{
@@ -205,7 +240,7 @@
  static void inc_instance_local()
  {
      instance_running_local++;
-@@ -260,40 +379,110 @@
+@@ -260,40 +414,108 @@
          }
          omarchy_wasm_tcg_metrics.gc_collected += instance_garbage_collected_local;
          qatomic_sub(&instance_alive_global, instance_garbage_collected_local);
@@ -287,12 +322,10 @@
 +    retirement_number = qatomic_fetch_inc(&instance_retirements_global) + 1;
 +    if (retirement_number == 1 ||
 +        retirement_number % CLOCK_GC_PRESSURE_INTERVAL == 0) {
-+        request_module_gc_pressure_js(CLOCK_GC_PRESSURE_BYTES);
-+        omarchy_wasm_tcg_metrics.gc_pressure_requests++;
-+        omarchy_wasm_tcg_metrics.gc_pressure_bytes +=
-+            CLOCK_GC_PRESSURE_BYTES;
-+        emscripten_sleep(0);
-+        check_instance_garbage_collected();
++        if (omarchy_wasm_tcg_request_gc_pressure(false)) {
++            emscripten_sleep(0);
++            check_instance_garbage_collected();
++        }
 +    }
  }
  
@@ -332,7 +365,7 @@
  
      if (instance_alive_local > omarchy_wasm_tcg_metrics.live_local_peak) {
          omarchy_wasm_tcg_metrics.live_local_peak = instance_alive_local;
-@@ -324,6 +513,7 @@
+@@ -324,6 +546,7 @@
          *(uint32_t*)tb_counter_ptr = INSTANTIATE_NUM; // will be instanciated immediately
          return 0;
      }
@@ -340,21 +373,29 @@
      return elm->fidx;
  }
  
-@@ -411,7 +601,12 @@
+@@ -341,7 +564,11 @@
+ static inline void trysleep()
+ {
+     if (--exec_cnt == 0) {
+         if (!can_add_instance()) {
++            if (qatomic_read(&instance_pending_gc_global) >=
++                MAX_INSTANCE_REPLACEMENT_CREDIT) {
++                omarchy_wasm_tcg_request_gc_pressure(true);
++            }
+             emscripten_sleep(0); // return to the browser main loop
+             check_instance_garbage_collected();
+         }
+@@ -411,7 +638,8 @@
              emscripten_get_now() + OMARCHY_WASM_TCG_METRICS_REPORT_MS;
          fprintf(stderr,
                  "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment "
 -                "threshold=1500 metrics-schema=2 core=%d\n",
-+                "threshold=1500 metrics-schema=3 "
-+                "cache=bounded-clock-v1 active-cap=%d "
-+                "replacement-credit=%d retained-cap=%d "
-+                "gc-pressure-bytes=%d core=%d\n",
-+                MAX_INSTANCE_ACTIVE, MAX_INSTANCE_REPLACEMENT_CREDIT,
-+                MAX_INSTANCE_RETAINED, CLOCK_GC_PRESSURE_BYTES,
++                "threshold=1500 metrics-schema=4 "
++                OMARCHY_WASM_TCG_CLOCK_POLICY_MARKER " core=%d\n",
                  cur_core_num);
          fflush(stderr);
          omarchy_wasm_tcg_metrics_report("init");
-@@ -1483,6 +1678,7 @@
+@@ -1483,6 +1711,7 @@
          trysleep();
          int tb_counter_ptr = (uint32_t)ctx.tb_ptr + counter_vec_off;
          uint32_t res;
@@ -362,7 +403,7 @@
          int fidx = get_instance_running_local(ctx.tb_ptr);
          if (fidx > 0) {
              omarchy_wasm_tcg_record_wasm_entry();
-@@ -1490,9 +1686,12 @@
+@@ -1490,9 +1719,12 @@
          } else if (*(int32_t*)tb_counter_ptr < INSTANTIATE_NUM) {
              omarchy_wasm_tcg_record_tci_entry((int32_t *)tb_counter_ptr);
              res = tcg_qemu_tb_exec_tci(env);
@@ -384,7 +425,7 @@
  /* Instrumented baseline; the upstream hot threshold remains unchanged. */
  #define OMARCHY_WASM_TCG_HOT_THRESHOLD 1500
 -#define OMARCHY_WASM_TCG_METRICS_SCHEMA 2
-+#define OMARCHY_WASM_TCG_METRICS_SCHEMA 3
++#define OMARCHY_WASM_TCG_METRICS_SCHEMA 4
  #define INSTANTIATE_NUM OMARCHY_WASM_TCG_HOT_THRESHOLD
  
  #endif

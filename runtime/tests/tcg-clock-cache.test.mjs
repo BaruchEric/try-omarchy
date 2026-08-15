@@ -10,10 +10,16 @@ import { fileURLToPath } from "node:url";
 const runtime = dirname(dirname(fileURLToPath(import.meta.url)));
 
 class ClockCacheModel {
-  constructor({ activeCap, replacementCredit, pressureInterval }) {
+  constructor({
+    activeCap,
+    replacementCredit,
+    pressureInterval,
+    pressureRetryMilliseconds,
+  }) {
     this.activeCap = activeCap;
     this.replacementCredit = replacementCredit;
     this.pressureInterval = pressureInterval;
+    this.pressureRetryMilliseconds = pressureRetryMilliseconds;
     this.slots = Array.from({ length: activeCap }, () => null);
     this.clockHand = 0;
     this.insertHand = 0;
@@ -22,6 +28,10 @@ class ClockCacheModel {
     this.pending = 0;
     this.retirements = 0;
     this.pressureRequests = 0;
+    this.saturationPressureRetries = 0;
+    this.nextPressureAt = 0;
+    this.pressureHeld = false;
+    this.pressureTaskPending = false;
     this.peakActive = 0;
     this.peakRetained = 0;
     this.peakPending = 0;
@@ -55,7 +65,7 @@ class ClockCacheModel {
     return false;
   }
 
-  retireOne() {
+  retireOne(now = 0) {
     if (this.active === 0 || this.pending >= this.replacementCredit) {
       return null;
     }
@@ -76,7 +86,7 @@ class ClockCacheModel {
       this.retirements += 1;
       if (this.retirements === 1 ||
           this.retirements % this.pressureInterval === 0) {
-        this.pressureRequests += 1;
+        this.#requestPressure(now, false);
       }
       this.#recordPeaks();
       return candidate.id;
@@ -92,6 +102,22 @@ class ClockCacheModel {
     return collected;
   }
 
+  retrySaturatedPressure(now) {
+    if (this.pending < this.replacementCredit) return false;
+    return this.#requestPressure(now, true);
+  }
+
+  runMicrotaskCheckpoint() {
+    return this.pressureHeld;
+  }
+
+  runPressureTask(finalizedCount) {
+    if (!this.pressureTaskPending) throw new Error("no pressure task is pending");
+    this.pressureTaskPending = false;
+    this.pressureHeld = false;
+    return this.collect(finalizedCount);
+  }
+
   has(id) {
     return this.slots.some((candidate) => candidate?.id === id);
   }
@@ -100,6 +126,17 @@ class ClockCacheModel {
     this.peakActive = Math.max(this.peakActive, this.active);
     this.peakRetained = Math.max(this.peakRetained, this.retained);
     this.peakPending = Math.max(this.peakPending, this.pending);
+  }
+
+  #requestPressure(now, saturationRetry) {
+    if (now < this.nextPressureAt) return false;
+    if (this.pressureTaskPending) throw new Error("pressure task overlap");
+    this.nextPressureAt = now + this.pressureRetryMilliseconds;
+    this.pressureRequests += 1;
+    this.saturationPressureRetries += Number(saturationRetry);
+    this.pressureHeld = true;
+    this.pressureTaskPending = true;
+    return true;
   }
 }
 
@@ -131,12 +168,13 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
     readFile(join(root, "tcg/wasm32.h"), "utf8"),
   ]);
   assert.match(header, /OMARCHY_WASM_TCG_HOT_THRESHOLD 1500/);
-  assert.match(header, /OMARCHY_WASM_TCG_METRICS_SCHEMA 3/);
+  assert.match(header, /OMARCHY_WASM_TCG_METRICS_SCHEMA 4/);
   assert.match(source, /MAX_INSTANCE_ACTIVE 15000/);
   assert.match(source, /MAX_INSTANCE_REPLACEMENT_CREDIT 256/);
   assert.match(source, /MAX_INSTANCE_RETAINED \\\n+\s+\(MAX_INSTANCE_ACTIVE \+ MAX_INSTANCE_REPLACEMENT_CREDIT\)/);
   assert.match(source, /CLOCK_GC_PRESSURE_INTERVAL 64/);
   assert.match(source, /CLOCK_GC_PRESSURE_BYTES \(4 \* 1024 \* 1024\)/);
+  assert.match(source, /CLOCK_GC_PRESSURE_RETRY_MS 1000/);
   assert.match(source, /TO_REMOVE_INSTANCE_SIZE 1/);
   assert.match(source, /candidate->referenced = 0/);
   assert.match(source, /elm->referenced = 1/);
@@ -146,13 +184,22 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   assert.match(source, /qatomic_sub\(&instance_pending_gc_global,/);
   assert.match(source, /wasmTable\.get\(fidx\) !== null \|\| wasmTableMirror\[fidx\] !== null/);
   assert.match(source, /new Uint8Array\(bytes\)/);
-  assert.match(source, /queueMicrotask/);
-  assert.match(source, /cache=bounded-clock-v1 active-cap=%d/);
+  assert.match(source, /setTimeout\(\(\) => \{/);
+  assert.doesNotMatch(source, /queueMicrotask/);
+  assert.match(source, /_Static_assert\(MAX_INSTANCE_ACTIVE == 15000/);
+  assert.match(source, /_Static_assert\(CLOCK_GC_PRESSURE_INTERVAL == 64/);
+  assert.match(source, /__thread double instance_gc_pressure_retry_after_ms/);
+  assert.match(source, /now < instance_gc_pressure_retry_after_ms/);
+  assert.match(source, /instance_pending_gc_global\) >=\s+MAX_INSTANCE_REPLACEMENT_CREDIT/);
+  assert.match(source, /omarchy_wasm_tcg_request_gc_pressure\(true\)/);
+  assert.match(source, /cache=bounded-clock-v2 active-cap=15000 replacement-credit=256/);
+  assert.match(source, /gc-pressure-interval=64 gc-pressure-retry-ms=1000/);
+  assert.match(source, /gc-pressure-hold=next-task/);
   for (const metric of [
     "running-global=%d", "pending-gc-global=%d", "replacement-reservations=%",
     "active-capacity-denials=%", "retained-capacity-denials=%", "clock-scans=%",
     "clock-second-chances=%", "gc-pressure-requests=%", "gc-pressure-bytes=%",
-    "table-slots-cleared=%",
+    "gc-pressure-saturation-retries=%", "table-slots-cleared=%",
   ]) {
     assert.ok(source.includes(metric), `missing CLOCK metric ${metric}`);
   }
@@ -172,21 +219,30 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   assert.match(makefile, /serve-full-virgl-webgl2-tcg-bounded-clock:/);
   assert.match(makefile, /VIRGL_WEBGL2_TCG_CLOCK_OUTPUT/);
   assert.match(buildScript, /tcg_experiment" == "1500-clock"/);
+  assert.match(buildScript, /default_build_volume\+=-tcg-bounded-clock-v2/);
   assert.match(buildScript, /qemu-wasm-tcg-bounded-clock-cache\.patch/);
   assert.match(packageScript, /"1500-clock"/);
   assert.match(manifestScript, /experimentValue === "1500-clock"/);
-  assert.match(stampScript, /"1500-clock": Object\.freeze\(\{ threshold: 1500, metricsSchemaVersion: 3 \}\)/);
+  assert.match(stampScript, /"1500-clock": Object\.freeze\(\{ threshold: 1500, metricsSchemaVersion: 4 \}\)/);
   assert.match(verifier, /kind: "qemu-wasm-tcg-bounded-clock"/);
+  assert.match(verifier, /kind: "bounded-clock-v2"/);
+  assert.match(verifier, /metricsSchemaVersion: 4/);
+  assert.match(verifier, /gcPressureRetryMilliseconds: 1000/);
+  assert.match(verifier, /gcPressureHold: "next-task"/);
+  assert.match(verifier, /gc_pressure=pressure;setTimeout/);
   assert.match(verifier, /TCG_BOUNDED_CLOCK_MARKER/);
   assert.match(metadataScript, /patches\/qemu-wasm-tcg-bounded-clock-cache\.patch/);
   assert.match(metadataScript, /gcPressureInterval: 64/);
+  assert.match(metadataScript, /gcPressureRetryMilliseconds: 1000/);
+  assert.match(metadataScript, /gcPressureHold: "next-task"/);
 });
 
-test("bounded CLOCK preserves the hot cache and fails closed without finalization", () => {
+test("bounded CLOCK preserves hard caps and recovers turnover after saturation GC", () => {
   const model = new ClockCacheModel({
     activeCap: 64,
     replacementCredit: 8,
     pressureInterval: 4,
+    pressureRetryMilliseconds: 1000,
   });
   for (let id = 0; id < 64; id += 1) {
     assert.equal(model.install(id), true);
@@ -197,7 +253,11 @@ test("bounded CLOCK preserves the hot cache and fails closed without finalizatio
     for (const id of hot) {
       model.touch(id);
     }
-    assert.notEqual(model.retireOne(), null);
+    assert.notEqual(model.retireOne(replacement * 1000), null);
+    if (model.pressureTaskPending) {
+      assert.equal(model.pressureHeld, true);
+      assert.equal(model.runPressureTask(0), 0);
+    }
     assert.equal(model.install(64 + replacement), true);
   }
 
@@ -209,30 +269,44 @@ test("bounded CLOCK preserves the hot cache and fails closed without finalizatio
   assert.equal(model.peakRetained, 72);
   assert.equal(model.peakPending, 8);
   assert.equal(model.pressureRequests, 3);
+  assert.equal(model.saturationPressureRetries, 0);
 
   const before = model.slots.map((slot) => slot?.id ?? null);
   assert.equal(model.retireOne(), null);
   assert.deepEqual(model.slots.map((slot) => slot?.id ?? null), before);
   assert.equal(model.active, 64, "credit exhaustion must not evict another hot TB");
-
-  assert.equal(model.collect(4), 4);
+  assert.equal(model.retrySaturatedPressure(7999), false);
+  assert.equal(model.retrySaturatedPressure(8000), true);
+  assert.equal(model.runMicrotaskCheckpoint(), true,
+    "pressure must survive the current microtask checkpoint");
+  assert.equal(model.runPressureTask(0), 0);
+  assert.equal(model.pressureHeld, false);
+  assert.equal(model.retrySaturatedPressure(8000), false);
+  assert.equal(model.retrySaturatedPressure(9000), true);
+  assert.equal(model.pressureHeld, true);
+  assert.equal(model.runPressureTask(4), 4,
+    "the yielded pressure task must deliver finalizers before turnover resumes");
+  assert.equal(model.pressureRequests, 5);
+  assert.equal(model.saturationPressureRetries, 2);
+  assert.equal(model.active, 64, "pressure retries must not spend retirement credit");
   assert.equal(model.retained, 68);
   assert.equal(model.pending, 4);
+  assert.equal(model.retrySaturatedPressure(10_000), false);
   for (let replacement = 0; replacement < 4; replacement += 1) {
-    assert.notEqual(model.retireOne(), null);
+    assert.notEqual(model.retireOne(10_000 + replacement * 1000), null);
     assert.equal(model.install(72 + replacement), true);
+    if (model.pressureTaskPending) assert.equal(model.runPressureTask(0), 0);
   }
   assert.equal(model.active, 64);
   assert.equal(model.retained, 72);
   assert.equal(model.pending, 8);
 });
 
-test("CLOCK candidate stays inside the measured 132 MiB headroom envelope", () => {
+test("CLOCK pressure lifetime stays inside the measured 132 MiB headroom envelope", () => {
   const activeCap = 15_000;
   const replacementCredit = 256;
   const vcpus = 4;
-  const pressureRequestsWithoutGc = 5; // retirements 1, 64, 128, 192, 256
-  const pressureBytes = pressureRequestsWithoutGc * 4 * 1024 * 1024;
+  const pressureBytes = vcpus * 4 * 1024 * 1024;
   const rawSourceBytes = replacementCredit * 1011.9017333333334;
   const cBytesSaved = vcpus * (
     ((8 - 12) * activeCap) + ((50_000 - 1) * 4)
@@ -241,10 +315,10 @@ test("CLOCK candidate stays inside the measured 132 MiB headroom envelope", () =
   const wrapperBudget = measuredHeadroom - pressureBytes - rawSourceBytes + cBytesSaved;
 
   assert.equal(cBytesSaved, 559_984);
-  assert.equal(pressureBytes, 20 * 1024 * 1024);
+  assert.equal(pressureBytes, 16 * 1024 * 1024);
   assert.ok(rawSourceBytes < 0.25 * 1024 * 1024);
-  assert.ok(wrapperBudget > 112 * 1024 * 1024);
-  assert.ok(wrapperBudget / replacementCredit > 449 * 1024);
+  assert.ok(wrapperBudget > 116 * 1024 * 1024);
+  assert.ok(wrapperBudget / replacementCredit > 465 * 1024);
 });
 
 test("bounded CLOCK build metadata is exact and non-promotable", async (context) => {
@@ -274,13 +348,16 @@ test("bounded CLOCK build metadata is exact and non-promotable", async (context)
       tcgExperiment: {
         kind: "qemu-wasm-tcg-bounded-clock",
         instantiateThreshold: 1500,
-        metricsSchemaVersion: 3,
+        metricsSchemaVersion: 4,
         cachePolicy: {
-          kind: "bounded-clock-v1",
+          kind: "bounded-clock-v2",
           activeCap: 15000,
           replacementCredit: 256,
           retainedCap: 15256,
           gcPressureBytes: 4 * 1024 * 1024,
+          gcPressureInterval: 64,
+          gcPressureRetryMilliseconds: 1000,
+          gcPressureHold: "next-task",
         },
       },
       tcgExperimentArtifactSha256: wasmSha256,
@@ -307,15 +384,17 @@ test("bounded CLOCK build metadata is exact and non-promotable", async (context)
     ({ kind }) => kind === "qemu-wasm-tcg-bounded-clock",
   );
   assert.deepEqual(clock.cachePolicy, {
-    kind: "bounded-clock-v1",
+    kind: "bounded-clock-v2",
     activeCap: 15000,
     replacementCredit: 256,
     retainedCap: 15256,
     gcPressureBytes: 4 * 1024 * 1024,
     gcPressureInterval: 64,
+    gcPressureRetryMilliseconds: 1000,
+    gcPressureHold: "next-task",
   });
   assert.equal(clock.instantiateThreshold, 1500);
-  assert.equal(clock.metricsSchemaVersion, 3);
+  assert.equal(clock.metricsSchemaVersion, 4);
   assert.equal(clock.promotionEligible, false);
   assert.ok(metadata.component.patches.includes(
     "patches/qemu-wasm-tcg-bounded-clock-cache.patch",

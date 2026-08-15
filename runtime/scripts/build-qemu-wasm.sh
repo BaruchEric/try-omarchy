@@ -21,7 +21,7 @@ elif [[ "$tcg_experiment" == "750" ]]; then
 elif [[ "$tcg_experiment" == "1500-metrics" ]]; then
   default_build_volume+=-tcg-baseline-1500-metrics
 elif [[ "$tcg_experiment" == "1500-clock" ]]; then
-  default_build_volume+=-tcg-bounded-clock
+  default_build_volume+=-tcg-bounded-clock-v2
 fi
 
 if [[ -n "$webgl_build" ]]; then
