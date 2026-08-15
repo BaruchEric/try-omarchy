@@ -113,6 +113,8 @@ test("isolated VM document owns the only real 1600x900 guest canvas", async () =
     new RegExp(`const PROTOCOL_VERSION = ${VM_HOST_PROTOCOL.version}`),
   );
   assert.match(hostSource, /new Worker\(workerUrl/);
+  assert.match(hostSource, /fetch\(workerUrl,[\s\S]*?method: "HEAD"/);
+  assert.match(hostSource, /Production Worker request failed with HTTP/);
   assert.match(hostSource, /canvas\.transferControlToOffscreen\(\)/);
   assert.match(hostSource, /runtimeWorker\.postMessage\([\s\S]*?\[offscreen\]/);
   assert.match(hostSource, /RELEASE_BASE_PATH = "\/omarchy\/versions\/f0020448\/"/);
@@ -490,6 +492,11 @@ test("missing VM artifacts produce a recoverable, specific launcher error", () =
   assert.match(result.message, /\/omarchy\//);
   assert.equal(PRODUCTION_WORKER_URL, "/omarchy/versions/f0020448/production-worker.mjs");
   assert.equal(RELEASE_BASE_URL, "/omarchy/versions/f0020448/");
+  const missingWorker = normalizeRuntimeError(
+    new Error("Production Worker request failed with HTTP 404: /omarchy/versions/f0020448/production-worker.mjs"),
+  );
+  assert.equal(missingWorker.kind, "artifacts-missing");
+  assert.match(missingWorker.message, /artifact upload/i);
   assert.equal(DISPLAY_WIDTH, 1600);
   assert.equal(DISPLAY_HEIGHT, 900);
 });

@@ -162,7 +162,9 @@ export function normalizeRuntimeError(error) {
     "failed to fetch dynamically imported module",
     "importing a module script failed",
     "runtime manifest request failed with http 404",
+    "production worker request failed with http 404",
     "failed to load /omarchy/",
+    "failed to load module script",
     "module not found",
   ].some((fragment) => normalized.includes(fragment));
 

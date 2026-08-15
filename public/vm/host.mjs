@@ -180,6 +180,21 @@ async function startRuntime() {
       throw new Error("The immutable release must be served from this site.");
     }
     const workerUrl = new URL(PRODUCTION_WORKER_ASSET, releaseBaseUrl);
+    const workerResponse = await fetch(workerUrl, {
+      method: "HEAD",
+      credentials: "same-origin",
+      cache: "no-store",
+      redirect: "error",
+    });
+    if (!workerResponse.ok) {
+      throw new Error(
+        `Production Worker request failed with HTTP ${workerResponse.status}: ${workerUrl.pathname}`,
+      );
+    }
+    const workerType = workerResponse.headers.get("content-type") ?? "";
+    if (!/^(?:text|application)\/javascript\b/i.test(workerType)) {
+      throw new Error(`Production Worker has an unsafe Content-Type: ${workerType || "missing"}`);
+    }
     runtimeWorker = new Worker(workerUrl, {
       type: "module",
       name: `omarchy-vm-${runNonce.slice(0, 12)}`,
