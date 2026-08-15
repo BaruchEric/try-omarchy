@@ -204,8 +204,11 @@ test("synthetic browser smoke exercises CDP, production iframe, evidence, and sc
   });
   const evidence = JSON.parse(await readFile(join(output, "evidence.json"), "utf8"));
   const requests = JSON.parse(await readFile(join(output, "requests.json"), "utf8"));
+  const hashes = JSON.parse(await readFile(join(output, "hashes.json"), "utf8"));
   assert.equal(evidence.verdict, "passed");
   assert.equal(evidence.contract.stage, "passed");
   assert.equal(evidence.screenshot.width, 1600);
   assert.equal(requests.violations.length, 0);
+  assert.match(hashes.acceptanceSources["public/vm/host.mjs"].sha256, /^[a-f0-9]{64}$/);
+  assert.equal(hashes.release.artifactManifestSha256, evidence.contract.releaseId);
 });
