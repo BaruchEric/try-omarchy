@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     "dist/**",
     "**/dist/**",
+    "**/smoke-dist/**",
     "out/**",
     "**/out/**",
     "build/**",

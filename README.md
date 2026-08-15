@@ -1,100 +1,114 @@
-# vinext-starter
+# Try Omarchy in your browser
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+This project runs a pinned build of the real
+[Basecamp Omarchy](https://github.com/basecamp/omarchy) desktop inside a
+client-side x86_64 virtual machine. It is a short, disposable product demo: the
+browser renders QEMU's guest framebuffer, forwards keyboard and pointer input
+to the VM, and discards all changes when the session is reset or closed.
 
-## Prerequisites
+The desktop is not recreated with HTML or streamed from a server. The guest is
+Arch Linux booting Hyprland, Quickshell, Omarchy's commands, configuration, and
+themes from upstream commit
+`f0020448ca87329199de7cb12f2015ebc4a3e5e7`.
 
-- Node.js `>=22.13.0`
+## How it works
 
-## Quick Start
+```text
+Launcher page
+  └─ disposable same-origin iframe
+       └─ module Worker + transferred OffscreenCanvas
+            └─ QEMU 8.2 compiled with Emscripten/SDL2
+                 ├─ verified kernel + initramfs
+                 ├─ demand-paged read-only ext4 base from HTTP ranges
+                 ├─ temporary QEMU snapshot writes
+                 └─ real Omarchy/Hyprland/Quickshell guest
+```
 
-```bash
-npm install
+The fixed guest display is 1600×900. A session is shown as ready only after a
+guest-originated authenticity report is followed by a newer framebuffer event
+from QEMU. Merely starting WebAssembly never satisfies readiness.
+
+Large immutable artifacts live behind the versioned
+`/omarchy/versions/<release>/...` route. `rootfs.ext4` can only be read through
+bounded, identity-pinned byte ranges; a full root filesystem response is
+rejected. QEMU uses `-snapshot`, so the base disk never changes.
+
+## Repository map
+
+- `app/` and `public/vm/`: launcher, disposable iframe, display, input, reset,
+  fullscreen, diagnostics, and honest capability/error states.
+- `runtime/`: pinned QEMU-Wasm build, SDL framebuffer instrumentation,
+  production Worker, input bridge, local browser harness, and artifact checks.
+- `storage/`: fail-closed synchronous paged-disk adapter for Emscripten Workers.
+- `guest/`: reproducible trimmed Arch image containing the authentic pinned
+  Omarchy payload and supported VM-only overlays.
+- `graphics/` and `proofs/`: native guest graphics and end-to-end evidence
+  harnesses; proof pixels always originate in the guest.
+- `worker/`: isolated R2 artifact delivery with strict range and identity rules.
+- `distribution/` and `release/`: SPDX/notices/source evidence and atomic,
+  digest-verified release assembly.
+- `scripts/verification/` and `docs/`: schemas, stop-ship gates, and the
+  canonical five-minute acceptance journey.
+
+## Develop the site
+
+Node.js 22.13 or newer is required.
+
+```sh
+npm ci
+npm test
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+The launcher intentionally reports missing VM files until an immutable release
+exists at its pinned artifact path. It never substitutes a screenshot or fake
+desktop.
 
-## Included Shape
+## Build and verify the VM
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+Build the real guest in the supplied privileged Arch container. Docker Desktop
+uses a persistent Linux volume for the work tree and package cache.
 
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
+```sh
+./guest/test
+./guest/build-container.sh --output "$PWD/guest/dist"
+(cd guest/dist && shasum -a 256 -c SHA256SUMS)
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
+Build and validate the graphical QEMU-Wasm runtime:
 
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
+```sh
+make -C runtime audit
+make -C runtime test
+QEMU_WASM_SOURCE=/private/tmp/qemu-wasm-source BUILD_JOBS=4 \
+  runtime/scripts/build-qemu-wasm.sh
+make -C runtime verify-dist
+```
 
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
+Then boot the exact local guest through the production paged Worker without
+copying the 6 GiB raw disk:
 
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
+```sh
+make -C runtime serve-full
+```
 
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
+Open `http://127.0.0.1:8094/` in a current Chromium browser. The local server
+supplies COOP/COEP isolation, synthesizes a verified combined manifest, refuses
+full rootfs reads, and records range requests at `/__requests`.
 
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
+## Release discipline
 
-## Useful Commands
+The blocking criteria are in [docs/acceptance.md](docs/acceptance.md). A public
+release needs the same-run authenticated desktop/frame/input journey, display
+and performance evidence, immutable artifacts, package-level notices and SBOM,
+corresponding source for the modified emulator, and human approval for Omarchy
+name/logo use. Engineering checks never imply legal or trademark clearance.
 
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
+See these focused guides for details:
 
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+- [guest/README.md](guest/README.md)
+- [runtime/README.md](runtime/README.md)
+- [storage/README.md](storage/README.md)
+- [distribution/README.md](distribution/README.md)
+- [release/README.md](release/README.md)
+- [docs/verification.md](docs/verification.md)
