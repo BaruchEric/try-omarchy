@@ -44,11 +44,11 @@ source_bytes=$(stat -c %s "$source_image")
 cmp -n "$source_bytes" "$source_image" "$output_image" \
   || fail "derived initramfs does not preserve the canonical base prefix"
 for required in \
-  ./config \
-  ./etc/modprobe.d/90-omarchy-hibernate-virtio-gpu.conf \
-  ./hooks/resume \
-  ./hooks/omarchy_hibernate_stage \
-  ./usr/local/libexec/omarchy-egl-renderer-probe; do
+  config \
+  etc/modprobe.d/90-omarchy-hibernate-virtio-gpu.conf \
+  hooks/resume \
+  hooks/omarchy_hibernate_stage \
+  usr/local/libexec/omarchy-egl-renderer-probe; do
   tail -c "+$((source_bytes + 1))" "$output_image" \
     | zstd -dc 2>/dev/null \
     | cpio -it 2>/dev/null \
@@ -58,7 +58,7 @@ done
 for required in config hooks/resume hooks/omarchy_hibernate_stage; do
   tail -c "+$((source_bytes + 1))" "$output_image" \
     | zstd -dc 2>/dev/null \
-    | cpio -i --to-stdout "./$required" 2>/dev/null \
+    | cpio -i --to-stdout "$required" 2>/dev/null \
     | cmp - "$overlay_tmp/$required" \
     || fail "derived initramfs content differs for $required"
 done

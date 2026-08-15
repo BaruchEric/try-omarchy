@@ -243,6 +243,8 @@ test("derived initramfs defers virtio_gpu and carries exact resume/late hooks", 
     "hooks/omarchy_hibernate_stage", "omarchy-egl-renderer-probe",
     "derived initramfs exceeds 64 MiB",
   ]) assert.ok(prepare.includes(token), `initramfs preparation is missing ${token}`);
+  assert.match(prepare, /cpio -i --to-stdout "\$required"/);
+  assert.doesNotMatch(prepare, /cpio -i --to-stdout "\.\/\$required"/);
   assert.match(resume, /printf '%d:%d'.*>\/sys\/power\/resume/);
   assert.match(resume, /producer swap is not formatted yet; continuing cold boot/);
   assert.match(resume, /OMARCHY_HIBERNATION_COLD_BOOT .*resume-device-unresolved/);
