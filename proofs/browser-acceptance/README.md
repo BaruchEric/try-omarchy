@@ -1,0 +1,91 @@
+# Exact browser acceptance gate
+
+This gate drives the real production `/vm/index.html` iframe and its verified
+module Worker against a supplied **local** release. It does not load the looser
+development `full-guest.html` page, inject a simulated Worker, or accept a
+phase named `running` as proof of a desktop.
+
+The runner creates an isolated same-origin proxy so the unmodified production
+host can enforce its immutable `/omarchy/versions/<artifact-manifest-sha256>/`
+URL. The upstream URL must be HTTP(S) on `localhost`, `127.0.0.1`, or `::1` and
+must expose `artifact-manifest.json` plus the declared artifacts.
+
+## Pass contract
+
+A run passes only after this exact order is observed through the production
+parent/iframe protocol:
+
+1. The SHA-256 of the fetched artifact manifest equals the release ID used by
+   the iframe, and its repository, commit, version, and tree hash equal the
+   pinned Basecamp Omarchy source.
+2. The guest-authored report proves Arch Linux x86_64, Wayland, live Hyprland
+   and Quickshell processes, the required successful commands, one active
+   1600×900 monitor, the installed Omarchy version, and upstream config hashes.
+3. A **later** QEMU guest frame is 1600×900 with the runtime's exact 32×18 (576
+   pixel) sample and at least one non-black sample.
+4. QEMU accepts the exact harmless readiness pointer. The harness then sends
+   the production `terminal` command and correlates only these accepted SDL
+   scancodes: MetaLeft down, Enter down/up, MetaLeft up.
+5. A still-later qualifying guest frame arrives after the complete input
+   sequence. The production canvas must also report pixel-perfect 1600×900 at
+   DPR 1.
+
+Duplicate identities/reports, malformed active-iframe messages, failed or
+exited phases, non-monotonic frames, unrelated input, stage/total timeouts, an
+uncaught page exception, weak screenshots, and unsafe disk access all fail the
+run. Rootfs GETs must be exact ranges no larger than 8 MiB, carry the manifest
+digest in `If-Match`, return 206, and return exactly the requested byte count.
+
+## Run
+
+First start a local release server. For the repository's no-copy full guest
+server this is typically:
+
+```sh
+node runtime/scripts/serve-full-guest.mjs \
+  --runtime-root runtime/dist \
+  --guest-root guest/dist \
+  --web-root runtime/web \
+  --host 127.0.0.1 \
+  --port 8094
+```
+
+In a second terminal run the acceptance gate (it does not stop or reconfigure
+the supplied server):
+
+```sh
+node proofs/browser-acceptance/run.mjs \
+  --release-base http://127.0.0.1:8094/release/
+```
+
+Use `--browser-executable` to select a Chromium-family binary and `--output`
+to require a particular new evidence directory. Defaults are a detected local
+Brave/Chrome/Chromium and a timestamped directory below `evidence/`.
+
+Every completed attempt persists `evidence.json`, `requests.json`, the exact
+`artifact-manifest.json`, and `hashes.json`; a run with a capturable browser
+target also persists `desktop.png` (an accepted run requires it to be an exact,
+credible 1600×900 render). `SHA256SUMS` binds all persisted files. Failed
+attempts exit non-zero and carry `verdict: "failed"`; no partial or timed-out
+result can be promoted to PASS.
+
+The proxy snapshots the production host, shared validators, browser harness,
+and evidence tooling before it listens. Their byte counts and SHA-256 digests
+are recorded under `acceptanceSources` in `hashes.json`, so files changed during
+a run cannot produce an unbound hybrid result.
+
+Run the deterministic contract, proxy, and parser checks without booting a VM:
+
+```sh
+node --test proofs/browser-acceptance/acceptance.test.mjs
+npx eslint proofs/browser-acceptance
+git diff --check -- proofs/browser-acceptance
+```
+
+An opt-in synthetic browser smoke verifies the automation and evidence plumbing
+without claiming to prove a real guest:
+
+```sh
+OMARCHY_SYNTHETIC_BROWSER_SMOKE=1 \
+  node --test proofs/browser-acceptance/synthetic-browser.test.mjs
+```
