@@ -17,7 +17,9 @@ diagnostics_log="$evidence_dir/diagnostics.log"
 qemu_log="$evidence_dir/qemu.log"
 before_frame="$evidence_dir/desktop-before.ppm"
 foot_open_frame="$evidence_dir/desktop-foot-open.ppm"
+foot_typed_frame="$evidence_dir/desktop-foot-typed.ppm"
 foot_frame="$evidence_dir/desktop-foot.ppm"
+typed_delta="$evidence_dir/typed-frame-delta.json"
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 qemu_pid=
 
@@ -129,6 +131,7 @@ grep -q '^OMARCHY_GUEST_REPORT ' "$diagnostics_log" || {
   tail -n 200 "$serial_log" >&2 || true
   fail "timed out waiting for OMARCHY_GUEST_REPORT"
 }
+guest_report_elapsed_seconds=$((SECONDS - started_seconds))
 
 echo "[full-guest] live Hyprland and Quickshell report received; capturing 1600x900 desktop"
 node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" screendump "$before_frame" >/dev/null
@@ -140,12 +143,42 @@ sleep 15
 node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" screendump "$foot_open_frame" >/dev/null
 [[ -s $foot_open_frame ]] || fail "QMP did not create the opened-Foot framebuffer"
 
-# Keep the visible command short so the framebuffer independently records that
-# keyboard input reached the real terminal.
-node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" type $'id\n' >/dev/null
-sleep 4
+input_started_seconds=$SECONDS
+foot_proof_command='id;seq 1 20;id>/dev/virtio-ports/omarchy.web.diagnostics'
+node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" type-explicit "$foot_proof_command" >/dev/null
+# QMP acknowledges input queueing before the virtio keyboard, compositor, and
+# terminal have drained it. Capture the baseline only after the complete
+# reviewed command has had a bounded render-settle interval.
+sleep 5
+node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" screendump "$foot_typed_frame" >/dev/null
+[[ -s $foot_typed_frame ]] || fail "QMP did not create the pre-submit Foot framebuffer"
+node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" type-explicit $'\n' >/dev/null
+input_enter_attempts=1
+
+for _attempt in $(seq 1 20); do
+  grep -q '^uid=1000(omarchy) ' "$diagnostics_log" && break
+  sleep 0.25
+done
+
+# Retry only when the exact command-completion signal is absent. Once the
+# identity line exists, a second Enter would add unrelated prompt activity and
+# invalidate the executed-output framebuffer comparison.
+if ! grep -q '^uid=1000(omarchy) ' "$diagnostics_log"; then
+  node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" type-explicit $'\n' >/dev/null
+  input_enter_attempts=2
+  for _attempt in $(seq 1 20); do
+    grep -q '^uid=1000(omarchy) ' "$diagnostics_log" && break
+    sleep 0.25
+  done
+fi
+grep -q '^uid=1000(omarchy) ' "$diagnostics_log" || \
+  fail "Foot id command did not return the Omarchy desktop-user identity"
+sleep 5
 node "$proof_dir/qmp.mjs" "$qmp_socket" "$qmp_log" screendump "$foot_frame" >/dev/null
-[[ -s $foot_frame ]] || fail "QMP did not create the Foot framebuffer"
+[[ -s $foot_frame ]] || fail "QMP did not create the completed Foot framebuffer"
+node "$proof_dir/frame-delta.mjs" "$foot_typed_frame" "$foot_frame" 0.0005 >"$typed_delta" || \
+  fail "Foot output did not create the required terminal-region framebuffer delta"
+input_proof_elapsed_seconds=$((SECONDS - input_started_seconds))
 
 echo "[full-guest] requesting graceful QMP teardown"
 set +e
@@ -176,7 +209,11 @@ jq -n \
   --arg kernelCommandLine "$kernel_command_line" \
   --argjson qemuExitCode "$qemu_exit_code" \
   --argjson qmpQuitClientStatus "$qmp_quit_status" \
-  '{schemaVersion:1,status:"completed",startedAt:$startedAt,finishedAt:$finishedAt,qemuVersion:$qemuVersion,hostArchitecture:$hostArchitecture,guestDirectory:$guestDirectory,machine:"pc-q35-8.2",memoryMiB:1536,cores:2,snapshot:true,network:"none",kernelCommandLine:$kernelCommandLine,qemuExitCode:$qemuExitCode,qmpQuitClientStatus:$qmpQuitClientStatus,teardown:"qmp-quit",qemuAliveAfterTeardown:false}' \
+  --arg footProofCommand "$foot_proof_command" \
+  --argjson guestReportElapsedSeconds "$guest_report_elapsed_seconds" \
+  --argjson inputProofElapsedSeconds "$input_proof_elapsed_seconds" \
+  --argjson inputEnterAttempts "$input_enter_attempts" \
+  '{schemaVersion:1,status:"completed",startedAt:$startedAt,finishedAt:$finishedAt,qemuVersion:$qemuVersion,hostArchitecture:$hostArchitecture,guestDirectory:$guestDirectory,machine:"pc-q35-8.2",memoryMiB:1536,cores:2,snapshot:true,network:"none",kernelCommandLine:$kernelCommandLine,guestReportElapsedSeconds:$guestReportElapsedSeconds,inputProofElapsedSeconds:$inputProofElapsedSeconds,footProofCommand:$footProofCommand,inputEnterAttempts:$inputEnterAttempts,qemuExitCode:$qemuExitCode,qmpQuitClientStatus:$qmpQuitClientStatus,teardown:"qmp-quit",qemuAliveAfterTeardown:false}' \
   >"$evidence_dir/run.json"
 
 echo "[full-guest] running fail-closed evidence validator"
@@ -189,6 +226,7 @@ set -e
 if command -v sips >/dev/null 2>&1; then
   sips -s format png "$before_frame" --out "$evidence_dir/desktop-before.png" >/dev/null
   sips -s format png "$foot_open_frame" --out "$evidence_dir/desktop-foot-open.png" >/dev/null
+  sips -s format png "$foot_typed_frame" --out "$evidence_dir/desktop-foot-typed.png" >/dev/null
   sips -s format png "$foot_frame" --out "$evidence_dir/desktop-foot.png" >/dev/null
 fi
 
@@ -196,7 +234,8 @@ fi
   cd "$evidence_dir"
   evidence_files=(
     artifact-integrity-before.json artifact-integrity-after.json command.txt diagnostics.log
-    desktop-before.ppm desktop-foot-open.ppm desktop-foot.ppm qemu.log qmp.jsonl run.json serial.log validation.json
+    desktop-before.ppm desktop-foot-open.ppm desktop-foot-typed.ppm desktop-foot.ppm typed-frame-delta.json
+    qemu.log qmp.jsonl run.json serial.log validation.json
   )
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "${evidence_files[@]}" >SHA256SUMS

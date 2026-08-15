@@ -142,8 +142,11 @@ const SPECIAL_QCODES = {
   ";": ["semicolon"],
   "$": ["shift", "4"],
   "*": ["shift", "8"],
+  "|": ["shift", "backslash"],
   "\n": ["ret"],
 };
+
+export const FOOT_PROOF_COMMAND = "id;seq 1 20;id>/dev/virtio-ports/omarchy.web.diagnostics";
 
 export function qcodesForCharacter(character) {
   if (SIMPLE_QCODES.has(character)) return [character];
@@ -154,6 +157,39 @@ export function qcodesForCharacter(character) {
 
 function keyObjects(codes) {
   return codes.map((code) => ({ type: "qcode", data: code }));
+}
+
+function explicitKeyPayload(code, down) {
+  return {
+    events: [{
+      type: "key",
+      data: { down, key: { type: "qcode", data: code } },
+    }],
+  };
+}
+
+export function explicitInputPayloadsForText(text) {
+  invariant(typeof text === "string" && text.length > 0, "explicit input needs text");
+  return Array.from(text).map((character) => {
+    const codes = qcodesForCharacter(character);
+    return {
+      events: [
+        ...codes.map((code) => explicitKeyPayload(code, true).events[0]),
+        ...[...codes].reverse().map((code) => explicitKeyPayload(code, false).events[0]),
+      ],
+    };
+  });
+}
+
+async function sendExplicitText(client, text) {
+  for (const payload of explicitInputPayloadsForText(text)) {
+    await client.execute("input-send-event", payload);
+    // Keep each explicit down/up pair in one ordered QMP event batch. A host
+    // delay while a key is down can span enough guest time under TCG to trigger
+    // autorepeat; pacing only after release avoids that ambiguity.
+    await delay(300);
+  }
+  return { characters: Array.from(text).length, transitions: explicitInputPayloadsForText(text).flatMap((payload) => payload.events).length };
 }
 
 export async function runQmpAction({ socketPath, logPath, action, values = [] }) {
@@ -181,6 +217,10 @@ export async function runQmpAction({ socketPath, logPath, action, values = [] })
           await delay(300);
         }
         return { characters: text.length };
+      }
+      case "type-explicit": {
+        const text = values[0];
+        return await sendExplicitText(client, text);
       }
       case "quit":
         return await client.execute("quit", undefined, 5000);

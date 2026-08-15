@@ -47,6 +47,15 @@ function parseSums(value) {
   return result;
 }
 
+export function verifyBuildSpecContract(spec) {
+  invariant(spec.runtime?.kernel === REQUIRED.get("guest-kernel"), "build spec kernel path differs from manifest");
+  invariant(spec.runtime?.initramfs === REQUIRED.get("guest-initramfs"), "build spec initramfs path differs from manifest");
+  invariant(spec.runtime?.disk === REQUIRED.get("guest-rootfs"), "build spec disk path differs from manifest");
+  invariant(spec.runtime?.minimumMemoryMiB === 1024, "unexpected guest minimum memory");
+  invariant(spec.runtime?.recommendedMemoryMiB === 1536, "unexpected guest recommended memory");
+  invariant(spec.guest?.virtualDisplay?.width === 1600 && spec.guest?.virtualDisplay?.height === 900, "build spec display differs from manifest");
+}
+
 export async function verifyGuestArtifacts(guestDirectory) {
   const root = await realpath(path.resolve(guestDirectory));
   const manifestPath = path.join(root, "guest-manifest.json");
@@ -100,11 +109,7 @@ export async function verifyGuestArtifacts(guestDirectory) {
     json(path.join(root, "build-spec.json")),
     json(path.join(root, "provenance.json")),
   ]);
-  invariant(spec.runtime?.kernel === REQUIRED.get("guest-kernel"), "build spec kernel path differs from manifest");
-  invariant(spec.runtime?.initramfs === REQUIRED.get("guest-initramfs"), "build spec initramfs path differs from manifest");
-  invariant(spec.runtime?.disk === REQUIRED.get("guest-rootfs"), "build spec disk path differs from manifest");
-  invariant(spec.runtime?.minimumMemoryMiB === 1536, "unexpected guest minimum memory");
-  invariant(spec.guest?.virtualDisplay?.width === 1600 && spec.guest?.virtualDisplay?.height === 900, "build spec display differs from manifest");
+  verifyBuildSpecContract(spec);
   invariant(provenance.upstream?.commit === manifest.upstream.commit, "provenance commit differs from manifest");
   invariant(provenance.normalizedUpstreamTree?.sha256 === manifest.upstream.treeSha256, "provenance tree digest differs from manifest");
 
