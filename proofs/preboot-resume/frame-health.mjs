@@ -29,7 +29,9 @@ export function analyzePpm(buffer) {
   const width = Number(nextToken(buffer, state));
   const height = Number(nextToken(buffer, state));
   const maximum = Number(nextToken(buffer, state));
-  while (state.cursor < buffer.length && [9, 10, 13, 32].includes(buffer[state.cursor])) state.cursor += 1;
+  const separator = buffer[state.cursor];
+  const separatorValid = [9, 10, 13, 32].includes(separator);
+  if (separatorValid) state.cursor += separator === 13 && buffer[state.cursor + 1] === 10 ? 2 : 1;
   const pixels = buffer.subarray(state.cursor);
   const payloadMatches = Number.isInteger(width)
     && Number.isInteger(height)
@@ -128,6 +130,7 @@ export function analyzePpm(buffer) {
     && width === DISPLAY_WIDTH
     && height === DISPLAY_HEIGHT
     && maximum === 255
+    && separatorValid
     && payloadMatches
     && nonBlackRatio >= thresholds.minimumNonBlackRatio
     && topAlertRedRatio < thresholds.maximumTopAlertRedRatio

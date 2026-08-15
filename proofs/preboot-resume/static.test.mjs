@@ -136,6 +136,27 @@ test("structural health accepts the real shell shape and rejects banners or dege
   }
   const header = Buffer.from("P6\n1600 900\n255\n");
   assert.equal(analyzePpm(Buffer.concat([header, pixels])).clean, true);
+  for (const [separator, firstRasterByte] of [
+    ["\n", 9],
+    ["\r\n", 10],
+    ["\t", 13],
+    [" ", 32],
+    ["\r", 9],
+  ]) {
+    const candidate = Buffer.from(pixels);
+    candidate[0] = firstRasterByte;
+    const result = analyzePpm(Buffer.concat([
+      Buffer.from(`P6\n1600 900\n255${separator}`),
+      candidate,
+    ]));
+    assert.equal(result.payloadBytes, width * height * 3);
+    assert.equal(result.payloadMatches, true);
+    assert.equal(result.clean, true);
+  }
+  assert.equal(analyzePpm(Buffer.concat([
+    Buffer.from("P6\n1600 900\n255"),
+    Buffer.alloc(width * height * 3, 41),
+  ])).clean, false);
   for (let offset = 0; offset < width * 30 * 3; offset += 3) {
     pixels[offset] = 220; pixels[offset + 1] = 20; pixels[offset + 2] = 30;
   }

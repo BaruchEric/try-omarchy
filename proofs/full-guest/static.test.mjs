@@ -86,6 +86,35 @@ test("PPM parser requires an exact complete 1600x900 QEMU framebuffer", () => {
   assert.throws(() => parsePpm(ppm(20).subarray(0, -1), "truncated"), /truncated or oversized/);
 });
 
+test("PPM parser consumes one separator without discarding whitespace raster bytes", () => {
+  const rasterBytes = 1600 * 900 * 3;
+  for (const [separator, firstRasterByte] of [
+    ["\n", 9],
+    ["\r\n", 10],
+    ["\t", 13],
+    [" ", 32],
+    ["\r", 9],
+  ]) {
+    const pixels = Buffer.alloc(rasterBytes, 41);
+    pixels[0] = firstRasterByte;
+    const parsed = parsePpm(
+      Buffer.concat([Buffer.from(`P6\n1600 900\n255${separator}`), pixels]),
+      "whitespace-raster fixture",
+    );
+    assert.equal(parsed.pixels.length, rasterBytes);
+    assert.equal(parsed.pixels[0], firstRasterByte);
+    assert.equal(parsed.pixels[1], 41);
+  }
+
+  assert.throws(
+    () => parsePpm(
+      Buffer.concat([Buffer.from("P6\n1600 900\n255"), Buffer.alloc(rasterBytes, 41)]),
+      "missing-separator fixture",
+    ),
+    /no legal PPM raster separator/,
+  );
+});
+
 test("Foot output delta excludes unrelated pixels outside its interior region", () => {
   const baseline = parsePpm(ppm(20), "region baseline");
   const outsideBuffer = ppm(20);

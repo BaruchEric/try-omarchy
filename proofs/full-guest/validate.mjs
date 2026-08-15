@@ -58,7 +58,9 @@ export function parsePpm(buffer, label) {
   const width = Number(token());
   const height = Number(token());
   const maximum = Number(token());
-  while (cursor < buffer.length && [9, 10, 13, 32].includes(buffer[cursor])) cursor += 1;
+  const separator = buffer[cursor];
+  invariant([9, 10, 13, 32].includes(separator), `${label} has no legal PPM raster separator`);
+  cursor += separator === 13 && buffer[cursor + 1] === 10 ? 2 : 1;
   invariant(width === 1600 && height === 900 && maximum === 255, `${label} is not 1600x900 RGB`, { width, height, maximum });
   const pixels = buffer.subarray(cursor);
   invariant(pixels.byteLength === width * height * 3, `${label} pixel payload is truncated or oversized`);
