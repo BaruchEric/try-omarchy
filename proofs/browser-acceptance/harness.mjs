@@ -6,7 +6,6 @@ import {
   createVmHostCommand,
   DEFAULT_TIMEOUTS,
   failAcceptance,
-  markTerminalCommandSent,
   publicAcceptanceSnapshot,
 } from "./contract.mjs";
 
@@ -22,7 +21,6 @@ const monotonicOrigin = performance.now();
 
 let state;
 let startCommandSent = false;
-let terminalCommandSent = false;
 
 function now() {
   return performance.now() - monotonicOrigin;
@@ -45,18 +43,6 @@ function send(type) {
     createVmHostCommand(type, runNonce),
     location.origin,
   );
-}
-
-function maybeSendTerminal() {
-  if (state.stage !== "ready-to-send-terminal" || terminalCommandSent) return;
-  state = markTerminalCommandSent(state, now());
-  if (state.stage === "failed") {
-    render();
-    return;
-  }
-  terminalCommandSent = true;
-  send("terminal");
-  render();
 }
 
 if (!RELEASE_ID.test(releaseId) || /^0{64}$/.test(releaseId) || !NONCE.test(runNonce)) {
@@ -84,7 +70,6 @@ window.addEventListener("message", (event) => {
     startCommandSent = true;
     send("start");
   }
-  maybeSendTerminal();
   render();
 });
 
@@ -97,7 +82,6 @@ window.addEventListener("unhandledrejection", (event) => {
 
 const timer = setInterval(() => {
   state = checkAcceptanceTimeout(state, now(), DEFAULT_TIMEOUTS);
-  maybeSendTerminal();
   render();
   if (state.stage === "passed" || state.stage === "failed") clearInterval(timer);
 }, 250);

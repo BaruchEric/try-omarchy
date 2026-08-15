@@ -21,20 +21,28 @@ parent/iframe protocol:
 2. The guest-authored report proves Arch Linux x86_64, Wayland, live Hyprland
    and Quickshell processes, the required successful commands, one active
    1600×900 monitor, the installed Omarchy version, and upstream config hashes.
-3. A **later** QEMU guest frame is 1600×900 with the runtime's exact 32×18 (576
-   pixel) sample and at least one non-black sample.
-4. QEMU accepts the exact harmless readiness pointer. The harness then sends
-   the production `terminal` command and correlates only these accepted SDL
-   scancodes: MetaLeft down, Enter down/up, MetaLeft up.
-5. A still-later qualifying guest frame arrives after the complete input
-   sequence. The production canvas must also report pixel-perfect 1600×900 at
-   DPR 1.
+3. After that exact report, the production Worker emits one strict
+   `desktopproof`. It binds the release digest and hashed internal guest
+   challenge to two already-observed 32×18 framebuffer samples. At least 29 of
+   576 samples must change after Super+Return, and no color may dominate more
+   than 547 samples. The Worker emits this only after the guest returns the
+   exact challenge through its diagnostics device.
+4. A still-later qualifying QEMU guest frame arrives with a sequence greater
+   than the proof response frame. The production canvas must also report
+   pixel-perfect 1600×900 at DPR 1. `inputaccepted` queue acknowledgements are
+   retained as diagnostics and never contribute to PASS.
+5. The final 1600×900 PNG contains at least 16 RGB colors and no single exact
+   RGB color occupies more than 95% of its pixels.
 
-Duplicate identities/reports, malformed active-iframe messages, failed or
-exited phases, non-monotonic frames, unrelated input, stage/total timeouts, an
-uncaught page exception, weak screenshots, and unsafe disk access all fail the
-run. Rootfs GETs must be exact ranges no larger than 8 MiB, carry the manifest
-digest in `If-Match`, return 206, and return exactly the requested byte count.
+Duplicate identities/reports/proofs, malformed or replayed active-iframe
+messages, failed or exited phases, non-monotonic frames, unobserved proof frame
+references, stage/total timeouts, an uncaught page exception, weak or visually
+degenerate screenshots, console errors, and unsafe disk access all fail the
+run. After the PNG and request ledger are complete, the runner re-reads the
+live contract and error streams so a late failure cannot be persisted as a
+stale PASS. Rootfs GETs
+must be exact ranges no larger than 8 MiB, carry the manifest digest in
+`If-Match`, return 206, and return exactly the requested byte count.
 
 ## Run
 

@@ -1,6 +1,7 @@
 import { inflateSync } from "node:zlib";
 
 const SIGNATURE = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+export const MAX_DOMINANT_COLOR_FRACTION = 0.95;
 
 function crc32(bytes) {
   let crc = 0xffffffff;
@@ -96,15 +97,42 @@ export function inspectScreenshotPng(body, expectedWidth = 1600, expectedHeight 
 
   let nonBlackPixels = 0;
   const colors = new Set();
+  const colorKeys = new Uint32Array(width * height);
+  let pixelIndex = 0;
   for (let offset_ = 0; offset_ < decoded.byteLength; offset_ += channels) {
     const red = decoded[offset_];
     const green = decoded[offset_ + 1];
     const blue = decoded[offset_ + 2];
+    const color = (red << 16) | (green << 8) | blue;
     if (red !== 0 || green !== 0 || blue !== 0) nonBlackPixels += 1;
-    if (colors.size <= 256) colors.add((red << 16) | (green << 8) | blue);
+    if (colors.size <= 256) colors.add(color);
+    colorKeys[pixelIndex] = color;
+    pixelIndex += 1;
   }
   if (nonBlackPixels < width * height * 0.01 || colors.size < 16) {
     throw new Error("Browser screenshot is blank or does not contain a credible rendered desktop.");
+  }
+  colorKeys.sort();
+  let dominantColorPixels = 1;
+  let dominantColor = colorKeys[0];
+  let runPixels = 1;
+  for (let index = 1; index < colorKeys.length; index += 1) {
+    if (colorKeys[index] === colorKeys[index - 1]) {
+      runPixels += 1;
+      if (runPixels > dominantColorPixels) {
+        dominantColorPixels = runPixels;
+        dominantColor = colorKeys[index];
+      }
+    } else {
+      runPixels = 1;
+    }
+  }
+  const dominantColorFraction = dominantColorPixels / (width * height);
+  const dominantColorRgb = `#${dominantColor.toString(16).padStart(6, "0")}`;
+  if (dominantColorFraction > MAX_DOMINANT_COLOR_FRACTION) {
+    throw new Error(
+      `Browser screenshot is visually degenerate: RGB ${dominantColorRgb} occupies ${(dominantColorFraction * 100).toFixed(3)}% of pixels.`,
+    );
   }
   return Object.freeze({
     valid: true,
@@ -115,5 +143,8 @@ export function inspectScreenshotPng(body, expectedWidth = 1600, expectedHeight 
     nonBlackPixels,
     nonBlackFraction: nonBlackPixels / (width * height),
     observedColorsAtLeast: Math.min(colors.size, 256),
+    dominantColorRgb,
+    dominantColorPixels,
+    dominantColorFraction,
   });
 }

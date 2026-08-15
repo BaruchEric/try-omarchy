@@ -1,3 +1,8 @@
+import {
+  DESKTOP_PROOF_SAMPLE_PIXELS,
+  isDesktopProof,
+} from "../../public/vm/desktop-proof.mjs";
+
 export const VM_HOST_PROTOCOL = Object.freeze({
   channel: "omarchy-vm-host",
   version: 1,
@@ -13,6 +18,7 @@ const HOST_EVENT_TYPES = new Set([
   "release",
   "guestreport",
   "guestframe",
+  "desktopproof",
   "inputaccepted",
   "reload",
   "error",
@@ -181,16 +187,19 @@ function validateHostPayload(value, expectedNonce) {
         Number.isSafeInteger(frame.sequence) &&
         frame.sequence > 0 &&
         frame.source === "qemu-guest" &&
-        (frame.guestWidth === undefined ||
-          (Number.isInteger(frame.guestWidth) && frame.guestWidth > 0)) &&
-        (frame.guestHeight === undefined ||
-          (Number.isInteger(frame.guestHeight) && frame.guestHeight > 0)) &&
-        Number.isSafeInteger(frame.sampledPixels) &&
-        frame.sampledPixels > 0 &&
-        frame.sampledPixels <= 1600 * 900 &&
+        frame.guestWidth === 1600 &&
+        frame.guestHeight === 900 &&
+        frame.sampledPixels === DESKTOP_PROOF_SAMPLE_PIXELS &&
         Number.isSafeInteger(frame.nonBlackPixels) &&
         frame.nonBlackPixels >= 0 &&
         frame.nonBlackPixels <= frame.sampledPixels
+        ? value
+        : null;
+    }
+    case "desktopproof": {
+      const keys = new Set([...common, "proof"]);
+      return hasEnvelope(value, expectedNonce, keys) &&
+        isDesktopProof(value.proof)
         ? value
         : null;
     }
@@ -198,7 +207,7 @@ function validateHostPayload(value, expectedNonce) {
       const keys = new Set([...common, "event", "readinessProbe"]);
       return hasEnvelope(value, expectedNonce, keys) &&
         isAcceptedInput(value.event) &&
-        typeof value.readinessProbe === "boolean"
+        value.readinessProbe === false
         ? value
         : null;
     }

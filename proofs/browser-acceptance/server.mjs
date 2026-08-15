@@ -157,6 +157,8 @@ function staticFiles(repositoryRoot) {
     ["/vm/index.html", "public/vm/index.html"],
     ["/vm/host.mjs", "public/vm/host.mjs"],
     ["/vm/host-utils.mjs", "public/vm/host-utils.mjs"],
+    ["/vm/desktop-proof.mjs", "public/vm/desktop-proof.mjs"],
+    ["/public/vm/desktop-proof.mjs", "public/vm/desktop-proof.mjs"],
   ]);
   const tooling = [
     "proofs/browser-acceptance/run.mjs",

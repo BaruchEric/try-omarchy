@@ -1,3 +1,8 @@
+import {
+  DESKTOP_PROOF_SAMPLE_PIXELS,
+  isDesktopProof,
+} from "../../public/vm/desktop-proof.mjs";
+
 export const DISPLAY_WIDTH = 1600;
 export const DISPLAY_HEIGHT = 900;
 // Publication replaces this all-zero fail-closed sentinel with the SHA-256 of
@@ -166,7 +171,7 @@ export function getPhasePresentation(phase, guestReady = false) {
     return {
       title: "Omarchy desktop ready",
       detail:
-        "The pinned guest, visible desktop, and input-to-frame path are verified.",
+        "The pinned guest, authenticated desktop transition, and later display frame are verified.",
       stage: 4,
     };
   }
@@ -426,53 +431,11 @@ export function isGuestDisplayFrame(value) {
     value.sequence > 0 &&
     value.guestWidth === DISPLAY_WIDTH &&
     value.guestHeight === DISPLAY_HEIGHT &&
-    Number.isSafeInteger(value.sampledPixels) &&
-    value.sampledPixels > 0 &&
-    value.sampledPixels <= DISPLAY_WIDTH * DISPLAY_HEIGHT &&
+    value.sampledPixels === DESKTOP_PROOF_SAMPLE_PIXELS &&
     Number.isSafeInteger(value.nonBlackPixels) &&
     value.nonBlackPixels > 0 &&
     value.nonBlackPixels <= value.sampledPixels
   );
-}
-
-export function isAcceptedInputEvidence(value) {
-  if (!isRecord(value) || typeof value.kind !== "string") return false;
-  if (value.kind === "key") {
-    return (
-      hasOnlyKeys(value, new Set(["kind", "scancode", "down"])) &&
-      Number.isInteger(value.scancode) &&
-      value.scancode >= 4 &&
-      value.scancode <= 255 &&
-      typeof value.down === "boolean"
-    );
-  }
-  if (value.kind === "pointer") {
-    return (
-      hasOnlyKeys(value, new Set(["kind", "x", "y", "buttons"])) &&
-      Number.isInteger(value.x) &&
-      value.x >= 0 &&
-      value.x <= 32767 &&
-      Number.isInteger(value.y) &&
-      value.y >= 0 &&
-      value.y <= 32767 &&
-      Number.isInteger(value.buttons) &&
-      value.buttons >= 0 &&
-      value.buttons <= 31
-    );
-  }
-  if (value.kind === "wheel") {
-    return (
-      hasOnlyKeys(value, new Set(["kind", "x", "y"])) &&
-      Number.isInteger(value.x) &&
-      value.x >= -1 &&
-      value.x <= 1 &&
-      Number.isInteger(value.y) &&
-      value.y >= -1 &&
-      value.y <= 1 &&
-      (value.x !== 0 || value.y !== 0)
-    );
-  }
-  return false;
 }
 
 export function createDesktopEvidence(expectedReleaseId = ACTIVE_RELEASE_ID) {
@@ -483,26 +446,46 @@ export function createDesktopEvidence(expectedReleaseId = ACTIVE_RELEASE_ID) {
     releaseOrdinal: null,
     report: null,
     reportOrdinal: null,
-    input: null,
-    inputOrdinal: null,
+    desktopProof: null,
+    desktopProofOrdinal: null,
     frame: null,
     frameOrdinal: null,
+    terminal: null,
+    invalid: false,
     ready: false,
   };
 }
 
 /**
- * Desktop readiness requires a valid guest report followed by a fresh, real
- * 1600x900 framebuffer presentation. A frame that happened before the report
- * remains useful diagnostics, but cannot prove the reported desktop is visible.
+ * Desktop readiness requires the exact release and guest report, then the
+ * Worker's guest-acknowledged visual transition proof, then a fresh 1600x900
+ * guest frame whose sequence is later than the proof's response frame.
  */
 export function advanceDesktopEvidence(evidence, event) {
   const current = evidence ?? createDesktopEvidence();
   const eventOrdinal = current.eventOrdinal + 1;
 
+  if (event?.type === "terminal") {
+    return {
+      ...current,
+      eventOrdinal,
+      terminal: Object.freeze({
+        kind: String(event.kind ?? "runtime"),
+        reason: String(event.reason ?? "The VM session ended."),
+      }),
+      invalid: true,
+      ready: false,
+    };
+  }
+
+  if (current.invalid) return { ...current, eventOrdinal, ready: false };
+
   if (event?.type === "release") {
-    if (!isActiveReleaseIdentity(event.release, current.expectedReleaseId)) {
-      return { ...current, eventOrdinal };
+    if (
+      current.release !== null ||
+      !isActiveReleaseIdentity(event.release, current.expectedReleaseId)
+    ) {
+      return { ...current, eventOrdinal, invalid: true, ready: false };
     }
     return {
       ...current,
@@ -511,52 +494,62 @@ export function advanceDesktopEvidence(evidence, event) {
       releaseOrdinal: eventOrdinal,
       report: null,
       reportOrdinal: null,
-      input: null,
-      inputOrdinal: null,
+      desktopProof: null,
+      desktopProofOrdinal: null,
+      frame: null,
+      frameOrdinal: null,
+      terminal: null,
+      invalid: false,
       ready: false,
     };
   }
 
   if (event?.type === "guestreport") {
     if (
+      current.release === null ||
+      current.report !== null ||
       !guestReportMatchesRelease(
         event.report,
         current.release,
         current.expectedReleaseId,
       )
     ) {
-      return { ...current, eventOrdinal };
+      return { ...current, eventOrdinal, invalid: true, ready: false };
     }
     return {
       ...current,
       eventOrdinal,
       report: event.report,
       reportOrdinal: eventOrdinal,
-      input: null,
-      inputOrdinal: null,
+      desktopProof: null,
+      desktopProofOrdinal: null,
+      invalid: false,
       ready: false,
     };
   }
 
-  if (event?.type === "inputaccepted") {
+  if (event?.type === "desktopproof") {
     if (
-      !isAcceptedInputEvidence(event.input) ||
-      event.readinessProbe !== true ||
-      event.input.kind !== "pointer" ||
-      event.input.x !== 16384 ||
-      event.input.y !== 16384 ||
-      event.input.buttons !== 0 ||
       current.report === null ||
-      current.reportOrdinal >= eventOrdinal
+      current.reportOrdinal >= eventOrdinal ||
+      current.desktopProof !== null ||
+      !isDesktopProof(event.proof, current.expectedReleaseId)
     ) {
-      return { ...current, eventOrdinal };
+      return {
+        ...current,
+        eventOrdinal,
+        desktopProof: null,
+        desktopProofOrdinal: null,
+        invalid: true,
+        ready: false,
+      };
     }
     return {
       ...current,
       eventOrdinal,
-      input: event.input,
-      inputOrdinal: eventOrdinal,
-      ready: current.ready,
+      desktopProof: event.proof,
+      desktopProofOrdinal: eventOrdinal,
+      ready: false,
     };
   }
 
@@ -577,11 +570,13 @@ export function advanceDesktopEvidence(evidence, event) {
       frame: event.frame,
       frameOrdinal: eventOrdinal,
       ready:
-        current.ready ||
-        (current.report !== null &&
-          current.input !== null &&
-          current.reportOrdinal < current.inputOrdinal &&
-          current.inputOrdinal < eventOrdinal),
+        !current.invalid &&
+        (current.ready ||
+          (current.report !== null &&
+            current.desktopProof !== null &&
+            current.reportOrdinal < current.desktopProofOrdinal &&
+            current.desktopProofOrdinal < eventOrdinal &&
+            event.frame.sequence > current.desktopProof.responseSequence)),
     };
   }
 

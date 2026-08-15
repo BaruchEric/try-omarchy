@@ -1,6 +1,7 @@
 import {
   fetchVerifiedWorkerBootstrap,
   normalizedPointerForCanvas,
+  normalizeRuntimeDesktopProof,
   normalizeRuntimeGuestFrame,
   normalizeRuntimeInputAccepted,
   validateRuntimeRelease,
@@ -33,9 +34,12 @@ let verifiedBootstrap = null;
 let verifiedRuntimeRelease = null;
 let guestReportSeen = false;
 let runtimeRunning = false;
-let readinessProbeSent = false;
-let readinessProbeAwaiting = false;
-let readinessProbeAccepted = false;
+let runtimeTerminal = false;
+let desktopProofSeen = false;
+let desktopProofResponseSequence = null;
+let desktopInteractionReady = false;
+let lastGuestFrameSequence = 0;
+const preProofGuestFrameSequences = new Set();
 let pendingPointer = null;
 let pointerFrame = 0;
 let pointerButtonsActive = false;
@@ -89,11 +93,23 @@ function revokeWorkerBlobUrl() {
 function stopRuntime() {
   runtimeWorker?.terminate();
   runtimeWorker = null;
+  runtimeRunning = false;
+  desktopInteractionReady = false;
   revokeWorkerBlobUrl();
 }
 
-function rejectWorkerMessage(message) {
+function latchRuntimeTerminal() {
+  if (runtimeTerminal) return;
+  runtimeTerminal = true;
+  runtimeRunning = false;
+  desktopInteractionReady = false;
+  preProofGuestFrameSequences.clear();
+  releaseAllInput();
   stopRuntime();
+}
+
+function rejectWorkerMessage(message) {
+  latchRuntimeTerminal();
   postError(message, "The emulator Worker violated its verified protocol.");
 }
 
@@ -130,6 +146,7 @@ function reportCanvasMetrics() {
 
 function bindWorker(worker) {
   worker.addEventListener("message", (event) => {
+    if (runtimeTerminal) return;
     revokeWorkerBlobUrl();
     const detail = event.data;
     if (!isRecord(detail) || typeof detail.type !== "string") return;
@@ -143,9 +160,8 @@ function bindWorker(worker) {
         post("phase", { phase, ...(reason === undefined ? {} : { reason }) });
         if (phase === "running") {
           runtimeRunning = true;
-          sendReadinessProbe();
         } else if (phase === "failed" || phase === "exited") {
-          runtimeRunning = false;
+          latchRuntimeTerminal();
         }
         break;
       }
@@ -183,13 +199,12 @@ function bindWorker(worker) {
         } else if (isRecord(detail.report)) {
           guestReportSeen = true;
           post("guestreport", { report: detail.report });
-          sendReadinessProbe();
         } else {
           rejectWorkerMessage("The Worker emitted a non-object guest report.");
         }
         break;
       case "guestreporterror":
-        stopRuntime();
+        latchRuntimeTerminal();
         postError(detail.error, "The guest authenticity report could not be parsed.");
         break;
       case "guestframe": {
@@ -200,9 +215,67 @@ function bindWorker(worker) {
           rejectWorkerMessage(
             "The Worker emitted guest pixels before its release identity.",
           );
+        } else if (frame.sequence <= lastGuestFrameSequence) {
+          rejectWorkerMessage(
+            "The Worker duplicated or moved its guest-frame sequence backwards.",
+          );
         } else {
+          lastGuestFrameSequence = frame.sequence;
+          if (guestReportSeen && !desktopProofSeen) {
+            preProofGuestFrameSequences.add(frame.sequence);
+          }
+          if (
+            runtimeRunning &&
+            !runtimeTerminal &&
+            desktopProofSeen &&
+            frame.sequence > desktopProofResponseSequence &&
+            frame.nonBlackPixels > 0
+          ) {
+            desktopInteractionReady = true;
+          }
           post("guestframe", { frame });
         }
+        break;
+      }
+      case "desktopproof": {
+        if (
+          runtimeTerminal ||
+          !verifiedRuntimeRelease ||
+          !guestReportSeen ||
+          !runtimeRunning
+        ) {
+          rejectWorkerMessage(
+            "The Worker emitted desktop proof before the current release, guest report, and running phase.",
+          );
+          break;
+        }
+        if (desktopProofSeen) {
+          rejectWorkerMessage("The Worker emitted more than one desktop proof.");
+          break;
+        }
+        const proof = normalizeRuntimeDesktopProof(
+          detail,
+          verifiedRuntimeRelease.artifactManifestSha256,
+        );
+        if (!proof) {
+          rejectWorkerMessage(
+            "The Worker emitted malformed or release-mismatched desktop proof.",
+          );
+          break;
+        }
+        if (
+          !preProofGuestFrameSequences.has(proof.baselineSequence) ||
+          !preProofGuestFrameSequences.has(proof.responseSequence)
+        ) {
+          rejectWorkerMessage(
+            "The Worker desktop proof referenced frames that were not forwarded by the current run.",
+          );
+          break;
+        }
+        desktopProofSeen = true;
+        desktopProofResponseSequence = proof.responseSequence;
+        preProofGuestFrameSequences.clear();
+        post("desktopproof", { proof });
         break;
       }
       case "display":
@@ -224,53 +297,31 @@ function bindWorker(worker) {
           rejectWorkerMessage("The Worker emitted malformed accepted-input evidence.");
           break;
         }
-        const readinessProbe =
-          readinessProbeAwaiting &&
-          acceptedInput.kind === "pointer" &&
-          acceptedInput.x === 16384 &&
-          acceptedInput.y === 16384 &&
-          acceptedInput.buttons === 0;
-        if (readinessProbe) {
-          readinessProbeAwaiting = false;
-          readinessProbeAccepted = true;
-        }
-        post("inputaccepted", { event: acceptedInput, readinessProbe });
+        post("inputaccepted", {
+          event: acceptedInput,
+          readinessProbe: false,
+        });
         break;
       }
       case "error":
-        stopRuntime();
+        latchRuntimeTerminal();
         postError(detail.error);
         break;
     }
   });
 
   worker.addEventListener("error", (event) => {
+    if (runtimeTerminal) return;
     event.preventDefault();
-    stopRuntime();
+    latchRuntimeTerminal();
     postError(event.error ?? event.message, "The isolated emulator Worker failed.");
   });
 
   worker.addEventListener("messageerror", () => {
-    stopRuntime();
+    if (runtimeTerminal) return;
+    latchRuntimeTerminal();
     postError("The Worker returned an unreadable message.", "The isolated emulator Worker failed.");
   });
-}
-
-function sendReadinessProbe() {
-  if (
-    readinessProbeSent ||
-    !runtimeRunning ||
-    !guestReportSeen ||
-    !verifiedRuntimeRelease
-  ) {
-    return;
-  }
-  readinessProbeSent = true;
-  readinessProbeAwaiting = true;
-  sendInput(
-    { kind: "pointer", x: 0.5, y: 0.5, buttons: 0 },
-    { readinessProbe: true },
-  );
 }
 
 async function startRuntime() {
@@ -314,7 +365,7 @@ async function startRuntime() {
       [offscreen],
     );
   } catch (error) {
-    stopRuntime();
+    latchRuntimeTerminal();
     postError(error);
   }
 }
@@ -347,8 +398,13 @@ function normalizedPointer(event, clamp = false) {
   return { ...point, buttons: event.buttons & 31 };
 }
 
-function sendInput(event, { readinessProbe = false } = {}) {
-  if (!runtimeWorker || (!readinessProbe && !readinessProbeAccepted)) {
+function sendInput(event) {
+  if (
+    !runtimeWorker ||
+    runtimeTerminal ||
+    !runtimeRunning ||
+    !desktopInteractionReady
+  ) {
     return false;
   }
   runtimeWorker.postMessage({ type: "input", event });
@@ -363,7 +419,7 @@ function flushPointer() {
 }
 
 function queuePointer(event, immediate = false) {
-  if (!readinessProbeAccepted) return false;
+  if (!desktopInteractionReady) return false;
   const point = normalizedPointer(event, event.buttons !== 0);
   if (!point) return false;
   pendingPointer = point;

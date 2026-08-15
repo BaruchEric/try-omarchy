@@ -33,6 +33,7 @@ import {
   fetchVerifiedWorkerBootstrap,
   isSelfContainedWorkerSource,
   normalizedPointerForCanvas,
+  normalizeRuntimeDesktopProof,
   normalizeRuntimeGuestFrame,
   normalizeRuntimeInputAccepted,
   validateRuntimeRelease,
@@ -214,7 +215,16 @@ test("isolated VM document owns the only real 1600x900 guest canvas", async () =
   assert.match(hostSource, /event\.origin === window\.location\.origin/);
   assert.match(hostSource, /lostpointercapture/);
   assert.match(hostSource, /releasePointerButtons/);
-  assert.match(hostSource, /readinessProbeAwaiting/);
+  assert.doesNotMatch(hostSource, /readinessProbeAwaiting|sendReadinessProbe/);
+  assert.match(hostSource, /normalizeRuntimeDesktopProof/);
+  assert.match(hostSource, /preProofGuestFrameSequences\.has\(proof\.baselineSequence\)/);
+  assert.match(hostSource, /preProofGuestFrameSequences\.has\(proof\.responseSequence\)/);
+  assert.match(hostSource, /desktopProofSeen/);
+  assert.match(hostSource, /frame\.sequence > desktopProofResponseSequence/);
+  assert.match(hostSource, /runtimeTerminal/);
+  assert.match(hostSource, /latchRuntimeTerminal\(\)/);
+  assert.match(hostSource, /runtimeRunning &&[\s\S]*?desktopProofSeen/);
+  assert.match(hostSource, /!desktopInteractionReady/);
   assert.match(hostSource, /\["start", "focus", "menu", "terminal"\]/);
 });
 
@@ -315,11 +325,78 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
     null,
   );
 
+  const desktopProof = {
+    ...data,
+    type: "desktopproof",
+    proof: {
+      schemaVersion: 1,
+      artifactManifestSha256: FIXTURE_RELEASE_ID,
+      challengeSha256: "c".repeat(64),
+      baselineSequence: 10,
+      responseSequence: 11,
+      sampledPixels: 576,
+      changedPixels: 29,
+      dominantPixels: 547,
+    },
+  };
+  assert.deepEqual(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source, data: desktopProof },
+      expected,
+    ),
+    desktopProof,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: {
+          ...desktopProof,
+          proof: { ...desktopProof.proof, changedPixels: 28 },
+        },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: {
+          ...desktopProof,
+          proof: { ...desktopProof.proof, unexpected: true },
+        },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: {
+          ...desktopProof,
+          proof: {
+            ...desktopProof.proof,
+            guestAcknowledgement: "omarchy-input-ack-secret",
+          },
+        },
+      },
+      expected,
+    ),
+    null,
+  );
+
   const inputaccepted = {
     ...data,
     type: "inputaccepted",
     event: { kind: "pointer", x: 16384, y: 16384, buttons: 0 },
-    readinessProbe: true,
+    readinessProbe: false,
   };
   assert.deepEqual(
     acceptVmHostMessage(
@@ -333,7 +410,7 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
       {
         origin: "https://try.example",
         source,
-        data: { ...inputaccepted, readinessProbe: "yes" },
+        data: { ...inputaccepted, readinessProbe: true },
       },
       expected,
     ),
@@ -348,7 +425,7 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
       source: "qemu-guest",
       guestWidth: 1600,
       guestHeight: 900,
-      sampledPixels: 1440,
+      sampledPixels: 576,
       nonBlackPixels: 0,
     },
   };
@@ -366,7 +443,21 @@ test("VM host protocol rejects wrong origins, sources, versions, and shapes", ()
         source,
         data: {
           ...blackFrame,
-          frame: { ...blackFrame.frame, nonBlackPixels: 1441 },
+          frame: { ...blackFrame.frame, nonBlackPixels: 577 },
+        },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: {
+          ...blackFrame,
+          frame: { ...blackFrame.frame, sampledPixels: 575 },
         },
       },
       expected,
@@ -608,18 +699,28 @@ test("guest readiness requires an Omarchy-originated x86_64 desktop report", () 
   );
 });
 
-test("desktop readiness requires release match, exact QEMU probe acceptance, then a later non-black frame", () => {
+test("desktop readiness requires release, report, one causal proof, then a later frame", () => {
   const report = guestReport();
   const release = releaseIdentity();
-  const frame = {
+  const frame = (sequence, overrides = {}) => ({
     source: "qemu-guest",
-    sequence: 1,
+    sequence,
     guestWidth: 1600,
     guestHeight: 900,
-    sampledPixels: 1440,
-    nonBlackPixels: 5,
+    sampledPixels: 576,
+    nonBlackPixels: 500,
+    ...overrides,
+  });
+  const proof = {
+    schemaVersion: 1,
+    artifactManifestSha256: FIXTURE_RELEASE_ID,
+    challengeSha256: "c".repeat(64),
+    baselineSequence: 3,
+    responseSequence: 4,
+    sampledPixels: 576,
+    changedPixels: 29,
+    dominantPixels: 547,
   };
-  const probe = { kind: "pointer", x: 16384, y: 16384, buttons: 0 };
 
   assert.equal(isPublishableReleaseId(ACTIVE_RELEASE_ID), false);
   assert.equal(isPublishableReleaseId(FIXTURE_RELEASE_ID), true);
@@ -637,36 +738,85 @@ test("desktop readiness requires release match, exact QEMU probe acceptance, the
     input: { kind: "key", scancode: 40, down: true },
     readinessProbe: false,
   });
-  assert.equal(afterArbitraryInput.input, null);
+  assert.equal(afterArbitraryInput.desktopProof, null);
   assert.equal(afterArbitraryInput.ready, false);
 
-  const afterMislabeledInput = advanceDesktopEvidence(evidence, {
-    type: "inputaccepted",
-    input: { ...probe, x: 16383 },
-    readinessProbe: true,
+  const beforeProofFrame = advanceDesktopEvidence(evidence, {
+    type: "guestframe",
+    frame: frame(4),
   });
-  assert.equal(afterMislabeledInput.input, null);
+  assert.equal(beforeProofFrame.ready, false);
 
   evidence = advanceDesktopEvidence(evidence, {
-    type: "inputaccepted",
-    input: probe,
-    readinessProbe: true,
+    type: "desktopproof",
+    proof,
   });
   assert.equal(evidence.ready, false);
 
   const blackFrame = advanceDesktopEvidence(evidence, {
     type: "guestframe",
-    frame: { ...frame, nonBlackPixels: 0 },
+    frame: frame(5, { nonBlackPixels: 0 }),
   });
   assert.equal(blackFrame.ready, false);
   const wrongResolution = advanceDesktopEvidence(evidence, {
     type: "guestframe",
-    frame: { ...frame, guestWidth: 1280 },
+    frame: frame(5, { guestWidth: 1280 }),
   });
   assert.equal(wrongResolution.ready, false);
+  const unchangedSequence = advanceDesktopEvidence(evidence, {
+    type: "guestframe",
+    frame: frame(4),
+  });
+  assert.equal(unchangedSequence.ready, false);
 
-  evidence = advanceDesktopEvidence(evidence, { type: "guestframe", frame });
+  evidence = advanceDesktopEvidence(evidence, {
+    type: "guestframe",
+    frame: frame(5),
+  });
   assert.equal(evidence.ready, true);
+
+  let terminal = advanceDesktopEvidence(evidence, {
+    type: "terminal",
+    kind: "failed",
+    reason: "late runtime failure",
+  });
+  assert.equal(terminal.invalid, true);
+  assert.equal(terminal.ready, false);
+  assert.deepEqual(terminal.terminal, {
+    kind: "failed",
+    reason: "late runtime failure",
+  });
+  terminal = advanceDesktopEvidence(terminal, {
+    type: "guestframe",
+    frame: frame(6),
+  });
+  assert.equal(terminal.ready, false, "terminal evidence must be irreversible");
+
+  let duplicateProof = createDesktopEvidence(FIXTURE_RELEASE_ID);
+  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "release", release });
+  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "guestreport", report });
+  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "desktopproof", proof });
+  duplicateProof = advanceDesktopEvidence(duplicateProof, { type: "desktopproof", proof });
+  duplicateProof = advanceDesktopEvidence(duplicateProof, {
+    type: "guestframe",
+    frame: frame(5),
+  });
+  assert.equal(duplicateProof.invalid, true);
+  assert.equal(duplicateProof.ready, false);
+
+  let wrongProof = createDesktopEvidence(FIXTURE_RELEASE_ID);
+  wrongProof = advanceDesktopEvidence(wrongProof, { type: "release", release });
+  wrongProof = advanceDesktopEvidence(wrongProof, { type: "guestreport", report });
+  wrongProof = advanceDesktopEvidence(wrongProof, {
+    type: "desktopproof",
+    proof: { ...proof, artifactManifestSha256: "d".repeat(64) },
+  });
+  wrongProof = advanceDesktopEvidence(wrongProof, {
+    type: "guestframe",
+    frame: frame(5),
+  });
+  assert.equal(wrongProof.invalid, true);
+  assert.equal(wrongProof.ready, false);
 
   let wrongRelease = createDesktopEvidence(FIXTURE_RELEASE_ID);
   wrongRelease = advanceDesktopEvidence(wrongRelease, {
@@ -850,7 +1000,7 @@ test("verified bootstrap pins exact manifest bytes and Worker bytes before Blob 
   );
 });
 
-test("runtime release, frame, and accepted-input payloads are strict", () => {
+test("runtime release, desktop-proof, frame, and input diagnostics are strict", () => {
   const expected = releaseIdentity();
   assert.deepEqual(
     validateRuntimeRelease({ type: "release", ...expected }, expected),
@@ -864,6 +1014,55 @@ test("runtime release, frame, and accepted-input payloads are strict", () => {
     null,
   );
 
+  const runtimeProof = {
+    type: "desktopproof",
+    proof: {
+      schemaVersion: 1,
+      artifactManifestSha256: FIXTURE_RELEASE_ID,
+      challengeSha256: "c".repeat(64),
+      baselineSequence: 20,
+      responseSequence: 21,
+      sampledPixels: 576,
+      changedPixels: 29,
+      dominantPixels: 547,
+    },
+  };
+  assert.deepEqual(
+    normalizeRuntimeDesktopProof(runtimeProof, FIXTURE_RELEASE_ID),
+    runtimeProof.proof,
+  );
+  assert.equal(
+    normalizeRuntimeDesktopProof(
+      {
+        ...runtimeProof,
+        proof: { ...runtimeProof.proof, responseSequence: 20 },
+      },
+      FIXTURE_RELEASE_ID,
+    ),
+    null,
+  );
+  assert.equal(
+    normalizeRuntimeDesktopProof(
+      { ...runtimeProof, unexpected: true },
+      FIXTURE_RELEASE_ID,
+    ),
+    null,
+  );
+  assert.equal(
+    normalizeRuntimeDesktopProof(runtimeProof, "d".repeat(64)),
+    null,
+  );
+  assert.equal(
+    normalizeRuntimeDesktopProof(
+      {
+        ...runtimeProof,
+        proof: { ...runtimeProof.proof, dominantPixels: 0 },
+      },
+      FIXTURE_RELEASE_ID,
+    ),
+    null,
+  );
+
   const runtimeFrame = {
     type: "guestframe",
     sequence: 9,
@@ -871,7 +1070,7 @@ test("runtime release, frame, and accepted-input payloads are strict", () => {
     guestWidth: 1600,
     guestHeight: 900,
     timestamp: 123.5,
-    sampledPixels: 1440,
+    sampledPixels: 576,
     nonBlackPixels: 4,
   };
   assert.deepEqual(normalizeRuntimeGuestFrame(runtimeFrame), {
@@ -879,7 +1078,7 @@ test("runtime release, frame, and accepted-input payloads are strict", () => {
     source: "qemu-guest",
     guestWidth: 1600,
     guestHeight: 900,
-    sampledPixels: 1440,
+    sampledPixels: 576,
     nonBlackPixels: 4,
   });
   assert.equal(
@@ -888,6 +1087,14 @@ test("runtime release, frame, and accepted-input payloads are strict", () => {
   );
   assert.equal(
     normalizeRuntimeGuestFrame({ ...runtimeFrame, unexpected: true }),
+    null,
+  );
+  assert.equal(
+    normalizeRuntimeGuestFrame({ ...runtimeFrame, sampledPixels: 575 }),
+    null,
+  );
+  assert.equal(
+    normalizeRuntimeGuestFrame({ ...runtimeFrame, guestWidth: 1280 }),
     null,
   );
 

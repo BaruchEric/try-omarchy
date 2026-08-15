@@ -2,17 +2,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import test from "node:test";
+import { deflateSync } from "node:zlib";
 
 import { ACTIVE_UPSTREAM } from "../../app/components/vm-ui-state.mjs";
 import {
+  acceptVmHostMessage,
   advanceAcceptance,
   checkAcceptanceTimeout,
   createAcceptanceState,
-  markTerminalCommandSent,
-  READINESS_INPUT,
-  TERMINAL_INPUT_SEQUENCE,
 } from "./contract.mjs";
-import { parseArguments } from "./run.mjs";
+import { inspectScreenshotPng } from "./png.mjs";
+import { assertFinalAcceptancePass, parseArguments } from "./run.mjs";
 import {
   close,
   createAcceptanceProxy,
@@ -83,29 +83,25 @@ function frame(sequence, overrides = {}) {
   };
 }
 
-test("acceptance contract requires exact release, report, frame, input, and still-later frame order", () => {
-  let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
-  state = advanceAcceptance(state, { type: "ready" }, 1);
-  state = advanceAcceptance(state, release(), 2);
-  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
-  state = advanceAcceptance(state, {
-    type: "inputaccepted",
-    readinessProbe: true,
-    event: { ...READINESS_INPUT },
-  }, 4);
-  state = advanceAcceptance(state, frame(10), 5);
-  assert.equal(state.stage, "ready-to-send-terminal");
-  state = markTerminalCommandSent(state, 6);
-  for (let index = 0; index < TERMINAL_INPUT_SEQUENCE.length; index += 1) {
-    state = advanceAcceptance(state, {
-      type: "inputaccepted",
-      readinessProbe: false,
-      event: { ...TERMINAL_INPUT_SEQUENCE[index] },
-    }, 7 + index);
-  }
-  state = advanceAcceptance(state, frame(11), 12);
-  assert.equal(state.stage, "waiting-later-frame", "metrics are also required before PASS");
-  state = advanceAcceptance(state, {
+function desktopProof(overrides = {}) {
+  return {
+    type: "desktopproof",
+    proof: {
+      schemaVersion: 1,
+      artifactManifestSha256: RELEASE_ID,
+      challengeSha256: "c".repeat(64),
+      baselineSequence: 10,
+      responseSequence: 11,
+      sampledPixels: 576,
+      changedPixels: 304,
+      dominantPixels: 272,
+      ...overrides,
+    },
+  };
+}
+
+function metrics() {
+  return {
     type: "metrics",
     metrics: {
       backingWidth: 1600,
@@ -118,27 +114,258 @@ test("acceptance contract requires exact release, report, frame, input, and stil
       pixelPerfect: true,
       aspectMatches: true,
     },
-  }, 13);
-  assert.equal(state.stage, "passed");
-  assert.ok(state.report.ordinal < state.firstFrame.ordinal);
-  assert.ok(state.firstFrame.ordinal < state.terminalCommand.ordinal);
-  assert.ok(state.terminalInputComplete.ordinal < state.laterFrame.ordinal);
-});
+  };
+}
 
-test("acceptance contract fails closed on weak pixels, uncorrelated input, and timeouts", () => {
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, body) {
+  const typeBytes = Buffer.from(type, "ascii");
+  const chunk = Buffer.alloc(body.byteLength + 12);
+  chunk.writeUInt32BE(body.byteLength, 0);
+  typeBytes.copy(chunk, 4);
+  body.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(chunk.subarray(4, 8 + body.byteLength)), 8 + body.byteLength);
+  return chunk;
+}
+
+function rgbPng(width, height, colorAt) {
+  const stride = width * 3;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y += 1) {
+    const row = y * (stride + 1);
+    raw[row] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const [red, green, blue] = colorAt(y * width + x);
+      const offset = row + 1 + x * 3;
+      raw[offset] = red;
+      raw[offset + 1] = green;
+      raw[offset + 2] = blue;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(raw)),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+function stateThroughProof() {
   let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
   state = advanceAcceptance(state, { type: "ready" }, 1);
   state = advanceAcceptance(state, release(), 2);
   state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
-  state = advanceAcceptance(state, frame(1, { sampledPixels: 575 }), 4);
-  assert.equal(state.firstFrame, null);
+  state = advanceAcceptance(state, frame(10), 4);
+  state = advanceAcceptance(state, frame(11), 5);
+  return advanceAcceptance(state, desktopProof(), 6);
+}
+
+test("acceptance requires release, exact report, causal desktop proof, and a later frame", () => {
+  let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  state = advanceAcceptance(state, metrics(), 0.5);
+  state = advanceAcceptance(state, { type: "ready" }, 1);
+  state = advanceAcceptance(state, release(), 2);
+  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
   state = advanceAcceptance(state, {
     type: "inputaccepted",
     readinessProbe: false,
-    event: { ...TERMINAL_INPUT_SEQUENCE[0] },
-  }, 5);
-  assert.equal(state.stage, "failed");
-  assert.match(state.failure.reason, /Uncorrelated/);
+    event: { kind: "key", scancode: 40, down: true },
+  }, 4);
+  assert.equal(state.stage, "waiting-desktop-proof");
+  assert.equal(state.inputDiagnostics.length, 1);
+  state = advanceAcceptance(state, frame(10), 5);
+  state = advanceAcceptance(state, frame(11), 6);
+  state = advanceAcceptance(state, desktopProof(), 7);
+  assert.equal(state.stage, "waiting-later-frame");
+  state = advanceAcceptance(state, frame(12), 8);
+  assert.equal(state.stage, "passed");
+  assert.ok(state.report.ordinal < state.baselineFrame.ordinal);
+  assert.ok(state.baselineFrame.ordinal < state.responseFrame.ordinal);
+  assert.ok(state.responseFrame.ordinal < state.desktopProof.ordinal);
+  assert.ok(state.desktopProof.ordinal < state.laterFrame.ordinal);
+  const revoked = advanceAcceptance(state, desktopProof(), 9);
+  assert.equal(revoked.stage, "failed");
+  assert.match(revoked.failure.reason, /after.*completed/);
+});
+
+test("final evidence recheck rejects a terminal event after provisional PASS", () => {
+  let provisional = stateThroughProof();
+  provisional = advanceAcceptance(provisional, metrics(), 7);
+  provisional = advanceAcceptance(provisional, frame(12), 8);
+  assert.equal(provisional.stage, "passed");
+
+  const revoked = advanceAcceptance(
+    provisional,
+    { type: "phase", phase: "failed", reason: "late runtime failure" },
+    9,
+  );
+  assert.equal(revoked.stage, "failed");
+  assert.throws(
+    () => assertFinalAcceptancePass(revoked),
+    /revoked.*Production host emitted phase/,
+  );
+});
+
+test("final evidence recheck rejects late exceptions and console errors", () => {
+  const passing = { stage: "passed", failure: null };
+  assert.equal(assertFinalAcceptancePass(passing), passing);
+  assert.throws(
+    () => assertFinalAcceptancePass(passing, {
+      exceptions: [{ text: "late uncaught exception" }],
+    }),
+    /uncaught page exception/,
+  );
+  assert.throws(
+    () => assertFinalAcceptancePass(passing, {
+      consoleMessages: [{ type: "error", values: ["late console error"] }],
+    }),
+    /console error/,
+  );
+  assert.equal(
+    assertFinalAcceptancePass(passing, {
+      consoleMessages: [{ type: "log", values: ["non-fatal diagnostic"] }],
+    }),
+    passing,
+  );
+});
+
+test("input queue acknowledgements and frames cannot replace desktop proof", () => {
+  let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  state = advanceAcceptance(state, { type: "ready" }, 1);
+  state = advanceAcceptance(state, release(), 2);
+  state = advanceAcceptance(state, { type: "guestreport", report: report() }, 3);
+  state = advanceAcceptance(state, {
+    type: "inputaccepted",
+    readinessProbe: false,
+    event: { kind: "key", scancode: 227, down: true },
+  }, 4);
+  state = advanceAcceptance(state, frame(10), 5);
+  state = advanceAcceptance(state, frame(11), 6);
+  state = advanceAcceptance(state, frame(12), 7);
+  state = advanceAcceptance(state, metrics(), 8);
+  assert.equal(state.stage, "waiting-desktop-proof");
+  assert.equal(state.desktopProof, null);
+  assert.equal(state.laterFrame, null);
+});
+
+test("acceptance rejects wrong, duplicate, unobserved, and unchanged proof evidence", () => {
+  let wrongRelease = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  wrongRelease = advanceAcceptance(wrongRelease, { type: "ready" }, 1);
+  wrongRelease = advanceAcceptance(wrongRelease, release(), 2);
+  wrongRelease = advanceAcceptance(wrongRelease, { type: "guestreport", report: report() }, 3);
+  wrongRelease = advanceAcceptance(wrongRelease, frame(10), 4);
+  wrongRelease = advanceAcceptance(wrongRelease, frame(11), 5);
+  wrongRelease = advanceAcceptance(
+    wrongRelease,
+    desktopProof({ artifactManifestSha256: "d".repeat(64) }),
+    6,
+  );
+  assert.equal(wrongRelease.stage, "failed");
+  assert.match(wrongRelease.failure.reason, /another release/);
+
+  let unchangedVisual = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  unchangedVisual = advanceAcceptance(unchangedVisual, { type: "ready" }, 1);
+  unchangedVisual = advanceAcceptance(unchangedVisual, release(), 2);
+  unchangedVisual = advanceAcceptance(unchangedVisual, { type: "guestreport", report: report() }, 3);
+  unchangedVisual = advanceAcceptance(unchangedVisual, frame(10), 4);
+  unchangedVisual = advanceAcceptance(unchangedVisual, frame(11), 5);
+  unchangedVisual = advanceAcceptance(
+    unchangedVisual,
+    desktopProof({ changedPixels: 0, dominantPixels: 576 }),
+    6,
+  );
+  assert.equal(unchangedVisual.stage, "failed");
+  assert.match(unchangedVisual.failure.reason, /malformed/);
+
+  let impossibleDominant = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  impossibleDominant = advanceAcceptance(impossibleDominant, { type: "ready" }, 1);
+  impossibleDominant = advanceAcceptance(impossibleDominant, release(), 2);
+  impossibleDominant = advanceAcceptance(impossibleDominant, { type: "guestreport", report: report() }, 3);
+  impossibleDominant = advanceAcceptance(impossibleDominant, frame(10), 4);
+  impossibleDominant = advanceAcceptance(impossibleDominant, frame(11), 5);
+  impossibleDominant = advanceAcceptance(
+    impossibleDominant,
+    desktopProof({ dominantPixels: 0 }),
+    6,
+  );
+  assert.equal(impossibleDominant.stage, "failed");
+  assert.match(impossibleDominant.failure.reason, /malformed/);
+
+  let duplicate = stateThroughProof();
+  duplicate = advanceAcceptance(duplicate, desktopProof(), 7);
+  assert.equal(duplicate.stage, "failed");
+  assert.match(duplicate.failure.reason, /more than once/);
+
+  let unobserved = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
+  unobserved = advanceAcceptance(unobserved, { type: "ready" }, 1);
+  unobserved = advanceAcceptance(unobserved, release(), 2);
+  unobserved = advanceAcceptance(unobserved, { type: "guestreport", report: report() }, 3);
+  unobserved = advanceAcceptance(unobserved, desktopProof(), 4);
+  assert.equal(unobserved.stage, "failed");
+  assert.match(unobserved.failure.reason, /observed after/);
+
+  let staleFrame = stateThroughProof();
+  staleFrame = advanceAcceptance(staleFrame, frame(11), 7);
+  assert.equal(staleFrame.stage, "failed");
+  assert.match(staleFrame.failure.reason, /duplicated|backwards/);
+});
+
+test("active iframe nonce/source binding rejects replayed desktop proof", () => {
+  const source = {};
+  const data = {
+    channel: "omarchy-vm-host",
+    version: 1,
+    runNonce: RUN_NONCE,
+    ...desktopProof(),
+  };
+  const expected = {
+    expectedOrigin: "https://try.example",
+    expectedSource: source,
+    expectedNonce: RUN_NONCE,
+  };
+  assert.deepEqual(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source, data },
+      expected,
+    ),
+    data,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      {
+        origin: "https://try.example",
+        source,
+        data: { ...data, runNonce: "replayed_run_nonce_123456789" },
+      },
+      expected,
+    ),
+    null,
+  );
+  assert.equal(
+    acceptVmHostMessage(
+      { origin: "https://try.example", source: {}, data },
+      expected,
+    ),
+    null,
+  );
+});
+
+test("acceptance times out while waiting for causal desktop proof", () => {
 
   const timedOut = checkAcceptanceTimeout(
     createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE }),
@@ -148,12 +375,35 @@ test("acceptance contract fails closed on weak pixels, uncorrelated input, and t
       hostMs: 30,
       releaseMs: 30,
       reportMs: 30,
-      firstFrameAndInputMs: 30,
-      terminalInputMs: 30,
+      desktopProofMs: 30,
       laterFrameMs: 30,
     },
   );
   assert.equal(timedOut.stage, "failed");
+});
+
+test("final PNG rejects the 99.986%-uniform QEMU8 failure shape", () => {
+  const total = 1600 * 900;
+  const varied = 202;
+  const qemu8Failure = rgbPng(1600, 900, (index) => {
+    if (index < total - varied) return [17, 17, 17];
+    const cursorPixel = index - (total - varied) + 1;
+    return [cursorPixel & 255, (cursorPixel * 17) & 255, (cursorPixel * 29) & 255];
+  });
+  assert.throws(
+    () => inspectScreenshotPng(qemu8Failure),
+    /visually degenerate.*99\.986%/,
+  );
+
+  const threshold = rgbPng(100, 100, (index) =>
+    index < 9_500
+      ? [17, 17, 17]
+      : [index & 255, (index * 3) & 255, (index * 5) & 255],
+  );
+  assert.equal(
+    inspectScreenshotPng(threshold, 100, 100).dominantColorFraction,
+    0.95,
+  );
 });
 
 test("CLI and release URL parsing reject ambiguous or remote inputs", () => {
@@ -236,6 +486,13 @@ test("artifact manifest inspection and proxy preserve exact bounded rootfs reque
   const harness = await fetch(`${proxyOrigin}/proofs/browser-acceptance/harness.html`);
   assert.equal(harness.status, 200);
   assert.equal(harness.headers.get("cross-origin-embedder-policy"), "require-corp");
+  const desktopProofModule = await fetch(`${proxyOrigin}/vm/desktop-proof.mjs`);
+  assert.equal(desktopProofModule.status, 200);
+  assert.match(await desktopProofModule.text(), /export function isDesktopProof/);
+  assert.equal(
+    (await fetch(`${proxyOrigin}/public/vm/desktop-proof.mjs`)).status,
+    200,
+  );
   assert.equal(await fetch(`${base}artifact-manifest.json`).then((response) => response.text()), manifestBody.toString());
   assert.equal(await fetch(`${base}artifact-manifest.json`).then((response) => response.text()), manifestBody.toString());
 

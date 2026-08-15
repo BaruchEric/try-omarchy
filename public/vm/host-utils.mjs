@@ -1,3 +1,8 @@
+import {
+  copyDesktopProof,
+  DESKTOP_PROOF_SAMPLE_PIXELS,
+} from "./desktop-proof.mjs";
+
 export const EXPECTED_UPSTREAM = Object.freeze({
   repository: "https://github.com/basecamp/omarchy",
   commit: "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
@@ -244,6 +249,17 @@ export function validateRuntimeRelease(value, expected) {
   };
 }
 
+export function normalizeRuntimeDesktopProof(value, expectedReleaseId) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["type", "proof"])) ||
+    value.type !== "desktopproof"
+  ) {
+    return null;
+  }
+  return copyDesktopProof(value.proof, expectedReleaseId);
+}
+
 export function normalizeRuntimeGuestFrame(value) {
   if (
     !isRecord(value) ||
@@ -264,16 +280,12 @@ export function normalizeRuntimeGuestFrame(value) {
     value.source !== "qemu-guest" ||
     !Number.isSafeInteger(value.sequence) ||
     value.sequence <= 0 ||
-    !Number.isInteger(value.guestWidth) ||
-    value.guestWidth <= 0 ||
-    !Number.isInteger(value.guestHeight) ||
-    value.guestHeight <= 0 ||
+    value.guestWidth !== 1600 ||
+    value.guestHeight !== 900 ||
     typeof value.timestamp !== "number" ||
     !Number.isFinite(value.timestamp) ||
     value.timestamp < 0 ||
-    !Number.isSafeInteger(value.sampledPixels) ||
-    value.sampledPixels <= 0 ||
-    value.sampledPixels > 1600 * 900 ||
+    value.sampledPixels !== DESKTOP_PROOF_SAMPLE_PIXELS ||
     !Number.isSafeInteger(value.nonBlackPixels) ||
     value.nonBlackPixels < 0 ||
     value.nonBlackPixels > value.sampledPixels

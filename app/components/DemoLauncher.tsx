@@ -35,10 +35,21 @@ type GuestReport = Record<string, unknown> & {
 type GuestFrame = {
   sequence: number;
   source: string;
-  guestWidth?: number;
-  guestHeight?: number;
+  guestWidth: number;
+  guestHeight: number;
   sampledPixels: number;
   nonBlackPixels: number;
+};
+
+type DesktopProof = {
+  schemaVersion: 1;
+  artifactManifestSha256: string;
+  challengeSha256: string;
+  baselineSequence: number;
+  responseSequence: number;
+  sampledPixels: number;
+  changedPixels: number;
+  dominantPixels: number;
 };
 
 type ReleaseIdentity = {
@@ -143,6 +154,18 @@ export function DemoLauncher() {
       setSerialLines((lines) => appendDiagnosticLine(lines, value));
     }
 
+    function latchDesktopTerminal(kind: string, reason: unknown) {
+      desktopEvidenceRef.current = advanceDesktopEvidence(
+        desktopEvidenceRef.current,
+        {
+          type: "terminal",
+          kind,
+          reason: String(reason ?? "The VM session ended."),
+        },
+      );
+      setGuestReady(false);
+    }
+
     function handleHostMessage(event: MessageEvent) {
       const activeRun = activeRunRef.current;
       const hostWindow = iframeRef.current?.contentWindow;
@@ -165,10 +188,11 @@ export function DemoLauncher() {
         case "phase": {
           const nextPhase = message.phase as string;
           setPhase(nextPhase);
-          if (nextPhase === "failed") {
+          if (nextPhase === "failed" || nextPhase === "exited") {
             const failure = normalizeRuntimeError(
-              message.reason ?? "The emulator reported a failed phase.",
+              message.reason ?? `The emulator entered ${nextPhase}.`,
             );
+            latchDesktopTerminal(nextPhase, failure.technical);
             setRuntimeError(failure);
             addHostDiagnostic(`[runtime] ${failure.technical}`);
           }
@@ -188,6 +212,7 @@ export function DemoLauncher() {
           });
           desktopEvidenceRef.current = next;
           if (next.release !== release) {
+            setGuestReady(false);
             addHostDiagnostic(
               "[release] Rejected a release identity that did not match the compile-time artifact-manifest SHA-256 and pinned Omarchy source.",
             );
@@ -213,7 +238,7 @@ export function DemoLauncher() {
             setGuestReady(true);
             setRuntimeError(null);
             addHostDiagnostic(
-              "[guest] Release-matched report, QEMU input acceptance, and a later non-black 1600x900 guest frame verified; session is ready.",
+              "[guest] Release-matched report, guest-acknowledged desktop transition, and a later 1600x900 guest frame verified; session is ready.",
             );
             hostWindow.postMessage(
               createVmHostCommand("focus", activeRun.nonce),
@@ -236,6 +261,7 @@ export function DemoLauncher() {
           });
           desktopEvidenceRef.current = next;
           if (next.report !== report) {
+            setGuestReady(false);
             addHostDiagnostic(
               "[guest] Rejected an authentic-looking report because its repository, commit, version, or source-tree SHA-256 did not exactly match the verified active release.",
             );
@@ -244,28 +270,37 @@ export function DemoLauncher() {
           setGuestReport(report as GuestReport);
           setGuestReady(false);
           addHostDiagnostic(
-            "[guest] Authenticity report matched the active release; probing the real QEMU input bridge, then waiting for a later non-black 1600x900 frame.",
+            "[guest] Authenticity report matched the active release; waiting for the Worker's guest-acknowledged desktop-transition proof.",
+          );
+          break;
+        }
+        case "desktopproof": {
+          const proof = message.proof as DesktopProof;
+          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
+            type: "desktopproof",
+            proof,
+          });
+          desktopEvidenceRef.current = next;
+          setGuestReady(false);
+          if (next.desktopProof !== proof) {
+            addHostDiagnostic(
+              "[guest] Rejected duplicate, out-of-order, malformed, or release-mismatched desktop proof.",
+            );
+            break;
+          }
+          addHostDiagnostic(
+            `[guest] Guest-acknowledged desktop proof verified (${proof.changedPixels}/${proof.sampledPixels} changed samples); waiting for a frame later than sequence ${proof.responseSequence}.`,
           );
           break;
         }
         case "inputaccepted": {
-          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
-            type: "inputaccepted",
-            input: message.event,
-            readinessProbe: message.readinessProbe,
-          });
-          const acceptedProbe =
-            message.readinessProbe === true &&
-            next.input === message.event;
-          desktopEvidenceRef.current = next;
-          if (acceptedProbe) {
-            addHostDiagnostic(
-              "[input] QEMU accepted the exact harmless readiness probe; waiting for a still-later guest framebuffer presentation.",
-            );
-          }
+          addHostDiagnostic(
+            `[input] QEMU queued a ${String(message.event.kind)} event (diagnostic only).`,
+          );
           break;
         }
         case "reload":
+          latchDesktopTerminal("reload", message.reason);
           addHostDiagnostic(
             `[runtime] ${message.reason} Use Reset to replace this isolated VM document.`,
           );
@@ -274,6 +309,7 @@ export function DemoLauncher() {
           const failure = normalizeRuntimeError(
             message.technical ?? message.message,
           );
+          latchDesktopTerminal("error", failure.technical);
           setRuntimeError(failure);
           setPhase("error");
           addHostDiagnostic(`[host] ${failure.technical}`);

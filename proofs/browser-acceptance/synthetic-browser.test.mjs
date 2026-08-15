@@ -58,7 +58,6 @@ const report = ${JSON.stringify(authenticFixtureReport())};
 const rootfsSha256 = ${JSON.stringify(rootfsSha256)};
 let canvas;
 let sequence = 0;
-let terminalEvents = 0;
 
 function draw(second = false) {
   const context = canvas.getContext("2d");
@@ -105,6 +104,22 @@ async function start(data) {
   postMessage({ type: "guestreport", report });
   draw();
   guestFrame();
+  draw(true);
+  guestFrame();
+  postMessage({
+    type: "desktopproof",
+    proof: {
+      schemaVersion: 1,
+      artifactManifestSha256,
+      challengeSha256: "c".repeat(64),
+      baselineSequence: 1,
+      responseSequence: 2,
+      sampledPixels: 576,
+      changedPixels: 304,
+      dominantPixels: 272,
+    },
+  });
+  setTimeout(guestFrame, 10);
 }
 
 function input(event) {
@@ -114,13 +129,8 @@ function input(event) {
   } else {
     const scancodes = { MetaLeft: 227, Enter: 40 };
     accepted = { kind: "key", scancode: scancodes[event.code], down: event.down };
-    terminalEvents += 1;
   }
   postMessage({ type: "inputaccepted", event: accepted });
-  if (terminalEvents === 4) {
-    draw(true);
-    setTimeout(guestFrame, 10);
-  }
 }
 
 self.onmessage = (message) => {
@@ -210,5 +220,9 @@ test("synthetic browser smoke exercises CDP, production iframe, evidence, and sc
   assert.equal(evidence.screenshot.width, 1600);
   assert.equal(requests.violations.length, 0);
   assert.match(hashes.acceptanceSources["public/vm/host.mjs"].sha256, /^[a-f0-9]{64}$/);
+  assert.match(
+    hashes.acceptanceSources["public/vm/desktop-proof.mjs"].sha256,
+    /^[a-f0-9]{64}$/,
+  );
   assert.equal(hashes.release.artifactManifestSha256, evidence.contract.releaseId);
 });

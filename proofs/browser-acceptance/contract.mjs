@@ -8,23 +8,15 @@ import {
   isActiveReleaseIdentity,
   isGuestDisplayFrame,
 } from "../../app/components/vm-ui-state.mjs";
+import {
+  DESKTOP_PROOF_SAMPLE_PIXELS,
+  isDesktopProof,
+} from "../../public/vm/desktop-proof.mjs";
 
 export { acceptVmHostMessage, createVmHostCommand };
 
-export const ACCEPTANCE_SCHEMA_VERSION = 1;
-export const FRAME_SAMPLE_PIXELS = 32 * 18;
-export const TERMINAL_INPUT_SEQUENCE = Object.freeze([
-  Object.freeze({ kind: "key", scancode: 227, down: true }),
-  Object.freeze({ kind: "key", scancode: 40, down: true }),
-  Object.freeze({ kind: "key", scancode: 40, down: false }),
-  Object.freeze({ kind: "key", scancode: 227, down: false }),
-]);
-export const READINESS_INPUT = Object.freeze({
-  kind: "pointer",
-  x: 16384,
-  y: 16384,
-  buttons: 0,
-});
+export const ACCEPTANCE_SCHEMA_VERSION = 2;
+export const FRAME_SAMPLE_PIXELS = DESKTOP_PROOF_SAMPLE_PIXELS;
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const NONCE = /^[A-Za-z0-9_-]{20,128}$/;
@@ -32,14 +24,6 @@ const TERMINAL_STAGES = new Set(["passed", "failed"]);
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function sameRecord(actual, expected) {
-  return (
-    isRecord(actual) &&
-    Object.keys(actual).length === Object.keys(expected).length &&
-    Object.entries(expected).every(([key, value]) => actual[key] === value)
-  );
 }
 
 function validMetrics(metrics) {
@@ -83,7 +67,7 @@ function withStage(state, stage, now) {
 }
 
 export function failAcceptance(state, reason, now) {
-  if (TERMINAL_STAGES.has(state.stage)) return state;
+  if (state.stage === "failed") return state;
   const failed = withStage(state, "failed", now);
   return {
     ...failed,
@@ -96,21 +80,12 @@ function nextWaitingStage(state) {
   if (!state.hostReady) return "waiting-host";
   if (!state.release) return "waiting-release";
   if (!state.report) return "waiting-report";
-  if (!state.readinessInput || !state.firstFrame) return "waiting-first-frame-and-input";
-  if (!state.terminalCommand) return "ready-to-send-terminal";
-  if (state.terminalInputs.length !== TERMINAL_INPUT_SEQUENCE.length) {
-    return "waiting-terminal-input";
-  }
+  if (!state.desktopProof) return "waiting-desktop-proof";
   return "waiting-later-frame";
 }
 
 function checkPass(state, now) {
-  if (
-    !state.metrics ||
-    !state.firstFrame ||
-    !state.terminalInputComplete ||
-    !state.laterFrame
-  ) {
+  if (!state.metrics || !state.desktopProof || !state.laterFrame) {
     return withStage(state, nextWaitingStage(state), now);
   }
   const passed = withStage(state, "passed", now);
@@ -118,11 +93,19 @@ function checkPass(state, now) {
 }
 
 export function createAcceptanceState({ releaseId, runNonce, now = 0 } = {}) {
-  if (typeof releaseId !== "string" || !SHA256.test(releaseId) || /^0{64}$/.test(releaseId)) {
-    throw new TypeError("Acceptance requires a non-zero lowercase 64-hex release ID.");
+  if (
+    typeof releaseId !== "string" ||
+    !SHA256.test(releaseId) ||
+    /^0{64}$/.test(releaseId)
+  ) {
+    throw new TypeError(
+      "Acceptance requires a non-zero lowercase 64-hex release ID.",
+    );
   }
   if (typeof runNonce !== "string" || !NONCE.test(runNonce)) {
-    throw new TypeError("Acceptance requires a valid production-host run nonce.");
+    throw new TypeError(
+      "Acceptance requires a valid production-host run nonce.",
+    );
   }
   return {
     schemaVersion: ACCEPTANCE_SCHEMA_VERSION,
@@ -138,48 +121,84 @@ export function createAcceptanceState({ releaseId, runNonce, now = 0 } = {}) {
     release: null,
     report: null,
     metrics: null,
-    readinessInput: null,
-    firstFrame: null,
-    terminalCommand: null,
-    terminalInputs: [],
-    terminalInputComplete: null,
+    desktopProof: null,
+    baselineFrame: null,
+    responseFrame: null,
     laterFrame: null,
+    preProofFrames: [],
     lastFrameSequence: 0,
     frameCount: 0,
     nonQualifyingFrameCount: 0,
+    inputDiagnostics: [],
     phases: [],
     serialTail: [],
-    transitions: [Object.freeze({ ordinal: 0, monotonicMs: now, stage: "waiting-host" })],
+    transitions: [
+      Object.freeze({ ordinal: 0, monotonicMs: now, stage: "waiting-host" }),
+    ],
     failure: null,
   };
 }
 
-export function markTerminalCommandSent(state, now) {
-  if (state.stage !== "ready-to-send-terminal" || state.terminalCommand) {
-    return failAcceptance(state, "Terminal command was sent outside its authenticated acceptance window.", now);
-  }
-  const eventOrdinal = state.eventOrdinal + 1;
-  const terminalCommand = milestone(eventOrdinal, now, Object.freeze({ type: "terminal" }));
-  return withStage({ ...state, eventOrdinal, terminalCommand }, "waiting-terminal-input", now);
-}
-
 export function advanceAcceptance(state, message, now) {
-  if (TERMINAL_STAGES.has(state.stage)) return state;
+  if (state.stage === "failed") return state;
   if (!isRecord(message) || typeof message.type !== "string") {
-    return failAcceptance(state, "The production host emitted a non-object event.", now);
+    return failAcceptance(
+      state,
+      "The production host emitted a non-object event.",
+      now,
+    );
+  }
+
+  if (state.stage === "passed") {
+    const terminalPhase =
+      message.type === "phase" &&
+      ["failed", "exited"].includes(message.phase);
+    if (
+      terminalPhase ||
+      [
+        "error",
+        "reload",
+        "ready",
+        "release",
+        "guestreport",
+        "desktopproof",
+      ].includes(message.type)
+    ) {
+      return failAcceptance(
+        { ...state, eventOrdinal: state.eventOrdinal + 1 },
+        `Production host emitted ${message.type} after the acceptance contract had completed.`,
+        now,
+      );
+    }
+    return state;
   }
 
   const ordinal = state.eventOrdinal + 1;
   let next = { ...state, eventOrdinal: ordinal };
 
   if (message.type === "error" || message.type === "reload") {
-    const detail = message.technical ?? message.message ?? message.reason ?? message.type;
-    return failAcceptance(next, `Production host ${message.type}: ${String(detail)}`, now);
+    const detail =
+      message.technical ?? message.message ?? message.reason ?? message.type;
+    return failAcceptance(
+      next,
+      `Production host ${message.type}: ${String(detail)}`,
+      now,
+    );
   }
 
   if (message.type === "ready") {
-    if (state.hostReady) return failAcceptance(next, "Production host emitted ready more than once.", now);
-    next.hostReady = milestone(ordinal, now, Object.freeze({ type: "ready" }));
+    if (state.hostReady) {
+      return failAcceptance(
+        next,
+        "Production host emitted ready more than once.",
+        now,
+      );
+    }
+    next.hostReady = milestone(
+      ordinal,
+      now,
+      Object.freeze({ type: "ready" }),
+    );
     return withStage(next, "waiting-release", now);
   }
 
@@ -189,106 +208,208 @@ export function advanceAcceptance(state, message, now) {
       Object.freeze({ ordinal, monotonicMs: now, phase: message.phase }),
     ].slice(-64);
     if (["failed", "exited"].includes(message.phase)) {
-      return failAcceptance(next, `Runtime entered terminal phase ${message.phase}.`, now);
+      return failAcceptance(
+        next,
+        `Runtime entered terminal phase ${message.phase}.`,
+        now,
+      );
     }
     return next;
   }
 
   if (message.type === "serial") {
-    const serialTail = [
+    next.serialTail = [
       ...state.serialTail,
-      Object.freeze({ ordinal, monotonicMs: now, stream: message.stream, line: message.line }),
-    ];
-    next.serialTail = serialTail.slice(-400);
+      Object.freeze({
+        ordinal,
+        monotonicMs: now,
+        stream: message.stream,
+        line: message.line,
+      }),
+    ].slice(-400);
     return next;
   }
 
   if (message.type === "metrics") {
     if (!validMetrics(message.metrics)) {
-      return failAcceptance(next, "The production canvas was not pixel-perfect 1600x900 at DPR 1.", now);
+      return failAcceptance(
+        next,
+        "The production canvas was not pixel-perfect 1600x900 at DPR 1.",
+        now,
+      );
     }
-    next.metrics = milestone(ordinal, now, Object.freeze({ ...message.metrics }));
+    next.metrics = milestone(
+      ordinal,
+      now,
+      Object.freeze({ ...message.metrics }),
+    );
     return checkPass(next, now);
   }
 
   if (message.type === "release") {
-    if (state.release) return failAcceptance(next, "Production host emitted release identity more than once.", now);
+    if (!state.hostReady) {
+      return failAcceptance(
+        next,
+        "Release identity preceded the active production host boundary.",
+        now,
+      );
+    }
+    if (state.release) {
+      return failAcceptance(
+        next,
+        "Production host emitted release identity more than once.",
+        now,
+      );
+    }
     const release = {
       upstream: message.upstream,
       artifactManifestSha256: message.artifactManifestSha256,
     };
     if (!isActiveReleaseIdentity(release, state.releaseId)) {
-      return failAcceptance(next, "Release identity did not exactly match the supplied manifest digest and pinned Omarchy source.", now);
+      return failAcceptance(
+        next,
+        "Release identity did not exactly match the supplied manifest digest and pinned Omarchy source.",
+        now,
+      );
     }
-    next.release = milestone(ordinal, now, Object.freeze({
-      upstream: Object.freeze({ ...message.upstream }),
-      artifactManifestSha256: message.artifactManifestSha256,
-    }));
+    next.release = milestone(
+      ordinal,
+      now,
+      Object.freeze({
+        upstream: Object.freeze({ ...message.upstream }),
+        artifactManifestSha256: message.artifactManifestSha256,
+      }),
+    );
     return withStage(next, "waiting-report", now);
   }
 
   if (message.type === "guestreport") {
-    if (!state.release) return failAcceptance(next, "Guest report preceded verified release identity.", now);
-    if (state.report) return failAcceptance(next, "Production host emitted guest report more than once.", now);
-    if (!guestReportMatchesRelease(message.report, state.release.value, state.releaseId)) {
-      return failAcceptance(next, "Guest report did not authentically prove the exact verified Omarchy release.", now);
+    if (!state.release) {
+      return failAcceptance(
+        next,
+        "Guest report preceded verified release identity.",
+        now,
+      );
+    }
+    if (state.report) {
+      return failAcceptance(
+        next,
+        "Production host emitted guest report more than once.",
+        now,
+      );
+    }
+    if (
+      !guestReportMatchesRelease(
+        message.report,
+        state.release.value,
+        state.releaseId,
+      )
+    ) {
+      return failAcceptance(
+        next,
+        "Guest report did not authentically prove the exact verified Omarchy release.",
+        now,
+      );
     }
     next.report = milestone(ordinal, now, Object.freeze(message.report));
-    return withStage(next, "waiting-first-frame-and-input", now);
+    return withStage(next, "waiting-desktop-proof", now);
+  }
+
+  if (message.type === "desktopproof") {
+    if (!state.report) {
+      return failAcceptance(
+        next,
+        "Desktop proof preceded the exact guest report.",
+        now,
+      );
+    }
+    if (state.desktopProof) {
+      return failAcceptance(
+        next,
+        "Production host emitted desktop proof more than once.",
+        now,
+      );
+    }
+    if (!isDesktopProof(message.proof, state.releaseId)) {
+      return failAcceptance(
+        next,
+        "Desktop proof was malformed or bound to another release.",
+        now,
+      );
+    }
+    const baselineFrame = state.preProofFrames.find(
+      (frame) => frame.value.sequence === message.proof.baselineSequence,
+    );
+    const responseFrame = state.preProofFrames.find(
+      (frame) => frame.value.sequence === message.proof.responseSequence,
+    );
+    if (
+      !baselineFrame ||
+      !responseFrame ||
+      state.report.ordinal >= baselineFrame.ordinal ||
+      baselineFrame.ordinal >= responseFrame.ordinal ||
+      responseFrame.ordinal >= ordinal
+    ) {
+      return failAcceptance(
+        next,
+        "Desktop proof did not reference ordered guest frames observed after the exact report.",
+        now,
+      );
+    }
+    next.desktopProof = milestone(
+      ordinal,
+      now,
+      Object.freeze({ ...message.proof }),
+    );
+    next.baselineFrame = baselineFrame;
+    next.responseFrame = responseFrame;
+    next.preProofFrames = [];
+    return withStage(next, "waiting-later-frame", now);
   }
 
   if (message.type === "inputaccepted") {
-    if (!state.report) return failAcceptance(next, "Input acceptance preceded the authentic guest report.", now);
-    if (message.readinessProbe === true) {
-      if (state.readinessInput) return failAcceptance(next, "Readiness input was accepted more than once.", now);
-      if (!sameRecord(message.event, READINESS_INPUT)) {
-        return failAcceptance(next, "Readiness input did not match the exact harmless pointer probe.", now);
-      }
-      next.readinessInput = milestone(ordinal, now, Object.freeze({ ...message.event }));
-      return withStage(next, nextWaitingStage(next), now);
-    }
-
-    if (!state.terminalCommand) {
-      return failAcceptance(next, "Uncorrelated guest input was accepted before the terminal command.", now);
-    }
-    const expected = TERMINAL_INPUT_SEQUENCE[state.terminalInputs.length];
-    if (!expected || !sameRecord(message.event, expected)) {
-      return failAcceptance(next, "Terminal input acceptance did not match the exact commanded scancode sequence.", now);
-    }
-    const accepted = milestone(ordinal, now, Object.freeze({ ...message.event }));
-    next.terminalInputs = [...state.terminalInputs, accepted];
-    if (next.terminalInputs.length === TERMINAL_INPUT_SEQUENCE.length) {
-      next.terminalInputComplete = milestone(ordinal, now, Object.freeze({
-        frameSequenceBeforeCompletion: state.lastFrameSequence,
-      }));
-      return withStage(next, "waiting-later-frame", now);
-    }
+    next.inputDiagnostics = [
+      ...state.inputDiagnostics,
+      milestone(ordinal, now, Object.freeze({ ...message.event })),
+    ].slice(-128);
     return next;
   }
 
   if (message.type === "guestframe") {
-    if (!state.release) return failAcceptance(next, "Guest frame preceded verified release identity.", now);
+    if (!state.release) {
+      return failAcceptance(
+        next,
+        "Guest frame preceded verified release identity.",
+        now,
+      );
+    }
     if (message.frame.sequence <= state.lastFrameSequence) {
-      return failAcceptance(next, "Guest frame sequence was duplicated or moved backwards.", now);
+      return failAcceptance(
+        next,
+        "Guest frame sequence was duplicated or moved backwards.",
+        now,
+      );
     }
     next.lastFrameSequence = message.frame.sequence;
     next.frameCount = state.frameCount + 1;
+    const frameMilestone = milestone(
+      ordinal,
+      now,
+      Object.freeze({ ...message.frame }),
+    );
+    if (!state.desktopProof) {
+      next.preProofFrames = [...state.preProofFrames, frameMilestone];
+    }
     if (!validAcceptanceFrame(message.frame)) {
       next.nonQualifyingFrameCount = state.nonQualifyingFrameCount + 1;
       return next;
     }
-    if (!state.report) return next;
-    if (!state.firstFrame) {
-      next.firstFrame = milestone(ordinal, now, Object.freeze({ ...message.frame }));
-      return withStage(next, nextWaitingStage(next), now);
-    }
     if (
-      state.terminalInputComplete &&
-      ordinal > state.terminalInputComplete.ordinal &&
-      message.frame.sequence > state.terminalInputComplete.value.frameSequenceBeforeCompletion &&
-      message.frame.sequence > state.firstFrame.value.sequence
+      state.desktopProof &&
+      ordinal > state.desktopProof.ordinal &&
+      message.frame.sequence > state.desktopProof.value.responseSequence
     ) {
-      next.laterFrame = milestone(ordinal, now, Object.freeze({ ...message.frame }));
+      next.laterFrame = frameMilestone;
       return checkPass(next, now);
     }
     return next;
@@ -302,8 +423,7 @@ export const DEFAULT_TIMEOUTS = Object.freeze({
   hostMs: 30 * 1000,
   releaseMs: 3 * 60 * 1000,
   reportMs: 25 * 60 * 1000,
-  firstFrameAndInputMs: 3 * 60 * 1000,
-  terminalInputMs: 30 * 1000,
+  desktopProofMs: 3 * 60 * 1000,
   laterFrameMs: 2 * 60 * 1000,
 });
 
@@ -312,22 +432,32 @@ export function timeoutForStage(stage, timeouts = DEFAULT_TIMEOUTS) {
     "waiting-host": timeouts.hostMs,
     "waiting-release": timeouts.releaseMs,
     "waiting-report": timeouts.reportMs,
-    "waiting-first-frame-and-input": timeouts.firstFrameAndInputMs,
-    "ready-to-send-terminal": timeouts.terminalInputMs,
-    "waiting-terminal-input": timeouts.terminalInputMs,
+    "waiting-desktop-proof": timeouts.desktopProofMs,
     "waiting-later-frame": timeouts.laterFrameMs,
   };
   return byStage[stage] ?? 0;
 }
 
-export function checkAcceptanceTimeout(state, now, timeouts = DEFAULT_TIMEOUTS) {
+export function checkAcceptanceTimeout(
+  state,
+  now,
+  timeouts = DEFAULT_TIMEOUTS,
+) {
   if (TERMINAL_STAGES.has(state.stage)) return state;
   if (now - state.createdAt > timeouts.totalMs) {
-    return failAcceptance(state, `Acceptance exceeded its ${timeouts.totalMs}ms total timeout.`, now);
+    return failAcceptance(
+      state,
+      `Acceptance exceeded its ${timeouts.totalMs}ms total timeout.`,
+      now,
+    );
   }
   const stageTimeout = timeoutForStage(state.stage, timeouts);
   if (stageTimeout > 0 && now - state.stageStartedAt > stageTimeout) {
-    return failAcceptance(state, `Acceptance stage ${state.stage} exceeded ${stageTimeout}ms.`, now);
+    return failAcceptance(
+      state,
+      `Acceptance stage ${state.stage} exceeded ${stageTimeout}ms.`,
+      now,
+    );
   }
   return state;
 }

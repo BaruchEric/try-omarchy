@@ -25,6 +25,8 @@ const DEFAULT_BROWSER_PATHS = [
   "/usr/bin/chromium-browser",
 ];
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000 + 60 * 1000;
+const PASS_SETTLE_MS = 1_000;
+const FATAL_CONSOLE_TYPES = new Set(["assert", "error"]);
 
 function usage() {
   return `Usage: node proofs/browser-acceptance/run.mjs \\
@@ -161,13 +163,19 @@ function delay(milliseconds) {
 
 async function waitForAcceptance(page, timeoutMs) {
   const started = Date.now();
+  let passingSince = null;
   let last = null;
   while (Date.now() - started <= timeoutMs) {
     last = await evaluate(
       page,
       "globalThis.__omarchyBrowserAcceptance?.snapshot?.() ?? null",
     );
-    if (last?.stage === "passed") return last;
+    if (last?.stage === "passed") {
+      passingSince ??= Date.now();
+      if (Date.now() - passingSince >= PASS_SETTLE_MS) return last;
+    } else {
+      passingSince = null;
+    }
     if (last?.stage === "failed") {
       throw Object.assign(new Error(last.failure?.reason ?? "Browser acceptance failed."), {
         acceptanceSnapshot: last,
@@ -178,6 +186,38 @@ async function waitForAcceptance(page, timeoutMs) {
   throw Object.assign(new Error(`Browser acceptance exceeded the outer ${timeoutMs}ms timeout.`), {
     acceptanceSnapshot: last,
   });
+}
+
+export function assertFinalAcceptancePass(
+  snapshot,
+  { exceptions = [], consoleMessages = [] } = {},
+) {
+  if (snapshot?.stage !== "passed") {
+    const detail = snapshot?.failure?.reason ??
+      `final acceptance stage was ${String(snapshot?.stage ?? "unavailable")}`;
+    throw Object.assign(
+      new Error(`Browser acceptance was revoked before evidence capture completed: ${detail}`),
+      { acceptanceSnapshot: snapshot ?? null },
+    );
+  }
+  if (exceptions.length > 0) {
+    throw Object.assign(
+      new Error("Browser raised an uncaught page exception before final evidence capture."),
+      { acceptanceSnapshot: snapshot },
+    );
+  }
+  const fatalConsoleMessages = consoleMessages.filter((message) =>
+    FATAL_CONSOLE_TYPES.has(message?.type)
+  );
+  if (fatalConsoleMessages.length > 0) {
+    throw Object.assign(
+      new Error(
+        `Browser emitted ${fatalConsoleMessages.length} console error${fatalConsoleMessages.length === 1 ? "" : "s"} before final evidence capture.`,
+      ),
+      { acceptanceSnapshot: snapshot },
+    );
+  }
+  return snapshot;
 }
 
 function hashFileBody(body) {
@@ -288,7 +328,18 @@ export async function runAcceptance(options) {
       exceptions.push(exceptionDetails);
     });
     page.on("Runtime.consoleAPICalled", ({ type, args }) => {
-      consoleMessages.push({ type, values: args?.map(({ value, description }) => value ?? description) ?? [] });
+      consoleMessages.push({
+        source: "runtime-console",
+        type,
+        values: args?.map(({ value, description }) => value ?? description) ?? [],
+      });
+    });
+    page.on("Log.entryAdded", ({ entry }) => {
+      consoleMessages.push({
+        source: "browser-log",
+        type: entry?.level,
+        values: [entry?.text ?? "Browser log entry had no text."],
+      });
     });
     await Promise.all([
       page.send("Page.enable"),
@@ -307,7 +358,6 @@ export async function runAcceptance(options) {
     });
     await page.send("Page.navigate", { url: acceptanceUrl });
     snapshot = await waitForAcceptance(page, options.timeoutMs);
-    if (exceptions.length > 0) throw new Error("Browser raised an uncaught page exception during an otherwise passing run.");
     screenshot = await captureScreenshot(page, true);
     screenshotInspection = inspectScreenshotPng(screenshot);
     await waitForRequestIdle(proxy);
@@ -315,6 +365,11 @@ export async function runAcceptance(options) {
     if (requestSummary.violations.length > 0) {
       throw new Error(`Artifact request gate failed: ${requestSummary.violations.join(" ")}`);
     }
+    snapshot = await evaluate(
+      page,
+      "globalThis.__omarchyBrowserAcceptance?.snapshot?.() ?? null",
+    );
+    assertFinalAcceptancePass(snapshot, { exceptions, consoleMessages });
   } catch (error) {
     failure = error;
     snapshot = error.acceptanceSnapshot ?? snapshot;
