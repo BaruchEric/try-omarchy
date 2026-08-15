@@ -101,21 +101,51 @@ async function fixture() {
   const root = await mkdtemp(path.join(temporaryRoot, "omarchy-promotion-test-"));
   const releaseDirectory = path.join(root, "release-candidate");
   await mkdir(releaseDirectory);
-  const files = new Map([
-    ["rootfs.ext4", Buffer.from("rootfs-authentic-fixture")],
-    ["runtime/qemu.wasm", Buffer.from("wasm-authentic-fixture")],
-  ]);
+  const runtimeManifest = {
+    schemaVersion: 2,
+    runtimeMode: "worker-paged",
+    assets: {
+      module: "runtime/qemu.mjs",
+      hostWorker: "production-worker.mjs",
+      workerInput: "worker-input.mjs",
+      pagedDisk: "paged-disk.mjs",
+      boundedOverlay: "bounded-overlay.mjs",
+      locate: {
+        "qemu-system-x86_64.wasm": "runtime/qemu.wasm",
+        "qemu-system-x86_64.worker.js": "runtime/qemu.worker.js",
+      },
+      firmware: {},
+    },
+    guest: {
+      rootfs: { artifactPath: "rootfs.ext4", mountPath: "/pack/rootfs.ext4" },
+    },
+  };
+  const definitions = [
+    ["rootfs.ext4", "guest-rootfs", "application/vnd.omarchy.ext4", Buffer.from("rootfs-authentic-fixture")],
+    ["runtime/qemu.wasm", "emulator-wasm", "application/wasm", Buffer.from("wasm-authentic-fixture")],
+    ["production-worker.mjs", "host-worker", "text/javascript", Buffer.from("host-worker-fixture")],
+    ["worker-input.mjs", "host-input-bridge", "text/javascript", Buffer.from("input-bridge-fixture")],
+    ["paged-disk.mjs", "paged-disk-adapter", "text/javascript", Buffer.from("paged-disk-fixture")],
+    ["bounded-overlay.mjs", "snapshot-overlay-guard", "text/javascript", Buffer.from("bounded-overlay-fixture")],
+    [
+      "runtime-manifest.json",
+      "emulator-config",
+      "application/json",
+      Buffer.from(`${JSON.stringify(runtimeManifest, null, 2)}\n`),
+    ],
+  ];
+  const files = new Map(definitions.map(([artifactPath, , , bytes]) => [artifactPath, bytes]));
   const artifacts = [];
-  for (const [artifactPath, bytes] of files) {
+  for (const [artifactPath, role, mediaType, bytes] of definitions) {
     const filePath = path.join(releaseDirectory, artifactPath);
     await mkdir(path.dirname(filePath), { recursive: true });
     await writeFile(filePath, bytes);
     artifacts.push({
       path: artifactPath,
-      role: artifactPath === "rootfs.ext4" ? "guest-rootfs" : "emulator-wasm",
+      role,
       bytes: bytes.byteLength,
       sha256: digest(bytes),
-      mediaType: artifactPath.endsWith(".wasm") ? "application/wasm" : "application/vnd.omarchy.ext4",
+      mediaType,
     });
   }
   const manifest = {
@@ -125,9 +155,34 @@ async function fixture() {
   };
   const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(path.join(releaseDirectory, "artifact-manifest.json"), manifestBytes);
-  const result = { artifacts, files, manifest, manifestBytes, releaseDirectory, root };
+  const result = {
+    artifacts,
+    files,
+    manifest,
+    manifestBytes,
+    releaseDirectory,
+    root,
+    runtimeManifest,
+  };
   await writeApprovalFiles(result);
   return result;
+}
+
+async function rewriteRuntimeManifest(fixtureValue) {
+  const bytes = Buffer.from(`${JSON.stringify(fixtureValue.runtimeManifest, null, 2)}\n`);
+  const artifact = fixtureValue.manifest.artifacts.find(({ path: artifactPath }) =>
+    artifactPath === "runtime-manifest.json");
+  artifact.bytes = bytes.byteLength;
+  artifact.sha256 = digest(bytes);
+  fixtureValue.files.set("runtime-manifest.json", bytes);
+  await writeFile(path.join(fixtureValue.releaseDirectory, "runtime-manifest.json"), bytes);
+  await rewriteArtifactManifest(fixtureValue);
+}
+
+async function rewriteArtifactManifest(fixtureValue) {
+  const bytes = Buffer.from(`${JSON.stringify(fixtureValue.manifest, null, 2)}\n`);
+  fixtureValue.manifestBytes = bytes;
+  await writeFile(path.join(fixtureValue.releaseDirectory, "artifact-manifest.json"), bytes);
 }
 
 class FakeStore {
@@ -278,13 +333,88 @@ test("prepares a release only after every artifact size and digest match", async
   const prepared = await prepareRelease(value.releaseDirectory, { concurrency: 2 });
   assert.equal(prepared.releaseId, digest(value.manifestBytes));
   assert.deepEqual(prepared.items.map((item) => item.path), [
+    "bounded-overlay.mjs",
+    "paged-disk.mjs",
+    "production-worker.mjs",
     "rootfs.ext4",
+    "runtime-manifest.json",
     "runtime/qemu.wasm",
+    "worker-input.mjs",
     "artifact-manifest.json",
   ]);
 
   await writeFile(path.join(value.releaseDirectory, "rootfs.ext4"), "Rootfs-authentic-fixture");
   await assert.rejects(prepareRelease(value.releaseDirectory), /SHA-256 does not match/);
+});
+
+test("production promotion requires the exact bounded-overlay contract", async (t) => {
+  await t.test("missing manifest pointer", async () => {
+    const value = await fixture();
+    delete value.runtimeManifest.assets.boundedOverlay;
+    await rewriteRuntimeManifest(value);
+    await assert.rejects(
+      prepareRelease(value.releaseDirectory),
+      /runtime manifest asset boundedOverlay must be bounded-overlay\.mjs/,
+    );
+  });
+
+  await t.test("aliased to the paged disk adapter", async () => {
+    const value = await fixture();
+    value.runtimeManifest.assets.boundedOverlay = value.runtimeManifest.assets.pagedDisk;
+    await rewriteRuntimeManifest(value);
+    await assert.rejects(
+      prepareRelease(value.releaseDirectory),
+      /runtime manifest asset boundedOverlay must be bounded-overlay\.mjs/,
+    );
+  });
+
+  await t.test("missing artifact record", async () => {
+    const value = await fixture();
+    value.manifest.artifacts = value.manifest.artifacts.filter(({ path: artifactPath }) =>
+      artifactPath !== "bounded-overlay.mjs");
+    await rewriteArtifactManifest(value);
+    const store = new FakeStore();
+    await assert.rejects(
+      promoteRelease(promotionOptions(value, store)),
+      /release must record bounded-overlay\.mjs exactly once/,
+    );
+    assert.deepEqual(store.calls, []);
+    assert.deepEqual(store.deploymentCalls, []);
+  });
+
+  await t.test("wrong role", async () => {
+    const value = await fixture();
+    value.manifest.artifacts.find(({ path: artifactPath }) =>
+      artifactPath === "bounded-overlay.mjs").role = "emulator-worker";
+    await rewriteArtifactManifest(value);
+    await assert.rejects(
+      prepareRelease(value.releaseDirectory),
+      /release must record role snapshot-overlay-guard exactly once/,
+    );
+  });
+
+  await t.test("wrong media type", async () => {
+    const value = await fixture();
+    value.manifest.artifacts.find(({ path: artifactPath }) =>
+      artifactPath === "bounded-overlay.mjs").mediaType = "application/octet-stream";
+    await rewriteArtifactManifest(value);
+    await assert.rejects(
+      prepareRelease(value.releaseDirectory),
+      /bounded-overlay\.mjs must use media type text\/javascript/,
+    );
+  });
+
+  await t.test("tampered bytes", async () => {
+    const value = await fixture();
+    await writeFile(
+      path.join(value.releaseDirectory, "bounded-overlay.mjs"),
+      "tampered-overlay-fixture",
+    );
+    await assert.rejects(
+      prepareRelease(value.releaseDirectory),
+      /bounded-overlay\.mjs/,
+    );
+  });
 });
 
 test("symlinked files and artifact or manifest parents are rejected", async (t) => {

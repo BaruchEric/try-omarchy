@@ -7,6 +7,21 @@ path traversal and missing runtime assets, requires an SPDX SBOM, notice
 bundle, and exact modified QEMU source bundle, then promotes one staging
 directory atomically.
 
+The production runtime contract is exact. A schema-2 `worker-paged`
+`runtime-manifest.json` must identify these four distinct JavaScript assets,
+and each path and role must appear exactly once in the artifact manifest:
+
+- `production-worker.mjs` as `host-worker`;
+- `worker-input.mjs` as `host-input-bridge`;
+- `paged-disk.mjs` as `paged-disk-adapter`; and
+- `bounded-overlay.mjs` as `snapshot-overlay-guard`.
+
+Every record must have `text/javascript` media type, a positive byte length,
+and a canonical SHA-256 that matches the copied file. Assembly and promotion
+both enforce this relationship. Removing, aliasing, relabelling, changing the
+media type of, or tampering with the bounded overlay therefore fails before a
+release can be published.
+
 Copy `release-input.example.json` outside the repository's tracked files,
 replace the example source URL with the immutable deployed corresponding-source
 URL, and run:
@@ -66,7 +81,9 @@ node release/promote.mjs \
 The upload path is fail-closed:
 
 1. Every manifest path component must be a real directory/file rather than a
-   symlink. Every byte length and SHA-256 is checked before any storage request.
+   symlink. Every byte length and SHA-256 is checked before any storage request,
+   and the verified runtime manifest is bound again to the exact four
+   production bootstrap/storage records above.
 2. Four exact gate records are verified with Ed25519 keys from a policy whose
    file digest must match `OMARCHY_APPROVAL_POLICY_SHA256`. The all-zero example
    sentinel is always rejected.

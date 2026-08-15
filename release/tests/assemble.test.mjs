@@ -42,6 +42,7 @@ async function fixture() {
     ["production-worker.mjs", "host-worker", "text/javascript", "host-worker-fixture"],
     ["worker-input.mjs", "host-input-bridge", "text/javascript", "input-fixture"],
     ["paged-disk.mjs", "paged-disk-adapter", "text/javascript", "paged-fixture"],
+    ["bounded-overlay.mjs", "snapshot-overlay-guard", "text/javascript", "bounded-overlay-fixture"],
     ["firmware/bios-256k.bin", "firmware", "application/octet-stream", "bios-fixture"],
     ["firmware/vgabios-virtio.bin", "firmware", "application/octet-stream", "vgabios-fixture"],
   ]) {
@@ -56,6 +57,7 @@ async function fixture() {
       hostWorker: "production-worker.mjs",
       workerInput: "worker-input.mjs",
       pagedDisk: "paged-disk.mjs",
+      boundedOverlay: "bounded-overlay.mjs",
       locate: { "qemu-system-x86_64.wasm": "qemu.wasm", "qemu-system-x86_64.worker.js": "qemu.worker.js" },
       firmware: {
         "bios-256k.bin": "firmware/bios-256k.bin",
@@ -146,6 +148,16 @@ test("assembles verified fragments into a validator-clean atomic release", async
   const { manifest } = await assembleRelease(config);
   assert.equal(manifest.product, "Omarchy browser demo");
   assert.equal(manifest.artifacts.find((item) => item.role === "emulator-wasm").mediaType, "application/wasm");
+  assert.deepEqual(
+    manifest.artifacts.filter((item) => item.role === "snapshot-overlay-guard"),
+    [{
+      path: "bounded-overlay.mjs",
+      role: "snapshot-overlay-guard",
+      bytes: Buffer.byteLength("bounded-overlay-fixture"),
+      sha256: digest("bounded-overlay-fixture"),
+      mediaType: "text/javascript",
+    }],
+  );
   assert.equal(manifest.runtime.modified, true);
 
   const result = await verifyArtifactManifest(manifest, {
@@ -181,4 +193,78 @@ test("refuses legacy preload runtimes and missing paged guest artifacts", async 
   manifest.guest.rootfs.artifactPath = "missing-rootfs.ext4";
   await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
   await assert.rejects(assembleRelease(config), /unpackaged guest artifact: missing-rootfs\.ext4/);
+});
+
+test("requires one exact bounded-overlay runtime artifact", async (t) => {
+  await t.test("missing manifest pointer", async () => {
+    const { runtime, config } = await fixture();
+    const manifestPath = path.join(runtime, "runtime-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    delete manifest.assets.boundedOverlay;
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /runtime manifest asset boundedOverlay must be bounded-overlay\.mjs/,
+    );
+  });
+
+  await t.test("aliased storage guard", async () => {
+    const { runtime, config } = await fixture();
+    const manifestPath = path.join(runtime, "runtime-manifest.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.assets.boundedOverlay = manifest.assets.pagedDisk;
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /runtime manifest asset boundedOverlay must be bounded-overlay\.mjs/,
+    );
+  });
+
+  await t.test("missing artifact record", async () => {
+    const { runtime, config } = await fixture();
+    const buildPath = path.join(runtime, "runtime-build.json");
+    const build = JSON.parse(await readFile(buildPath, "utf8"));
+    build.artifacts = build.artifacts.filter(({ path: artifactPath }) =>
+      artifactPath !== "bounded-overlay.mjs");
+    await writeFile(buildPath, `${JSON.stringify(build)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /release must record bounded-overlay\.mjs exactly once/,
+    );
+  });
+
+  await t.test("wrong artifact role", async () => {
+    const { runtime, config } = await fixture();
+    const buildPath = path.join(runtime, "runtime-build.json");
+    const build = JSON.parse(await readFile(buildPath, "utf8"));
+    build.artifacts.find(({ path: artifactPath }) =>
+      artifactPath === "bounded-overlay.mjs").role = "paged-disk-adapter";
+    await writeFile(buildPath, `${JSON.stringify(build)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /release must record role paged-disk-adapter exactly once|release must record role snapshot-overlay-guard exactly once/,
+    );
+  });
+
+  await t.test("wrong artifact media type", async () => {
+    const { runtime, config } = await fixture();
+    const buildPath = path.join(runtime, "runtime-build.json");
+    const build = JSON.parse(await readFile(buildPath, "utf8"));
+    build.artifacts.find(({ path: artifactPath }) =>
+      artifactPath === "bounded-overlay.mjs").mediaType = "application/octet-stream";
+    await writeFile(buildPath, `${JSON.stringify(build)}\n`);
+    await assert.rejects(
+      assembleRelease(config),
+      /bounded-overlay\.mjs must use media type text\/javascript/,
+    );
+  });
+
+  await t.test("tampered artifact bytes", async () => {
+    const { runtime, config } = await fixture();
+    await writeFile(path.join(runtime, "bounded-overlay.mjs"), "tampered-overlay-fixture");
+    await assert.rejects(
+      assembleRelease(config),
+      /artifact (size|digest) changed after fragment creation: bounded-overlay\.mjs/,
+    );
+  });
 });

@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 
 import { verifyReleaseApprovals } from "./approvals.mjs";
 import { R2S3Store } from "./r2-s3-store.mjs";
+import { validateProductionRuntimeContract } from "./runtime-contract.mjs";
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
@@ -182,6 +183,31 @@ async function verifyLocalArtifact(rootIdentity, artifact) {
   return Object.freeze({ ...artifact, filePath });
 }
 
+async function readVerifiedRuntimeManifest(runtimeManifestItem) {
+  invariant(
+    runtimeManifestItem.role === "emulator-config",
+    "runtime-manifest.json must use role emulator-config",
+  );
+  invariant(
+    runtimeManifestItem.mediaType === "application/json",
+    "runtime-manifest.json must use media type application/json",
+  );
+  const bytes = await readFile(runtimeManifestItem.filePath);
+  invariant(
+    bytes.byteLength === runtimeManifestItem.bytes,
+    "runtime-manifest.json size changed after artifact verification",
+  );
+  invariant(
+    createHash("sha256").update(bytes).digest("hex") === runtimeManifestItem.sha256,
+    "runtime-manifest.json digest changed after artifact verification",
+  );
+  try {
+    return JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    throw new Error(`runtime-manifest.json is not valid JSON: ${error.message}`);
+  }
+}
+
 function metadataFor(item) {
   return Object.freeze({
     httpMetadata: Object.freeze({
@@ -335,6 +361,12 @@ export async function prepareRelease(releaseDirectory, { concurrency = DEFAULT_C
     concurrency,
     (artifact) => verifyLocalArtifact(rootIdentity, artifact),
   );
+  const runtimeManifestItem = verifiedArtifacts.find(
+    (artifact) => artifact.path === "runtime-manifest.json",
+  );
+  invariant(runtimeManifestItem, "artifact manifest must package runtime-manifest.json");
+  const runtimeManifest = await readVerifiedRuntimeManifest(runtimeManifestItem);
+  validateProductionRuntimeContract(runtimeManifest, verifiedArtifacts);
   const manifestItem = Object.freeze({
     path: MANIFEST_NAME,
     role: "artifact-manifest",

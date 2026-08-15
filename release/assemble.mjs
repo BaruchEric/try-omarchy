@@ -14,6 +14,8 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { validateProductionRuntimeContract } from "./runtime-contract.mjs";
+
 const REQUIRED_LICENSE_COMPONENTS = new Set(["omarchy", "qemu-wasm", "linux"]);
 const SHA256 = /^[0-9a-f]{64}$/i;
 const BUILDER_DIGEST = /^sha256:[0-9a-f]{64}$/i;
@@ -113,17 +115,9 @@ function validateLicenses(licenses) {
   }
 }
 
-function validateRuntimeAssets(runtimeManifest, paths) {
-  invariant(
-    runtimeManifest?.schemaVersion === 2 && runtimeManifest?.runtimeMode === "worker-paged",
-    "runtime manifest must use schema 2 worker-paged mode",
-  );
+function validateRuntimeAssets(runtimeManifest, artifacts, paths) {
+  validateProductionRuntimeContract(runtimeManifest, artifacts);
   const assets = runtimeManifest?.assets;
-  invariant(isRecord(assets), "runtime manifest is missing assets");
-  invariant(
-    !("preload" in assets) && !("data" in assets),
-    "worker-paged runtime must not package preload or data assets",
-  );
   invariant(isRecord(assets.locate), "runtime manifest is missing generated module assets");
   invariant(isRecord(assets.firmware), "runtime manifest is missing firmware assets");
   const required = [
@@ -131,6 +125,7 @@ function validateRuntimeAssets(runtimeManifest, paths) {
     assets.hostWorker,
     assets.workerInput,
     assets.pagedDisk,
+    assets.boundedOverlay,
     ...Object.values(assets.locate),
     ...Object.values(assets.firmware),
   ];
@@ -233,7 +228,7 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
       paths.add(artifactPath);
     }
 
-    validateRuntimeAssets(runtimeManifest, paths);
+    validateRuntimeAssets(runtimeManifest, artifacts, paths);
     for (const license of config.licenses) {
       invariant(paths.has(safeRelativePath(license.noticePath)), `license notice is not packaged: ${license.noticePath}`);
     }
