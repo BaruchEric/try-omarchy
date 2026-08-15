@@ -169,6 +169,7 @@ export function hibernationKernelCommandLine(
     `resume=UUID=${swapUuid}`,
     "ignore_loglevel",
     "hibernate.compressor=lzo",
+    `omarchy.hibernate_swap_uuid=${swapUuid}`,
   ].join(" ");
 }
 

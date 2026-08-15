@@ -121,6 +121,9 @@ serve-full-virgl-webgl2:
 serve-full-virgl-webgl2-tcg-baseline-metrics:
 	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_BASELINE_OUTPUT)" --guest-root ../guest/dist --port 8096
 
+serve-full-virgl-webgl2-tcg-bounded-clock:
+	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_CLOCK_OUTPUT)" --guest-root ../guest/dist --port 8099
+
 serve-full-virgl-webgl2-tcg-threshold-750-4vcpu:
 	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_750_4VCPU_OUTPUT)" --guest-root ../guest/dist --port 8097
 

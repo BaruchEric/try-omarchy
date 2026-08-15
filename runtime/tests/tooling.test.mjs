@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
+  inspectWebgl2ArtifactPlumbing,
   parseImportedMemories,
   verifyCheckpointWasmIdentity,
 } from "../scripts/verify-runtime-artifacts.mjs";
@@ -485,6 +486,43 @@ test("artifact verifier binds checkpoint metadata to the exact browser QEMU Wasm
       checkpoint: { identity: { browserQemuWasmSha256: "f".repeat(64) } },
     }, wasm),
     /different browser QEMU Wasm binary/,
+  );
+});
+
+test("artifact verifier binds WebGL2 loader calls to the Wasm cadence marker", () => {
+  const moduleSource = [
+    'canvas.getContext("webgl2",webGLContextAttributes)',
+    "GLctx.blitFramebuffer(0,0,1,1,0,0,1,1,0,0)",
+    "GLctx.drawBuffers(bufArray)",
+  ].join(";");
+  const wasm = Buffer.from("wasm fixture webgl2-present-cadence");
+  assert.deepEqual(inspectWebgl2ArtifactPlumbing(moduleSource, wasm), {
+    webgl2Context: true,
+    framebufferBlit: true,
+    drawBuffers: true,
+    presentCadence: true,
+  });
+
+  for (const missing of [
+    'canvas.getContext("webgl2",webGLContextAttributes)',
+    "GLctx.blitFramebuffer(",
+    "GLctx.drawBuffers(",
+  ]) {
+    assert.equal(
+      Object.values(
+        inspectWebgl2ArtifactPlumbing(moduleSource.replace(missing, "missing("), wasm),
+      ).every(Boolean),
+      false,
+      missing,
+    );
+  }
+  assert.equal(
+    Object.values(inspectWebgl2ArtifactPlumbing(
+      `${moduleSource};webgl2-present-cadence`,
+      Buffer.from("wasm fixture without cadence"),
+    )).every(Boolean),
+    false,
+    "the C cadence marker must be present in Wasm bytes, not merely JavaScript",
   );
 });
 

@@ -169,6 +169,7 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   ]);
   assert.match(makefile, /build-virgl-webgl2-tcg-bounded-clock:/);
   assert.match(makefile, /package-virgl-webgl2-tcg-bounded-clock:/);
+  assert.match(makefile, /serve-full-virgl-webgl2-tcg-bounded-clock:/);
   assert.match(makefile, /VIRGL_WEBGL2_TCG_CLOCK_OUTPUT/);
   assert.match(buildScript, /tcg_experiment" == "1500-clock"/);
   assert.match(buildScript, /qemu-wasm-tcg-bounded-clock-cache\.patch/);

@@ -52,6 +52,7 @@ function targetCommandLine(swapUuid = SWAP_UUID) {
     "root=/dev/vda", "rw", "rootwait", "console=tty0", "console=ttyS0,115200n8", "loglevel=4",
     "systemd.show_status=false", "rd.systemd.show_status=false", "mitigations=off", "nowatchdog",
     "omarchy.web_demo=1", `resume=UUID=${swapUuid}`, "ignore_loglevel", "hibernate.compressor=lzo",
+    `omarchy.hibernate_swap_uuid=${swapUuid}`,
   ].join(" ");
 }
 
@@ -410,6 +411,13 @@ test("hibernation resume gate accepts only ordered kernel proof plus the nonce-b
 });
 
 test("hibernation resume gate never exposes nonce-bearing serial input in failures", async () => {
+  const enterLine = `OMARCHY_HIBERNATION_ENTER ${JSON.stringify({
+    schemaVersion: 1,
+    nonce: NONCE,
+    sourceBootId: SOURCE_BOOT_ID,
+    swapUuid: SWAP_UUID,
+    gpuBoundAtHibernate: false,
+  })}`;
   const markerLine = `OMARCHY_HIBERNATION_REPORT ${JSON.stringify(resumeMarker())}`;
   const rendererLine = `OMARCHY_RENDERER_REPORT ${JSON.stringify({
     schemaVersion: 1,
@@ -456,6 +464,7 @@ test("hibernation resume gate never exposes nonce-bearing serial input in failur
     assert.equal(Object.hasOwn(failures[0], "details"), false);
     assert.equal(gate.handleSerialLine(markerLine), true);
     assert.equal(gate.handleSerialLine(rendererLine), true);
+    assert.equal(gate.handleSerialLine(enterLine), true);
     assert.equal(
       failures.length,
       1,
@@ -463,6 +472,7 @@ test("hibernation resume gate never exposes nonce-bearing serial input in failur
     );
   };
 
+  await assertSanitizedFailure((gate) => gate.handleSerialLine(enterLine));
   await assertSanitizedFailure((gate) => gate.handleSerialLine(markerLine));
   await assertSanitizedFailure((gate) => gate.handleSerialLine(
     `PM: Image signature found, resuming ${markerLine}`,
@@ -493,11 +503,11 @@ test("hibernation resume gate never exposes nonce-bearing serial input in failur
     scope,
     onFailure: (error) => idleFailures.push(error),
   });
-  assert.equal(idle.handleSerialLine(markerLine), true);
+  assert.equal(idle.handleSerialLine(enterLine), true);
   await waitForFailure(idle);
   assert.equal(idleFailures.length, 1);
   assert.equal(JSON.stringify(serializeError(idleFailures[0])).includes(NONCE), false);
-  assert.equal(idle.handleSerialLine(markerLine), true);
+  assert.equal(idle.handleSerialLine(enterLine), true);
   assert.equal(idleFailures.length, 1);
 });
 
@@ -647,9 +657,10 @@ test("full-guest release exposes root delta and swap only through authenticated 
 });
 
 test("package and verifier source recognize hibernation without mutating generated artifacts", async () => {
-  const [packageSource, verifierSource] = await Promise.all([
+  const [packageSource, verifierSource, workerSource] = await Promise.all([
     readFile(new URL("../scripts/package-guest.sh", import.meta.url), "utf8"),
     readFile(new URL("../scripts/verify-runtime-artifacts.mjs", import.meta.url), "utf8"),
+    readFile(new URL("../web/production-worker.mjs", import.meta.url), "utf8"),
   ]);
   for (const source of [packageSource, verifierSource]) {
     assert.match(source, /guest-hibernation-resume/);
@@ -657,4 +668,22 @@ test("package and verifier source recognize hibernation without mutating generat
     assert.match(source, /omarchy-hibernate\.qcow2/);
   }
   assert.match(verifierSource, /OMARCHY_HIBERNATION_REPORT/);
+  const deferredFlush = workerSource.indexOf(
+    "const deferredEvidence = this.#deferredHibernationEvidence.splice(0)",
+  );
+  const deferredFailureGuard = workerSource.indexOf(
+    'if (this.#phase === "failed") {',
+    deferredFlush,
+  );
+  const runningTransition = workerSource.indexOf('this.#setPhase("running")', deferredFlush);
+  assert.ok(deferredFlush >= 0 && deferredFailureGuard > deferredFlush);
+  assert.ok(
+    runningTransition > deferredFailureGuard,
+    "deferred evidence failure must be terminal before the running transition",
+  );
+  assert.match(
+    workerSource,
+    /if \(this\.#phase === "failed" \|\| this\.#phase === "exited"\) return false;/,
+    "terminal Worker phases must be irreversible",
+  );
 });

@@ -273,9 +273,9 @@ assert.doesNotMatch(targetCommand, /omarchy\.hibernate_producer=1/);
 
 const baseKernelCommandLine = [
   "root=/dev/vda", "rw", "rootwait", "console=tty0", "console=ttyS0,115200n8",
-  "loglevel=4", "ignore_loglevel", "hibernate.compressor=lzo", "systemd.show_status=false",
-  "rd.systemd.show_status=false", "mitigations=off", "nowatchdog", "omarchy.web_demo=1",
-  `resume=UUID=${expected.swapUuid}`, `omarchy.hibernate_swap_uuid=${expected.swapUuid}`,
+  "loglevel=4", "systemd.show_status=false", "rd.systemd.show_status=false", "mitigations=off",
+  "nowatchdog", "omarchy.web_demo=1", `resume=UUID=${expected.swapUuid}`, "ignore_loglevel",
+  "hibernate.compressor=lzo", `omarchy.hibernate_swap_uuid=${expected.swapUuid}`,
 ].join(" ");
 const expectedSourceKernelCommandLine = `${baseKernelCommandLine} omarchy.hibernate_producer=1 omarchy.hibernate_nonce=${enter.nonce}`;
 const expectedTargetKernelCommandLine = `${baseKernelCommandLine} omarchy.hibernate_target=1`;

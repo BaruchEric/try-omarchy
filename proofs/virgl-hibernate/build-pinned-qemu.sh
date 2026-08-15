@@ -82,6 +82,9 @@ docker run --rm --init --platform linux/amd64 \
   bash -lc '
     set -euo pipefail
     unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
+    export TEST_DIR=/proof/.build/qemu-8.2-native-virgl/iotests-scratch
+    export SOCK_DIR=/proof/.build/qemu-8.2-native-virgl/iotests-sockets
+    mkdir -p "$TEST_DIR" "$SOCK_DIR"
     if [[ ! -f build.ninja ]]; then
       /qemu-src/configure \
         --target-list=x86_64-softmmu \

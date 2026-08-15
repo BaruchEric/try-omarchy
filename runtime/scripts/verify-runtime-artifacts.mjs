@@ -253,6 +253,23 @@ export function verifyCheckpointWasmIdentity(manifest, wasm) {
   return actual;
 }
 
+export function inspectWebgl2ArtifactPlumbing(moduleSource, wasm) {
+  assert.equal(typeof moduleSource, "string", "generated QEMU module source must be text");
+  assert.ok(
+    Buffer.isBuffer(wasm) || wasm instanceof Uint8Array,
+    "generated QEMU WebAssembly must be bytes",
+  );
+  const wasmBytes = Buffer.from(wasm.buffer, wasm.byteOffset, wasm.byteLength);
+  return Object.freeze({
+    webgl2Context: moduleSource.includes(
+      'canvas.getContext("webgl2",webGLContextAttributes)',
+    ),
+    framebufferBlit: moduleSource.includes("GLctx.blitFramebuffer("),
+    drawBuffers: moduleSource.includes("GLctx.drawBuffers("),
+    presentCadence: wasmBytes.includes(Buffer.from("webgl2-present-cadence")),
+  });
+}
+
 export async function verifyRuntimeArtifacts(outputDirectory) {
   const manifest = JSON.parse(await readFile(join(outputDirectory, "runtime-manifest.json"), "utf8"));
   const tcgExperiment = experimentalTcgProfile();
@@ -502,9 +519,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         !productionWorker.includes(`"${rejectedDevice}"`) &&
         (graphics !== WEBGL2_PRESENT_EXPERIMENT ||
           productionWorker.includes(`browserQemuWasmSha256: "${wasmSha256}"`));
-      sourceChecks.webgl2Loader = moduleSource.includes("webgl2") &&
-        moduleSource.includes("glBlitFramebuffer") && moduleSource.includes("glDrawBuffers") &&
-        moduleSource.includes("webgl2-present-cadence");
+      sourceChecks.webgl2Loader = Object.values(
+        inspectWebgl2ArtifactPlumbing(moduleSource, wasm),
+      ).every(Boolean);
     }
     if (vcpus === 4) {
       sourceChecks.vcpuExperimentWorkerIdentity = productionWorker.startsWith(

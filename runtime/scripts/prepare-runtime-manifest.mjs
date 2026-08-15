@@ -256,7 +256,8 @@ export function validateHibernationProducerManifest(value) {
   invariant(arguments_.includes("root=/dev/vda") &&
     arguments_.includes(`resume=UUID=${HIBERNATION_SWAP_UUID}`) &&
     arguments_.includes("ignore_loglevel") && arguments_.includes("hibernate.compressor=lzo") &&
-    !arguments_.some((argument) => argument.startsWith("omarchy.hibernate_")),
+    !arguments_.some((argument) =>
+      /^omarchy\.hibernate_(?:producer|target|nonce)=/.test(argument)),
   "hibernation kernel command line is missing its exact resume contract");
   return value;
 }

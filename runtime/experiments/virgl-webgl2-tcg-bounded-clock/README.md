@@ -17,7 +17,11 @@ successful build, is similarly explicit:
 
 ```sh
 make -C runtime package-virgl-webgl2-tcg-bounded-clock GUEST_DIR=/absolute/path/to/guest/dist
+make -C runtime serve-full-virgl-webgl2-tcg-bounded-clock
 ```
+
+The isolated server listens on `127.0.0.1:8099`; it never replaces the working
+software baseline on port 8094.
 
 The old policy retired half of each vCPU's FIFO when the global 15,000-module
 limit was reached. With no observed `FinalizationRegistry` callback, that

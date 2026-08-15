@@ -210,6 +210,8 @@ test("the native QEMU producer is pinned and built with VirGL/SDL/OpenGL", async
     "virtio-vga-gl",
     "qemu-system-x86_64 qemu-img",
     "egl-renderer-probe.c",
+    "TEST_DIR=/proof/.build/qemu-8.2-native-virgl/iotests-scratch",
+    "SOCK_DIR=/proof/.build/qemu-8.2-native-virgl/iotests-sockets",
   ]) assert.ok(build.includes(token), `native build is missing ${token}`);
   for (const dependency of ["libegl1-mesa-dev", "libgles2-mesa-dev", "libvirglrenderer-dev", "xvfb", "zstd", "cpio"]) {
     assert.ok(dockerfile.includes(dependency), `builder is missing ${dependency}`);

@@ -26,6 +26,7 @@ const HIBERNATION_ROOT_DELTA_CACHE_BYTES = 32 * 1024 * 1024;
 const HIBERNATION_SWAP_CACHE_BYTES = 32 * 1024 * 1024;
 const GUEST_REPORT_PREFIX = "OMARCHY_GUEST_REPORT ";
 const GUEST_STAGE_PREFIX = "OMARCHY_GUEST_STAGE ";
+const HIBERNATION_ENTER_PREFIX = "OMARCHY_HIBERNATION_ENTER ";
 const HIBERNATION_REPORT_PREFIX = "OMARCHY_HIBERNATION_REPORT ";
 const RENDERER_REPORT_PREFIX = "OMARCHY_RENDERER_REPORT ";
 const HIBERNATION_COLD_BOOT_PREFIX = "OMARCHY_HIBERNATION_COLD_BOOT ";
@@ -140,7 +141,8 @@ export const CANONICAL_PRODUCTION_MANIFEST = deepFreeze({
 export const CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE =
   `${CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[
     CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-append") + 1
-  ]} resume=UUID=${HIBERNATION_SWAP_UUID} ignore_loglevel hibernate.compressor=lzo`;
+  ]} resume=UUID=${HIBERNATION_SWAP_UUID} ignore_loglevel hibernate.compressor=lzo ` +
+  `omarchy.hibernate_swap_uuid=${HIBERNATION_SWAP_UUID}`;
 
 export const CANONICAL_PAGED_DISK_ARGUMENTS = deepFreeze([
   "-snapshot",
@@ -566,6 +568,7 @@ export class HibernationResumeGate {
   handleSerialLine(line) {
     if (typeof line !== "string") return false;
     const hibernationControlLine = [
+      HIBERNATION_ENTER_PREFIX,
       HIBERNATION_REPORT_PREFIX,
       HIBERNATION_COLD_BOOT_PREFIX,
       HIBERNATION_FAILURE_PREFIX,
@@ -580,6 +583,13 @@ export class HibernationResumeGate {
       this.#abort(new ProductionWorkerError(
         "HIBERNATION_REPORT_INVALID",
         "Hibernation control evidence arrived before the resume gate began.",
+      ));
+      return true;
+    }
+    if (line.includes(HIBERNATION_ENTER_PREFIX)) {
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_SOURCE_REPLAY",
+        "Source hibernation-entry evidence appeared in the resume target.",
       ));
       return true;
     }
@@ -1265,7 +1275,8 @@ function validateHibernationCheckpointProfile(checkpoint) {
       restore.targetKernelCommandLine !== `${restore.kernelCommandLineBase} omarchy.hibernate_target=1` ||
       restore.sourceKernelCommandLineRedacted !==
         `${restore.kernelCommandLineBase} omarchy.hibernate_producer=1 omarchy.hibernate_nonce=<redacted>` ||
-      targetArguments.some((argument) => argument.startsWith("omarchy.hibernate_")) ||
+      targetArguments.some((argument) =>
+        /^omarchy\.hibernate_(?:producer|target|nonce)=/.test(argument)) ||
       !targetArguments.includes(resumeArgument) || !targetArguments.includes("ignore_loglevel") ||
       !targetArguments.includes("hibernate.compressor=lzo") || !targetArguments.includes("root=/dev/vda") ||
       restore.resumeNonceSha256 !== checkpoint.sourceEvidence.nonceSha256 ||
@@ -2560,8 +2571,10 @@ export class OmarchyProductionWorkerHost {
   }
 
   #setPhase(phase, detail = {}) {
+    if (this.#phase === "failed" || this.#phase === "exited") return false;
     this.#phase = phase;
     this.#post("phase", { phase, ...detail });
+    return true;
   }
 
   #flushDeferredHostInputs() {
@@ -3069,6 +3082,12 @@ export class OmarchyProductionWorkerHost {
           processSerial(stream, line);
           if (this.#phase === "failed") break;
         }
+        if (this.#phase === "failed") {
+          throw this.#failure ?? new ProductionWorkerError(
+            "HIBERNATION_DEFERRED_EVIDENCE_INVALID",
+            "Deferred post-resume guest evidence failed authentication.",
+          );
+        }
       }
       if (checkpointSourceEvidence !== null) {
         if (this.#guestReportSeen) {
@@ -3107,7 +3126,12 @@ export class OmarchyProductionWorkerHost {
         });
         this.#checkpointDesktopSettle.beginAfterRunning();
       }
-      this.#setPhase("running");
+      if (!this.#setPhase("running")) {
+        throw this.#failure ?? new ProductionWorkerError(
+          "RUNTIME_TERMINAL_PHASE",
+          "QEMU startup reached a terminal phase before it could become ready.",
+        );
+      }
       return this.#instance;
     } catch (error) {
       this.fail(error);

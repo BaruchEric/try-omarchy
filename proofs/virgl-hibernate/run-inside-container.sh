@@ -236,7 +236,7 @@ for _attempt in $(seq 1 120); do
 done
 [[ -S "/tmp/.X11-unix/X$display_number" ]] || fail "Xvfb display was not ready"
 
-base_kernel_command_line="root=/dev/vda rw rootwait console=tty0 console=ttyS0,115200n8 loglevel=4 ignore_loglevel hibernate.compressor=lzo systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1 resume=UUID=$swap_uuid omarchy.hibernate_swap_uuid=$swap_uuid"
+base_kernel_command_line="root=/dev/vda rw rootwait console=tty0 console=ttyS0,115200n8 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1 resume=UUID=$swap_uuid ignore_loglevel hibernate.compressor=lzo omarchy.hibernate_swap_uuid=$swap_uuid"
 source_kernel_command_line="$base_kernel_command_line omarchy.hibernate_producer=1 omarchy.hibernate_nonce=$nonce"
 target_kernel_command_line="$base_kernel_command_line omarchy.hibernate_target=1"
 
