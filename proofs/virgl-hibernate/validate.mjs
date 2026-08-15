@@ -244,6 +244,36 @@ for (const name of ["resumed-desktop-1-health.json", "resumed-desktop-2-health.j
   assert.equal(health.width, 1600);
   assert.equal(health.height, 900);
 }
+const captureKeys = [
+  "schemaVersion", "captureMode", "stabilitySampleCount", "stabilitySampleSha256",
+  "sourceFormat", "sourceBytes", "sourceSha256", "width", "height", "bitsPerPixel",
+  "bytesPerLine", "byteOrder", "redMask", "greenMask", "blueMask", "windowName",
+  "ppmBytes", "ppmSha256",
+];
+for (const stem of ["resumed-desktop-1", "resumed-desktop-2", "resumed-foot"]) {
+  const capture = await json(`${stem}-capture.json`);
+  exactKeys(capture, captureKeys, `${stem} capture metadata`);
+  assert.equal(capture.schemaVersion, 1);
+  assert.equal(capture.captureMode, "xvfb-fbdir-sigstop-copy-stable-pair");
+  assert.equal(capture.stabilitySampleCount, 2);
+  assert.deepEqual(capture.stabilitySampleSha256, [capture.sourceSha256, capture.sourceSha256]);
+  assert.equal(capture.sourceFormat, "XWD-v7-ZPixmap");
+  assert.equal(capture.sourceBytes, 5763232);
+  assert.equal(capture.sourceBytes, (await stat(evidencePath(`${stem}.xwd`))).size);
+  assert.equal(capture.sourceSha256, await fileDigest(`${stem}.xwd`));
+  assert.equal(capture.width, 1600);
+  assert.equal(capture.height, 900);
+  assert.equal(capture.bitsPerPixel, 32);
+  assert.equal(capture.bytesPerLine, 6400);
+  assert.equal(capture.byteOrder, "LSBFirst");
+  assert.equal(capture.redMask, 0x00ff0000);
+  assert.equal(capture.greenMask, 0x0000ff00);
+  assert.equal(capture.blueMask, 0x000000ff);
+  assert.match(capture.windowName, /^Xvfb .+:\d+\.0$/);
+  assert.equal(capture.ppmBytes, 4320016);
+  assert.equal(capture.ppmBytes, (await stat(evidencePath(`${stem}.ppm`))).size);
+  assert.equal(capture.ppmSha256, await fileDigest(`${stem}.ppm`));
+}
 const change = await json("resumed-foot-change.json");
 assert.equal(change.status, "PASS");
 assert.equal(change.mode, "minimum");

@@ -67,12 +67,22 @@ resume, desktop startup, and interaction did not mutate the frozen artifacts.
 `SHA256SUMS` deterministically covers every regular evidence file after both
 QEMUs and Xvfb have stopped.
 
+Native VirGL does not expose a software QEMU display surface, so QMP
+`screendump` cannot capture it. The proof instead starts Xvfb with `-fbdir`,
+waits for Xvfb to reach the kernel stopped state, copies `Xvfb_screen0`, and
+immediately resumes Xvfb. It accepts a frame only after two independent
+STOP→copy→CONT samples are byte-identical. A strict Node converter validates
+the big-endian XWD header, exact 1600×900×32-bit layout and RGB masks before
+writing P6 PPM. Each capture metadata record binds the capture mode plus both
+stable-sample, retained XWD, and PPM SHA-256 values; all three files are also
+covered by `SHA256SUMS`. QMP remains in use for bounded input, status, and quit.
+
 ## Static checks (safe and fast)
 
 These checks do not invoke Docker or QEMU:
 
 ```sh
-node --test proofs/virgl-hibernate/static.test.mjs
+node --test proofs/virgl-hibernate/*.test.mjs
 ```
 
 ## Bounded native proof

@@ -159,6 +159,7 @@ test("all scripts are syntactically valid without running a VM", async () => {
   }
   execFileSync(process.execPath, ["--check", path.join(proofDirectory, "validate.mjs")]);
   execFileSync(process.execPath, ["--check", path.join(proofDirectory, "validate-browser-candidate.mjs")]);
+  execFileSync(process.execPath, ["--check", path.join(proofDirectory, "xwd-to-ppm.mjs")]);
 });
 
 test("browser candidate gate accepts only hash-bound VirGL plus bounded CLOCK", async (context) => {
@@ -377,6 +378,70 @@ test("native PASS requires marker, live report, two frames, and real Foot input"
   assert.match(runner, /health\.clean|frame_health/);
 });
 
+test("VirGL frames use frozen stable Xvfb XWD captures and keep QMP only for control", async () => {
+  const [runner, validator] = await Promise.all([
+    read("run-inside-container.sh"),
+    read("validate.mjs"),
+  ]);
+  for (const token of [
+    '-fbdir "$xvfb_fbdir"',
+    'xvfb_framebuffer="$xvfb_fbdir/Xvfb_screen0"',
+    "capture-sample-a.xwd",
+    "capture-sample-b.xwd",
+    'mv "$candidate_xwd" "$prefix-$streak.xwd"',
+    'mv "$candidate_xwd" "${output%.ppm}.xwd"',
+    "xvfb-fbdir-sigstop-copy-stable-pair",
+  ]) assert.ok(runner.includes(token) || validator.includes(token), `Xvfb capture is missing ${token}`);
+  assert.doesNotMatch(runner, /\bscreendump\b/, "VirGL capture must not use QMP screendump");
+  assert.doesNotMatch(runner, /^\s*(?:xwd|import|scrot|maim)(?:\s|$)/m,
+    "capture must not invoke a shell screenshot utility");
+
+  const snapshot = runner.slice(
+    runner.indexOf("capture_xvfb_snapshot()"),
+    runner.indexOf("capture_xvfb_frame()"),
+  );
+  const snapshotOrder = [
+    'kill -STOP "$xvfb_pid"',
+    "^State:[[:space:]]+T",
+    'cp -- "$xvfb_framebuffer" "$snapshot"',
+    'kill -CONT "$xvfb_pid"',
+  ].map((token) => snapshot.indexOf(token));
+  assert.ok(snapshotOrder.every((index) => index >= 0));
+  assert.deepEqual([...snapshotOrder].sort((a, b) => a - b), snapshotOrder,
+    "snapshot must stop, prove stopped, copy, then immediately continue Xvfb");
+
+  const stableCapture = runner.slice(
+    runner.indexOf("capture_xvfb_frame()"),
+    runner.indexOf("cleanup()"),
+  );
+  const stableOrder = [
+    'capture_xvfb_snapshot "$sample_a"',
+    "sleep 0.02",
+    'capture_xvfb_snapshot "$sample_b"',
+    'cmp -s "$sample_a" "$sample_b"',
+    'node "$xwd_converter"',
+  ].map((token) => stableCapture.indexOf(token));
+  assert.ok(stableOrder.every((index) => index >= 0));
+  assert.deepEqual([...stableOrder].sort((a, b) => a - b), stableOrder,
+    "stable capture must compare two independent frozen samples before conversion");
+
+  const cleanup = runner.slice(runner.indexOf("cleanup()"), runner.indexOf("trap cleanup"));
+  assert.ok(cleanup.indexOf('kill -CONT "$xvfb_pid"') >= 0);
+  assert.ok(cleanup.indexOf('kill -CONT "$xvfb_pid"') < cleanup.indexOf("qmp_quit"),
+    "cleanup must resume Xvfb before any QMP cleanup");
+  const stop = runner.slice(runner.indexOf("stop_xvfb()"), runner.indexOf("capture_xvfb_snapshot()"));
+  assert.ok(stop.indexOf('kill -CONT "$xvfb_pid"') < stop.indexOf('kill "$xvfb_pid"'));
+  assert.ok(stop.indexOf('kill "$xvfb_pid"') < stop.indexOf('wait "$xvfb_pid"'));
+
+  for (const token of [
+    'captureMode, "xvfb-fbdir-sigstop-copy-stable-pair"',
+    "stabilitySampleSha256",
+    "capture.sourceSha256, await fileDigest(`${stem}.xwd`)",
+    "capture.ppmSha256, await fileDigest(`${stem}.ppm`)",
+    "SHA256SUMS",
+  ]) assert.ok(validator.includes(token), `validator is missing capture binding ${token}`);
+});
+
 test("producer metadata is nonce-safe, split by environment, and fully indexed", async () => {
   const [runner, validator, outer] = await Promise.all([
     read("run-inside-container.sh"),
@@ -408,7 +473,7 @@ test("producer metadata is nonce-safe, split by environment, and fully indexed",
 test("README exposes only bounded commands and the native/browser proof boundary", async () => {
   const readme = await read("README.md");
   for (const token of [
-    "node --test proofs/virgl-hibernate/static.test.mjs",
+    "node --test proofs/virgl-hibernate/*.test.mjs",
     "BUILD_JOBS=8 proofs/virgl-hibernate/build-pinned-qemu.sh",
     "VIRGL_HIBERNATE_SOURCE_TIMEOUT_SECONDS=1200",
     "VIRGL_HIBERNATE_BROWSER_QEMU_WASM=",

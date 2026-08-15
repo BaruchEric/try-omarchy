@@ -9,6 +9,7 @@ qmp_client=/repo/proofs/preboot-resume/qmp.mjs
 frame_health=/repo/proofs/preboot-resume/frame-health.mjs
 frame_change=/repo/proofs/preboot-resume/frame-change.mjs
 report_gate=/repo/proofs/preboot-resume/report-gate.mjs
+xwd_converter=/proof/xwd-to-ppm.mjs
 browser_qemu_wasm=${BROWSER_QEMU_WASM_PATH:?BROWSER_QEMU_WASM_PATH is required}
 browser_qemu_wasm_expected_sha256=${BROWSER_QEMU_WASM_EXPECTED_SHA256:?BROWSER_QEMU_WASM_EXPECTED_SHA256 is required}
 prepare_initramfs=/proof/prepare-initramfs.sh
@@ -23,6 +24,9 @@ source_socket=/tmp/omarchy-virgl-hibernate-source-$$.sock
 target_socket=/tmp/omarchy-virgl-hibernate-target-$$.sock
 display_number=$((90 + ($$ % 900)))
 xvfb_pid=
+xvfb_stopped=0
+xvfb_fbdir=
+xvfb_framebuffer=
 source_pid=
 target_pid=
 phase=preflight
@@ -52,9 +56,109 @@ qmp_quit() {
   node "$qmp_client" "$socket" "$log" execute quit '{}' >/dev/null 2>&1 || true
 }
 
+stop_xvfb() {
+  if [[ -n ${xvfb_pid:-} ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
+    if [[ ${xvfb_stopped:-0} == 1 ]]; then
+      kill -CONT "$xvfb_pid" 2>/dev/null || true
+      xvfb_stopped=0
+    fi
+    kill "$xvfb_pid" 2>/dev/null || true
+    wait "$xvfb_pid" 2>/dev/null || true
+  fi
+  xvfb_pid=
+  xvfb_stopped=0
+  if [[ -n ${xvfb_fbdir:-} && -d $xvfb_fbdir ]]; then
+    rm -f \
+      "$xvfb_fbdir/Xvfb_screen0" \
+      "$xvfb_fbdir/capture-sample-a.xwd" \
+      "$xvfb_fbdir/capture-sample-b.xwd"
+    rmdir "$xvfb_fbdir" 2>/dev/null || true
+  fi
+  xvfb_framebuffer=
+  xvfb_fbdir=
+}
+
+capture_xvfb_snapshot() {
+  local snapshot=$1
+  local label=$2
+  local copy_status
+  local stopped=0
+  [[ -n ${xvfb_pid:-} && -f $xvfb_framebuffer ]] \
+    || fail "Xvfb framebuffer is unavailable during $label"
+  kill -STOP "$xvfb_pid" || fail "cannot freeze Xvfb during $label"
+  xvfb_stopped=1
+  for _attempt in $(seq 1 200); do
+    if grep -Eq '^State:[[:space:]]+T' "/proc/$xvfb_pid/status" 2>/dev/null; then
+      stopped=1
+      break
+    fi
+    kill -0 "$xvfb_pid" 2>/dev/null || fail "Xvfb exited while freezing during $label"
+    sleep 0.01
+  done
+  (( stopped == 1 )) || fail "Xvfb did not reach stopped state during $label"
+  set +e
+  cp -- "$xvfb_framebuffer" "$snapshot"
+  copy_status=$?
+  set -e
+  kill -CONT "$xvfb_pid" 2>/dev/null || fail "cannot resume Xvfb after $label"
+  xvfb_stopped=0
+  (( copy_status == 0 )) || fail "cannot copy the frozen Xvfb framebuffer during $label"
+  [[ $(stat -c %s "$snapshot") -eq 5763232 ]] \
+    || fail "frozen Xvfb snapshot has the wrong byte length during $label"
+  for _attempt in $(seq 1 200); do
+    kill -0 "$xvfb_pid" 2>/dev/null || fail "Xvfb exited while resuming after $label"
+    ! grep -Eq '^State:[[:space:]]+T' "/proc/$xvfb_pid/status" 2>/dev/null && return 0
+    sleep 0.01
+  done
+  fail "Xvfb remained stopped after $label"
+}
+
+capture_xvfb_frame() {
+  local output=$1
+  local xwd_output=$2
+  local metadata=$3
+  local label=$4
+  local sample_a="$xvfb_fbdir/capture-sample-a.xwd"
+  local sample_b="$xvfb_fbdir/capture-sample-b.xwd"
+  local metadata_candidate="$metadata.tmp"
+  local sample_a_sha256
+  local sample_b_sha256
+  for _attempt in $(seq 1 20); do
+    capture_xvfb_snapshot "$sample_a" "$label sample A"
+    sleep 0.02
+    capture_xvfb_snapshot "$sample_b" "$label sample B"
+    if cmp -s "$sample_a" "$sample_b"; then
+      sample_a_sha256=$(sha256sum "$sample_a" | awk '{print $1}')
+      sample_b_sha256=$(sha256sum "$sample_b" | awk '{print $1}')
+      [[ $sample_a_sha256 == "$sample_b_sha256" ]] \
+        || fail "byte-identical Xvfb samples hashed differently during $label"
+      mv "$sample_b" "$xwd_output"
+      rm -f "$sample_a"
+      node "$xwd_converter" \
+        "$xwd_output" \
+        "$output" \
+        "$sample_a_sha256" \
+        "$sample_b_sha256" \
+        >"$metadata_candidate" \
+        || fail "Xvfb XWD conversion failed during $label"
+      mv "$metadata_candidate" "$metadata"
+      return 0
+    fi
+    rm -f "$sample_a" "$sample_b"
+    sleep 0.05
+  done
+  rm -f "$sample_a" "$sample_b" "$metadata_candidate"
+  return 1
+}
+
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if [[ ${xvfb_stopped:-0} == 1 && -n ${xvfb_pid:-} ]] \
+      && kill -0 "$xvfb_pid" 2>/dev/null; then
+    kill -CONT "$xvfb_pid" 2>/dev/null || true
+    xvfb_stopped=0
+  fi
   if [[ -n ${target_pid:-} ]] && kill -0 "$target_pid" 2>/dev/null; then
     qmp_quit "$target_socket" "$evidence_dir/target-cleanup-qmp.jsonl"
     kill "$target_pid" 2>/dev/null || true
@@ -65,10 +169,7 @@ cleanup() {
     kill "$source_pid" 2>/dev/null || true
     wait "$source_pid" 2>/dev/null || true
   fi
-  if [[ -n ${xvfb_pid:-} ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
-    kill "$xvfb_pid" 2>/dev/null || true
-    wait "$xvfb_pid" 2>/dev/null || true
-  fi
+  stop_xvfb
   rm -f \
     "$source_socket" \
     "$target_socket" \
@@ -132,20 +233,32 @@ capture_two_healthy_frames() {
   local deadline=$((SECONDS + 360))
   local streak=0
   local candidate="$prefix-candidate.ppm"
+  local candidate_xwd="$prefix-candidate.xwd"
   local candidate_health="$prefix-candidate-health.json"
+  local candidate_capture="$prefix-candidate-capture.json"
   while (( SECONDS < deadline )); do
     assert_no_uwsm_failure
-    node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-      screendump "$candidate" >/dev/null
+    if ! capture_xvfb_frame \
+        "$candidate" \
+        "$candidate_xwd" \
+        "$candidate_capture" \
+        "healthy-frame capture"; then
+      sleep 1
+      continue
+    fi
     if node "$frame_health" "$candidate" >"$candidate_health"; then
       streak=$((streak + 1))
       mv "$candidate" "$prefix-$streak.ppm"
+      mv "$candidate_xwd" "$prefix-$streak.xwd"
       mv "$candidate_health" "$prefix-$streak-health.json"
+      mv "$candidate_capture" "$prefix-$streak-capture.json"
       (( streak == 2 )) && return 0
     else
       streak=0
       mv "$candidate" "$prefix-rejected-latest.ppm"
+      mv "$candidate_xwd" "$prefix-rejected-latest.xwd"
       mv "$candidate_health" "$prefix-rejected-latest-health.json"
+      mv "$candidate_capture" "$prefix-rejected-latest-capture.json"
     fi
     sleep 5
   done
@@ -157,18 +270,29 @@ wait_for_foot_frame() {
   local output=$2
   local deadline=$((SECONDS + 180))
   local candidate="$output.candidate"
+  local candidate_xwd="${output%.ppm}-candidate.xwd"
   local health_output="${output%.ppm}-health.json"
   local candidate_health="$health_output.candidate"
+  local capture_output="${output%.ppm}-capture.json"
+  local candidate_capture="$capture_output.candidate"
   local change_output="$evidence_dir/resumed-foot-change.json"
   local candidate_change="$change_output.candidate"
   while (( SECONDS < deadline )); do
     assert_no_uwsm_failure
-    node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-      screendump "$candidate" >/dev/null
+    if ! capture_xvfb_frame \
+        "$candidate" \
+        "$candidate_xwd" \
+        "$candidate_capture" \
+        "Foot-frame capture"; then
+      sleep 1
+      continue
+    fi
     if node "$frame_health" "$candidate" >"$candidate_health" \
       && node "$frame_change" "$baseline" "$candidate" minimum 0.0005 >"$candidate_change"; then
       mv "$candidate" "$output"
+      mv "$candidate_xwd" "${output%.ppm}.xwd"
       mv "$candidate_health" "$health_output"
+      mv "$candidate_capture" "$capture_output"
       mv "$candidate_change" "$change_output"
       return 0
     fi
@@ -181,7 +305,7 @@ for numeric in "$source_timeout" "$target_timeout" "$desktop_timeout"; do
   [[ $numeric =~ ^[1-9][0-9]*$ ]] || fail "timeouts must be positive integers"
 done
 [[ $nonce =~ ^[0-9a-f]{64}$ ]] || fail "invalid nonce"
-for executable in "$qemu_bin" "$qemu_img" "$prepare_initramfs"; do
+for executable in "$qemu_bin" "$qemu_img" "$prepare_initramfs" "$xwd_converter"; do
   [[ -x $executable ]] || fail "required executable is missing: $executable"
 done
 [[ -f $browser_qemu_wasm ]] || fail "browser QEMU Wasm is missing: $browser_qemu_wasm"
@@ -189,7 +313,7 @@ done
   || fail "browser QEMU Wasm expected SHA-256 is invalid"
 [[ $(sha256sum "$browser_qemu_wasm" | awk '{print $1}') == "$browser_qemu_wasm_expected_sha256" ]] \
   || fail "mounted browser QEMU Wasm differs from the validated VirGL/bounded-CLOCK candidate"
-for tool in Xvfb node sha256sum zstd cpio; do
+for tool in Xvfb node sha256sum zstd cpio cmp cp stat; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool is unavailable: $tool"
 done
 [[ -d $firmware_dir ]] || fail "pinned QEMU firmware is unavailable"
@@ -228,16 +352,20 @@ ln -s /guest/rootfs.ext4 "$evidence_dir/rootfs.ext4"
   "$qemu_img" create -q -f qcow2 -o cluster_size=65536 omarchy-hibernate.qcow2 1536M
 )
 
-Xvfb ":$display_number" -screen 0 1600x900x24 +extension GLX +render -noreset \
+xvfb_fbdir=$(mktemp -d /tmp/omarchy-virgl-hibernate-xvfb.XXXXXX)
+xvfb_framebuffer="$xvfb_fbdir/Xvfb_screen0"
+Xvfb ":$display_number" -screen 0 1600x900x24 -fbdir "$xvfb_fbdir" \
+  +extension GLX +render -noreset \
   >"$evidence_dir/xvfb.log" 2>&1 &
 xvfb_pid=$!
 export DISPLAY=":$display_number"
 for _attempt in $(seq 1 120); do
-  [[ -S "/tmp/.X11-unix/X$display_number" ]] && break
+  [[ -S "/tmp/.X11-unix/X$display_number" && -f $xvfb_framebuffer ]] && break
   kill -0 "$xvfb_pid" 2>/dev/null || fail "Xvfb exited before its display was ready"
   sleep 0.25
 done
-[[ -S "/tmp/.X11-unix/X$display_number" ]] || fail "Xvfb display was not ready"
+[[ -S "/tmp/.X11-unix/X$display_number" && -f $xvfb_framebuffer ]] \
+  || fail "Xvfb display/framebuffer was not ready"
 
 base_kernel_command_line="root=/dev/vda rw rootwait console=tty0 console=ttyS0,115200n8 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1 resume=UUID=$swap_uuid ignore_loglevel hibernate.compressor=lzo omarchy.hibernate_swap_uuid=$swap_uuid"
 source_kernel_command_line="$base_kernel_command_line omarchy.hibernate_producer=1 omarchy.hibernate_nonce=$nonce"
@@ -435,11 +563,7 @@ target_exit=$?
 set -e
 target_pid=
 [[ $target_exit -eq 0 ]] || fail "fresh target QEMU exited with $target_exit"
-if [[ -n ${xvfb_pid:-} ]] && kill -0 "$xvfb_pid" 2>/dev/null; then
-  kill "$xvfb_pid" 2>/dev/null || true
-  wait "$xvfb_pid" 2>/dev/null || true
-fi
-xvfb_pid=
+stop_xvfb
 
 sha256sum \
   "$evidence_dir/hibernate-root-overlay.qcow2" \
