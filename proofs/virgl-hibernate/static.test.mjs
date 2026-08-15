@@ -271,7 +271,8 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
   ]) assert.ok(late.includes(token), `producer is missing ${token}`);
   assert.ok(
     late.indexOf("mkswap --force --uuid") < late.indexOf('>/sys/power/resume') &&
-      late.indexOf('>/sys/power/resume') < late.indexOf(">/sys/power/state"),
+      late.indexOf('>/sys/power/resume') < late.indexOf('swapon "$swap_device"') &&
+      late.indexOf('swapon "$swap_device"') < late.indexOf(">/sys/power/state"),
     "the producer must bind the persistent swap device before entering swsusp",
   );
   assert.doesNotMatch(late, /systemctl\s+hibernate|hibernate\.target\s+(unmask|start)/);
@@ -324,6 +325,28 @@ test("source and fresh target use exact ordered device topology without migratio
   assert.match(runner, /target_args=\([\s\S]*?\n\s+-snapshot\n/);
   assert.ok(runner.indexOf("omarchy-hibernate-root,file=") < runner.indexOf("drive=omarchy-hibernate-root,serial=omarchy-root"));
   assert.ok(runner.indexOf("drive=omarchy-hibernate-root,serial=omarchy-root") < runner.indexOf("omarchy-hibernate-swap,file="));
+});
+
+test("fresh target cannot launch without an armed persistent swsusp header", async () => {
+  const runner = await read("run-inside-container.sh");
+  for (const token of [
+    '"$qemu_img" dd',
+    '"if=$evidence_dir/omarchy-hibernate.qcow2"',
+    "bs=4096",
+    "count=1",
+    "tail -c 10",
+    "swap_header_signature == S1SUSPEND",
+  ]) assert.ok(runner.includes(token), `persistent swap header gate is missing ${token}`);
+
+  const sourceImageDone = runner.indexOf("source kernel did not finish saving the image");
+  const headerExtract = runner.indexOf('"$qemu_img" dd');
+  const signatureGate = runner.indexOf("swap_header_signature == S1SUSPEND");
+  const targetDefinition = runner.indexOf("target_args=(");
+  assert.ok(sourceImageDone >= 0 && headerExtract >= 0 && signatureGate >= 0 && targetDefinition >= 0);
+  assert.ok(
+    sourceImageDone < headerExtract && headerExtract < signatureGate && signatureGate < targetDefinition,
+    "the persistent S1SUSPEND gate must run after source save and before target construction",
+  );
 });
 
 test("native PASS requires marker, live report, two frames, and real Foot input", async () => {

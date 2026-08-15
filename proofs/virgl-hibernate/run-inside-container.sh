@@ -69,7 +69,10 @@ cleanup() {
     kill "$xvfb_pid" 2>/dev/null || true
     wait "$xvfb_pid" 2>/dev/null || true
   fi
-  rm -f "$source_socket" "$target_socket"
+  rm -f \
+    "$source_socket" \
+    "$target_socket" \
+    "$evidence_dir/.omarchy-hibernate-page0.bin"
   if [[ $phase != complete ]]; then
     printf '%s\n' "$phase" >"$evidence_dir/final-phase.txt"
     printf '%s\n' "$status" >"$evidence_dir/script-exit-status.txt"
@@ -302,6 +305,20 @@ set_phase frozen-artifacts
   || fail "root delta failed qemu-img check"
 "$qemu_img" check -q "$evidence_dir/omarchy-hibernate.qcow2" \
   || fail "swap image failed qemu-img check"
+swap_header_page="$evidence_dir/.omarchy-hibernate-page0.bin"
+"$qemu_img" dd \
+  -f qcow2 \
+  "if=$evidence_dir/omarchy-hibernate.qcow2" \
+  "of=$swap_header_page" \
+  bs=4096 \
+  count=1 \
+  || fail "could not extract the persistent swap header"
+[[ $(stat -c %s "$swap_header_page") -eq 4096 ]] \
+  || fail "persistent swap header extraction was not exactly one guest page"
+swap_header_signature=$(tail -c 10 "$swap_header_page")
+rm -f "$swap_header_page"
+[[ $swap_header_signature == S1SUSPEND ]] \
+  || fail "persistent swap does not contain an armed S1SUSPEND image"
 "$qemu_img" info --output=json "$evidence_dir/hibernate-root-overlay.qcow2" \
   >"$evidence_dir/hibernate-root-overlay-info.json"
 "$qemu_img" info --output=json "$evidence_dir/omarchy-hibernate.qcow2" \

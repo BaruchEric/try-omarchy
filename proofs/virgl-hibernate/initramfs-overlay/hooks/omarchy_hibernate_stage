@@ -81,12 +81,12 @@ udevadm settle --timeout=60
 [[ -b $swap_device ]] || fail_closed swap-device-missing
 swapoff "$swap_device" 2>/dev/null || true
 mkswap --force --uuid "$swap_uuid" "$swap_device" >/dev/null
-swapon "$swap_device"
 [[ $(blkid -s UUID -o value "$swap_device") == "$swap_uuid" ]] || fail_closed swap-uuid-mismatch
 read -r swap_major swap_minor < <(stat -Lc '0x%t 0x%T' "$swap_device")
 printf -v resume_device '%d:%d' "$swap_major" "$swap_minor"
 printf '%s' "$resume_device" >/sys/power/resume
 [[ $(</sys/power/resume) == "$resume_device" ]] || fail_closed resume-device-mismatch
+swapon "$swap_device"
 
 # Bound the uncompressed image request to half of guest RAM.  The separate
 # 1536 MiB virtual swap device still leaves ample safety margin.
