@@ -6,51 +6,101 @@ qemu_img=/proof/.build/qemu-8.2-native/qemu-img
 firmware_dir=/proof/.build/qemu-8.2-source/pc-bios
 qmp_client=/proof/qmp.mjs
 frame_health=/proof/frame-health.mjs
+frame_change=/proof/frame-change.mjs
+report_gate=/proof/report-gate.mjs
 evidence_dir=${EVIDENCE_DIR:?EVIDENCE_DIR is required}
 timeout_seconds=${PREBOOT_TIMEOUT_SECONDS:-900}
-vcpus=${PREBOOT_VCPUS:-1}
-proof_scope=${PREBOOT_PROOF_SCOPE:-browser-topology-resume-proof}
-migration_compression=${PREBOOT_MIGRATION_COMPRESSION:-none}
 source_socket=/tmp/omarchy-preboot-source-$$.sock
 target_socket=/tmp/omarchy-preboot-target-$$.sock
 source_pid=
 target_pid=
+phase=preflight
+
+expected_manifest_sha256=55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37
+expected_rootfs_sha256=db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac
+expected_provenance_sha256=527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738
+expected_qemu_commit=0ef7b4e2814b231705d8371dd7997f5b72e70baf
+
+set_phase() {
+  phase=$1
+  printf '%s\n' "$phase" >"$evidence_dir/phase.txt"
+}
 
 fail() {
-  printf 'PREBOOT_CONTAINER_FAIL %s\n' "$*" >&2
+  printf '%s\n' "$*" >"$evidence_dir/failure-reason.txt"
+  printf 'PREBOOT_CONTAINER_FAIL phase=%s reason=%s\n' "$phase" "$*" >&2
   exit 1
 }
 
-wait_for_clean_frame() {
+assert_no_uwsm_failure() {
+  if grep -Eq '^OMARCHY_GUEST_STAGE .*"stage":"uwsm","status":"failed"' "$evidence_dir/source-diagnostics.log"; then
+    fail "guest emitted a UWSM failure stage"
+  fi
+}
+
+capture_two_healthy_frames() {
   local socket=$1
   local qmp_log=$2
-  local output=$3
-  local health_output=$4
-  local label=$5
-  local timeout=$6
-  local candidate="$output.candidate"
-  local candidate_health="$health_output.candidate"
-  local clean_streak=0
-  local frame_deadline=$((SECONDS + timeout))
-  while (( SECONDS < frame_deadline )); do
+  local prefix=$3
+  local label=$4
+  local timeout=$5
+  local candidate="$prefix-candidate.ppm"
+  local candidate_health="$prefix-candidate-health.json"
+  local streak=0
+  local deadline=$((SECONDS + timeout))
+  while (( SECONDS < deadline )); do
+    [[ $socket == "$source_socket" ]] && assert_no_uwsm_failure
     node "$qmp_client" "$socket" "$qmp_log" screendump "$candidate" >/dev/null
     if node "$frame_health" "$candidate" >"$candidate_health"; then
-      clean_streak=$((clean_streak + 1))
+      streak=$((streak + 1))
+      mv "$candidate" "$prefix-$streak.ppm"
+      mv "$candidate_health" "$prefix-$streak-health.json"
+      if (( streak == 2 )); then
+        return 0
+      fi
     else
-      clean_streak=0
+      streak=0
+      mv "$candidate" "$prefix-rejected-latest.ppm"
+      mv "$candidate_health" "$prefix-rejected-latest-health.json"
     fi
-    if (( clean_streak >= 2 )); then
+    sleep 5
+  done
+  fail "$label did not produce two consecutive healthy 1600x900 Omarchy shell frames"
+}
+
+wait_for_frame_change() {
+  local socket=$1
+  local qmp_log=$2
+  local baseline=$3
+  local output=$4
+  local change_output=$5
+  local mode=$6
+  local threshold=$7
+  local label=$8
+  local timeout=$9
+  local candidate="$output.candidate"
+  local candidate_change="$change_output.candidate"
+  local health_output="${output%.ppm}-health.json"
+  local candidate_health="$health_output.candidate"
+  local deadline=$((SECONDS + timeout))
+  while (( SECONDS < deadline )); do
+    [[ $socket == "$source_socket" ]] && assert_no_uwsm_failure
+    node "$qmp_client" "$socket" "$qmp_log" screendump "$candidate" >/dev/null
+    if node "$frame_health" "$candidate" >"$candidate_health" \
+      && node "$frame_change" "$baseline" "$candidate" "$mode" "$threshold" >"$candidate_change"; then
       mv "$candidate" "$output"
       mv "$candidate_health" "$health_output"
+      mv "$candidate_change" "$change_output"
       return 0
     fi
-    sleep 10
+    sleep 5
   done
-  fail "$label did not settle to two consecutive clean 1600x900 frames"
+  fail "$label did not satisfy healthy-frame $mode change threshold $threshold"
 }
 
 cleanup() {
   local status=$?
+  trap - EXIT INT TERM
   for tuple in "${target_pid:-}:$target_socket:$evidence_dir/qmp-cleanup-target.jsonl" \
                "${source_pid:-}:$source_socket:$evidence_dir/qmp-cleanup-source.jsonl"; do
     IFS=: read -r pid socket cleanup_log <<<"$tuple"
@@ -58,7 +108,7 @@ cleanup() {
       if [[ -S $socket ]]; then
         node "$qmp_client" "$socket" "$cleanup_log" execute quit '{}' >/dev/null 2>&1 || true
       fi
-      for _attempt in $(seq 1 20); do
+      for _attempt in $(seq 1 40); do
         kill -0 "$pid" 2>/dev/null || break
         sleep 0.25
       done
@@ -67,45 +117,33 @@ cleanup() {
     fi
   done
   rm -f "$source_socket" "$target_socket"
+  printf '%s\n' "$phase" >"$evidence_dir/final-phase.txt"
+  printf '%s\n' "$status" >"$evidence_dir/script-exit-status.txt"
   exit "$status"
 }
 trap cleanup EXIT INT TERM
 
 command -v node >/dev/null 2>&1 || fail "node is unavailable in the pinned builder"
-command -v gzip >/dev/null 2>&1 || fail "gzip is unavailable in the pinned builder"
 [[ $timeout_seconds =~ ^[1-9][0-9]*$ ]] || fail "timeout must be a positive integer"
-[[ $vcpus =~ ^[1-9][0-9]*$ ]] || fail "vCPU count must be a positive integer"
-[[ $migration_compression == none || $migration_compression == legacy ]] || fail "migration compression must be none or legacy"
 [[ -x $qemu_bin ]] || fail "pinned QEMU binary is unavailable"
 [[ -x $qemu_img ]] || fail "pinned qemu-img is unavailable"
+[[ -d $firmware_dir ]] || fail "pinned QEMU firmware is unavailable"
+[[ $(</proof/.build/qemu-8.2-native/source-commit.txt) == "$expected_qemu_commit" ]] || fail "native producer source commit differs"
 mkdir -p "$evidence_dir"
+set_phase preflight
 : >"$evidence_dir/source-qmp.jsonl"
 : >"$evidence_dir/target-qmp.jsonl"
 : >"$evidence_dir/source-diagnostics.log"
 : >"$evidence_dir/target-diagnostics.log"
 : >"$evidence_dir/source-qemu.log"
 : >"$evidence_dir/target-qemu.log"
-node - "$evidence_dir/proof-scope.json" "$proof_scope" "$vcpus" "$migration_compression" <<'EOF'
-const fs = require("fs");
-const [output, proofScope, vcpusText, migrationCompression] = process.argv.slice(2);
-const vcpus = Number(vcpusText);
-fs.writeFileSync(output, JSON.stringify({
-  schemaVersion: 1,
-  proofScope,
-  vcpus,
-  browserTopologyVcpus: 1,
-  topologyMatchesBrowser: vcpus === 1,
-  migrationCompression,
-  immediateFileIncoming: migrationCompression === "none",
-  browserAcceptance: false,
-  note: vcpus === 1
-    ? "Native migration/resume proof at the planned browser CPU topology; browser execution remains separate acceptance."
-    : "Migration mechanism proof only; CPU topology intentionally differs from the planned one-vCPU browser runtime."
-}, null, 2) + "\n");
-EOF
 
-node /proof/artifact-integrity.mjs /guest \
-  >"$evidence_dir/artifact-integrity-before.json"
+[[ $(sha256sum /guest/guest-manifest.json | awk '{print $1}') == "$expected_manifest_sha256" ]] || fail "canonical guest manifest SHA-256 differs"
+[[ $(sha256sum /guest/rootfs.ext4 | awk '{print $1}') == "$expected_rootfs_sha256" ]] || fail "canonical rootfs SHA-256 differs"
+[[ $(sha256sum /guest/provenance.json | awk '{print $1}') == "$expected_provenance_sha256" ]] || fail "canonical guest provenance SHA-256 differs"
+[[ $($qemu_bin --version | sed -n '1p') == 'QEMU emulator version 8.2.0' ]] || fail "native producer is not QEMU 8.2.0"
+node /proof/artifact-integrity.mjs /guest >"$evidence_dir/artifact-integrity-before.json"
+
 ln -s /guest/rootfs.ext4 "$evidence_dir/rootfs.ext4"
 (
   cd "$evidence_dir"
@@ -117,8 +155,8 @@ common_args=(
   -L "$firmware_dir"
   -machine pc-q35-8.2
   -m 1024M
-  -accel tcg,tb-size=128,thread=single
-  -smp "$vcpus,sockets=1,cores=$vcpus,threads=1"
+  -accel tcg,tb-size=128,thread=multi
+  -smp 2,sockets=1,cores=2,threads=1
   -display none
   -device virtio-vga,max_outputs=1,xres=1600,yres=900
   -device virtio-keyboard-pci
@@ -143,12 +181,13 @@ source_args=(
 )
 printf '%q ' "$qemu_bin" "${source_args[@]}" >"$evidence_dir/source-command.txt"
 printf '\n' >>"$evidence_dir/source-command.txt"
+
+set_phase source-boot
 boot_started_ms=$(date +%s%3N)
 "$qemu_bin" "${source_args[@]}" >>"$evidence_dir/source-qemu.log" 2>&1 &
 source_pid=$!
 source_process_pid=$source_pid
 source_start_ticks=$(awk '{print $22}' "/proc/$source_pid/stat")
-
 for _attempt in $(seq 1 120); do
   [[ -S $source_socket ]] && break
   kill -0 "$source_pid" 2>/dev/null || fail "source QEMU exited before QMP"
@@ -156,63 +195,45 @@ for _attempt in $(seq 1 120); do
 done
 [[ -S $source_socket ]] || fail "source QMP socket was not created"
 
-deadline=$((SECONDS + timeout_seconds))
-while (( SECONDS < deadline )); do
+report_deadline=$((SECONDS + timeout_seconds))
+while (( SECONDS < report_deadline )); do
+  assert_no_uwsm_failure
   grep -q '^OMARCHY_GUEST_REPORT ' "$evidence_dir/source-diagnostics.log" && break
-  kill -0 "$source_pid" 2>/dev/null || fail "source QEMU exited before guest report"
+  kill -0 "$source_pid" 2>/dev/null || fail "source QEMU exited before authentic guest report"
   sleep 1
 done
-grep -q '^OMARCHY_GUEST_REPORT ' "$evidence_dir/source-diagnostics.log" || \
-  fail "timed out waiting for authentic guest report"
-wait_for_clean_frame \
-  "$source_socket" \
-  "$evidence_dir/source-qmp.jsonl" \
-  "$evidence_dir/source-desktop.ppm" \
-  "$evidence_dir/source-frame-health.json" \
-  "checkpoint source" \
-  300
+grep -q '^OMARCHY_GUEST_REPORT ' "$evidence_dir/source-diagnostics.log" || fail "timed out waiting for authentic guest report"
+report_received_ms=$(date +%s%3N)
+node "$report_gate" "$evidence_dir/source-diagnostics.log" /guest/guest-manifest.json >"$evidence_dir/source-report-validation.json" \
+  || fail "authentic guest report failed verification"
 
-# A nominally non-black framebuffer is not enough: Omarchy's idle surface can
-# legitimately be almost one dark color, and a failed compositor session can
-# look identical. Prove the real desktop binding and keyboard path before
-# freezing that state. `exit` closes Foot again so the packaged checkpoint
-# starts at the normal desktop rather than inside the proof terminal.
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" release-modifiers >/dev/null
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" super-return >/dev/null
-sleep 15
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
-  screendump "$evidence_dir/source-foot.ppm" >/dev/null
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
-  type $'id >/dev/virtio-ports/omarchy.web.diagnostics\n' >/dev/null
-source_input_deadline=$((SECONDS + 30))
-while (( SECONDS < source_input_deadline )); do
-  grep -q 'uid=1000(omarchy)' "$evidence_dir/source-diagnostics.log" && break
-  sleep 1
-done
-grep -q 'uid=1000(omarchy)' "$evidence_dir/source-diagnostics.log" || \
-  fail "source Super+Return did not open an interactive Omarchy Foot session"
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" type $'exit\n' >/dev/null
-sleep 5
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" release-modifiers >/dev/null
-wait_for_clean_frame \
-  "$source_socket" \
-  "$evidence_dir/source-qmp.jsonl" \
-  "$evidence_dir/source-desktop-after-input.ppm" \
-  "$evidence_dir/source-frame-health-after-input.json" \
-  "checkpoint source after input proof" \
-  120
+set_phase source-healthy-frames
+capture_two_healthy_frames "$source_socket" "$evidence_dir/source-qmp.jsonl" \
+  "$evidence_dir/source-desktop" "checkpoint source" 360
+
+set_phase source-foot-proof
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" release-modifiers >"$evidence_dir/source-release-modifiers.json"
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" super-return >"$evidence_dir/source-super-return.json"
+wait_for_frame_change "$source_socket" "$evidence_dir/source-qmp.jsonl" \
+  "$evidence_dir/source-desktop-2.ppm" "$evidence_dir/source-foot.ppm" \
+  "$evidence_dir/source-foot-change.json" minimum 0.0005 "source Super+Return Foot appearance" 120
+
+set_phase source-return-to-shell
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" release-modifiers >"$evidence_dir/source-release-before-close.json"
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" super-w >"$evidence_dir/source-super-w.json"
+wait_for_frame_change "$source_socket" "$evidence_dir/source-qmp.jsonl" \
+  "$evidence_dir/source-desktop-2.ppm" "$evidence_dir/source-checkpoint-desktop.ppm" \
+  "$evidence_dir/source-return-change.json" maximum 0.05 "source Foot close/clean checkpoint desktop" 120
 boot_finished_ms=$(date +%s%3N)
 
-node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" execute stop '{}' >/dev/null
-if [[ $migration_compression == legacy ]]; then
-  node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
-    execute migrate-set-capabilities \
-    '{"capabilities":[{"capability":"compress","state":true}]}' >/dev/null
-  node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
-    execute migrate-set-parameters \
-    '{"compress-level":6,"compress-threads":2,"compress-wait-thread":true,"decompress-threads":2}' >/dev/null
-fi
-
+# Capture a running runstate. Immediate `-incoming file:` has no browser-side
+# QMP control channel, so a paused stream would be unusable. QEMU performs its
+# normal stop-and-copy phase and leaves the source in postmigrate only after the
+# raw stream and paired disk state are consistent.
+set_phase checkpoint-running-state
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" release-modifiers >"$evidence_dir/source-release-before-migration.json"
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
+  execute query-status '{}' >"$evidence_dir/source-premigration-status.json"
 checkpoint_started_ms=$(date +%s%3N)
 node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
   execute migrate "{\"uri\":\"file:$evidence_dir/omarchy-preboot.vmstate\"}" >/dev/null
@@ -221,17 +242,19 @@ node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
 checkpoint_finished_ms=$(date +%s%3N)
 node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
   execute query-migrate '{}' >"$evidence_dir/source-migration-final.json"
+node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" \
+  execute query-status '{}' >"$evidence_dir/source-postmigration-status.json"
 node "$qmp_client" "$source_socket" "$evidence_dir/source-qmp.jsonl" execute quit '{}' >/dev/null
+set +e
 wait "$source_pid"
 source_exit=$?
+set -e
 source_pid=
 [[ $source_exit -eq 0 ]] || fail "source QEMU exited with $source_exit"
 mv "$evidence_dir/source-overlay.qcow2" "$evidence_dir/checkpoint-overlay.qcow2"
-
-gzip -9 -c "$evidence_dir/omarchy-preboot.vmstate" >"$evidence_dir/omarchy-preboot.vmstate.gz"
-gzip -t "$evidence_dir/omarchy-preboot.vmstate.gz"
-gzip -9 -c "$evidence_dir/checkpoint-overlay.qcow2" >"$evidence_dir/checkpoint-overlay.qcow2.gz"
-gzip -t "$evidence_dir/checkpoint-overlay.qcow2.gz"
+"$qemu_img" info --output=json "$evidence_dir/checkpoint-overlay.qcow2" >"$evidence_dir/checkpoint-overlay-info.json"
+sha256sum "$evidence_dir/omarchy-preboot.vmstate" "$evidence_dir/checkpoint-overlay.qcow2" \
+  >"$evidence_dir/checkpoint-artifacts-before-target.sha256"
 
 target_args=(
   "${common_args[@]}"
@@ -241,127 +264,180 @@ target_args=(
   -qmp "unix:$target_socket,server=on,wait=off"
   -snapshot
   -drive "file=$evidence_dir/checkpoint-overlay.qcow2,if=virtio,format=qcow2,media=disk,cache=unsafe"
+  -incoming "file:$evidence_dir/omarchy-preboot.vmstate"
 )
-if [[ $migration_compression == legacy ]]; then
-  target_args+=(-incoming defer)
-else
-  target_args+=(-incoming "file:$evidence_dir/omarchy-preboot.vmstate")
-fi
 printf '%q ' "$qemu_bin" "${target_args[@]}" >"$evidence_dir/target-command.txt"
 printf '\n' >>"$evidence_dir/target-command.txt"
+
+set_phase target-immediate-incoming
 resume_started_ms=$(date +%s%3N)
 "$qemu_bin" "${target_args[@]}" >>"$evidence_dir/target-qemu.log" 2>&1 &
 target_pid=$!
 target_process_pid=$target_pid
 target_start_ticks=$(awk '{print $22}' "/proc/$target_pid/stat")
-
-for _attempt in $(seq 1 1200); do
+for _attempt in $(seq 1 6000); do
   [[ -S $target_socket ]] && break
-  kill -0 "$target_pid" 2>/dev/null || fail "target QEMU exited while loading vmstate"
+  kill -0 "$target_pid" 2>/dev/null || fail "fresh target QEMU exited while loading immediate vmstate"
   sleep 0.1
 done
-[[ -S $target_socket ]] || fail "target QMP socket was not created"
-if [[ $migration_compression == legacy ]]; then
-  node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-    execute migrate-set-capabilities \
-    '{"capabilities":[{"capability":"compress","state":true}]}' >/dev/null
-  node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-    execute migrate-set-parameters \
-    '{"decompress-threads":2}' >/dev/null
-  node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-    execute migrate-incoming \
-    "{\"uri\":\"file:$evidence_dir/omarchy-preboot.vmstate\"}" >/dev/null
-fi
+[[ -S $target_socket ]] || fail "fresh target QMP socket was not created"
 node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  wait-status paused 600000 >"$evidence_dir/target-loaded-status.json"
-resume_loaded_ms=$(date +%s%3N)
+  wait-status running 600000 >"$evidence_dir/target-running-status.json" \
+  || fail "immediate incoming target did not auto-run without QMP cont"
+resume_running_ms=$(date +%s%3N)
 node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
   execute query-migrate '{}' >"$evidence_dir/target-migration-final.json"
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" execute cont '{}' >/dev/null
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  wait-status running 60000 >"$evidence_dir/target-running-status.json"
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" release-modifiers >/dev/null
-wait_for_clean_frame \
-  "$target_socket" \
-  "$evidence_dir/target-qmp.jsonl" \
-  "$evidence_dir/resumed-desktop.ppm" \
-  "$evidence_dir/resumed-frame-health.json" \
-  "resumed target" \
-  300
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" super-return >/dev/null
-sleep 15
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  type $'id >/dev/virtio-ports/omarchy.web.diagnostics\n' >/dev/null
-sleep 5
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  screendump "$evidence_dir/resumed-foot.ppm" >/dev/null
-grep -q 'uid=1000(omarchy)' "$evidence_dir/target-diagnostics.log" || \
-  fail "resumed Foot command did not reach the named guest diagnostics port"
 
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" execute quit '{}' >/dev/null
-wait "$target_pid"
-target_exit=$?
-target_pid=
-[[ $target_exit -eq 0 ]] || fail "target QEMU exited with $target_exit"
+set_phase target-healthy-frames
+node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" release-modifiers >"$evidence_dir/target-release-modifiers.json"
+capture_two_healthy_frames "$target_socket" "$evidence_dir/target-qmp.jsonl" \
+  "$evidence_dir/resumed-desktop" "resumed target" 360
+resume_healthy_ms=$(date +%s%3N)
+
+set_phase target-foot-proof
+node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" super-return >"$evidence_dir/target-super-return.json"
+wait_for_frame_change "$target_socket" "$evidence_dir/target-qmp.jsonl" \
+  "$evidence_dir/resumed-desktop-2.ppm" "$evidence_dir/resumed-foot.ppm" \
+  "$evidence_dir/resumed-foot-change.json" minimum 0.0005 "resumed Super+Return Foot appearance" 120
 resume_finished_ms=$(date +%s%3N)
 
-node /proof/artifact-integrity.mjs /guest \
-  >"$evidence_dir/artifact-integrity-after.json"
+node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" execute quit '{}' >/dev/null
+set +e
+wait "$target_pid"
+target_exit=$?
+set -e
+target_pid=
+[[ $target_exit -eq 0 ]] || fail "fresh target QEMU exited with $target_exit"
+sha256sum "$evidence_dir/omarchy-preboot.vmstate" "$evidence_dir/checkpoint-overlay.qcow2" \
+  >"$evidence_dir/checkpoint-artifacts-after-target.sha256"
+cmp -s "$evidence_dir/checkpoint-artifacts-before-target.sha256" "$evidence_dir/checkpoint-artifacts-after-target.sha256" \
+  || fail "checkpoint artifacts changed during disposable target smoke"
+node /proof/artifact-integrity.mjs /guest >"$evidence_dir/artifact-integrity-after.json"
 
 qemu_version=$($qemu_bin --version | sed -n '1p')
 qemu_sha256=$(sha256sum "$qemu_bin" | awk '{print $1}')
 vmstate_sha256=$(sha256sum "$evidence_dir/omarchy-preboot.vmstate" | awk '{print $1}')
 vmstate_bytes=$(stat -c %s "$evidence_dir/omarchy-preboot.vmstate")
-gzip_bytes=$(stat -c %s "$evidence_dir/omarchy-preboot.vmstate.gz")
 overlay_sha256=$(sha256sum "$evidence_dir/checkpoint-overlay.qcow2" | awk '{print $1}')
 overlay_bytes=$(stat -c %s "$evidence_dir/checkpoint-overlay.qcow2")
-overlay_gzip_bytes=$(stat -c %s "$evidence_dir/checkpoint-overlay.qcow2.gz")
-if [[ $migration_compression == legacy ]]; then
-  migration_description='QEMU legacy compress capability, zlib level 6, two threads'
-  incoming_mode='defer-qmp-file'
-else
-  migration_description='none; raw QEMU stream'
-  incoming_mode='immediate-cli-file'
-fi
+
 node - "$evidence_dir/run.json" <<EOF
 const fs = require("fs");
 const [output] = process.argv.slice(2);
-const record = {
-  schemaVersion: 1,
+fs.writeFileSync(output, JSON.stringify({
+  schemaVersion: 2,
   status: "completed",
   qemuVersion: ${qemu_version@Q},
-  qemuSourceCommit: "0ef7b4e2814b231705d8371dd7997f5b72e70baf",
+  qemuSourceCommit: "$expected_qemu_commit",
   qemuSha256: "$qemu_sha256",
   sourceProcess: { pid: $source_process_pid, startTicks: $source_start_ticks, exitCode: $source_exit },
   targetProcess: { pid: $target_process_pid, startTicks: $target_start_ticks, exitCode: $target_exit },
   sourceExitedBeforeTargetLaunch: true,
   machine: "pc-q35-8.2",
   memoryMiB: 1024,
-  vcpus: $vcpus,
-  proofScope: ${proof_scope@Q},
-  browserTopologyVcpus: 1,
-  topologyMatchesBrowser: $([[ $vcpus == 1 ]] && printf true || printf false),
+  vcpus: 2,
+  smp: "2,sockets=1,cores=2,threads=1",
+  accelerator: "tcg,tb-size=128,thread=multi",
   browserAcceptance: false,
-  diskMode: "packaged preboot qcow2 delta over exact immutable rootfs; resumed target adds -snapshot",
-  migrationCompression: ${migration_description@Q},
-  incomingMode: ${incoming_mode@Q},
+  nativeCheckpointHandoff: true,
+  diskMode: "packaged qcow2 boot delta over exact immutable rootfs; resumed target adds -snapshot",
+  migrationCompression: "none",
+  incomingMode: "immediate-cli-file",
+  capturedRunstate: "running",
+  targetAutoRanWithoutQmpCont: true,
   kernelCommandLine: ${kernel_command_line@Q},
-  bootMilliseconds: $((boot_finished_ms - boot_started_ms)),
+  guestReportMilliseconds: $((report_received_ms - boot_started_ms)),
+  bootToCheckpointReadyMilliseconds: $((boot_finished_ms - boot_started_ms)),
   checkpointMilliseconds: $((checkpoint_finished_ms - checkpoint_started_ms)),
-  resumeLoadMilliseconds: $((resume_loaded_ms - resume_started_ms)),
-  resumedInteractionMilliseconds: $((resume_finished_ms - resume_loaded_ms)),
+  resumeToRunningMilliseconds: $((resume_running_ms - resume_started_ms)),
+  resumeToHealthyMilliseconds: $((resume_healthy_ms - resume_started_ms)),
+  resumedFootProofMilliseconds: $((resume_finished_ms - resume_healthy_ms)),
   vmstateBytes: $vmstate_bytes,
   vmstateSha256: "$vmstate_sha256",
-  gzipBytes: $gzip_bytes,
-  gzipRatio: $gzip_bytes / $vmstate_bytes,
   overlayBytes: $overlay_bytes,
-  overlaySha256: "$overlay_sha256",
-  overlayGzipBytes: $overlay_gzip_bytes,
-  overlayGzipRatio: $overlay_gzip_bytes / $overlay_bytes,
-};
-fs.writeFileSync(output, JSON.stringify(record, null, 2) + "\n");
+  overlaySha256: "$overlay_sha256"
+}, null, 2) + "\n");
 EOF
 
+node - "$evidence_dir/checkpoint-manifest.json" \
+  "$evidence_dir/source-diagnostics.log" \
+  "$evidence_dir/source-report-validation.json" \
+  "$evidence_dir/source-checkpoint-desktop.ppm" \
+  "$evidence_dir/source-checkpoint-desktop-health.json" <<EOF
+const fs = require("fs");
+const crypto = require("crypto");
+const [output, diagnosticsPath, reportValidationPath, checkpointFramePath, checkpointFrameHealthPath] = process.argv.slice(2);
+const reportPrefix = "OMARCHY_GUEST_REPORT ";
+const reportLines = fs.readFileSync(diagnosticsPath, "utf8").split("\n").filter((line) => line.startsWith(reportPrefix));
+if (reportLines.length !== 1) throw new Error("expected one source guest report, found " + reportLines.length);
+const guestReport = JSON.parse(reportLines[0].slice(reportPrefix.length));
+const recursivelySort = (value) => Array.isArray(value)
+  ? value.map(recursivelySort)
+  : value && typeof value === "object"
+    ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, recursivelySort(value[key])]))
+    : value;
+const digestBytes = (bytes) => crypto.createHash("sha256").update(bytes).digest("hex");
+const normalizedGuestReportSha256 = digestBytes(JSON.stringify(recursivelySort(guestReport)));
+const reportValidationSha256 = digestBytes(fs.readFileSync(reportValidationPath));
+const checkpointFrameSha256 = digestBytes(fs.readFileSync(checkpointFramePath));
+const checkpointFrameHealthSha256 = digestBytes(fs.readFileSync(checkpointFrameHealthPath));
+fs.writeFileSync(output, JSON.stringify({
+  schemaVersion: 1,
+  kind: "omarchy-web-preboot-checkpoint",
+  vmstate: {
+    path: "omarchy-preboot.vmstate",
+    bytes: $vmstate_bytes,
+    sha256: "$vmstate_sha256",
+    format: "qemu-8.2-migration",
+    compression: "none",
+    incomingMode: "file"
+  },
+  bootDelta: {
+    path: "checkpoint-overlay.qcow2",
+    bytes: $overlay_bytes,
+    sha256: "$overlay_sha256",
+    format: "qcow2",
+    backingFilename: "rootfs.ext4",
+    backingFormat: "raw"
+  },
+  producer: { qemuBinarySha256: "$qemu_sha256" },
+  identity: {
+    baseGuestManifestSha256: "$expected_manifest_sha256",
+    rootfsSha256: "$expected_rootfs_sha256",
+    guestProvenanceSha256: "$expected_provenance_sha256"
+  },
+  qemu: {
+    repository: "https://github.com/ktock/qemu-wasm.git",
+    sourceCommit: "$expected_qemu_commit",
+    version: "8.2.0"
+  },
+  machine: {
+    type: "pc-q35-8.2",
+    memoryMiB: 1024,
+    smp: "2,sockets=1,cores=2,threads=1",
+    accel: "tcg,tb-size=128,thread=multi"
+  },
+  restoreContract: {
+    sourceRunstate: "running",
+    immediateIncomingAutoRuns: true,
+    qmpContRequired: false,
+    disposableWrites: "target -snapshot layer over immutable boot delta"
+  },
+  sourceEvidence: {
+    guestReport,
+    normalizedGuestReportSha256,
+    reportValidationSha256,
+    checkpointFrameSha256,
+    checkpointFrameHealthSha256
+  }
+}, null, 2) + "\n");
+EOF
+
+(
+  cd "$evidence_dir"
+  sha256sum omarchy-preboot.vmstate checkpoint-overlay.qcow2 checkpoint-manifest.json >SHA256SUMS
+)
+set_phase completed
 trap - EXIT INT TERM
 rm -f "$source_socket" "$target_socket"
 printf 'PREBOOT_CONTAINER_PASS evidence=%s\n' "$evidence_dir"

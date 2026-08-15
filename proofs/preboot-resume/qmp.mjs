@@ -113,6 +113,37 @@ function keyObjects(codes) {
   return codes.map((code) => ({ type: "qcode", data: code }));
 }
 
+const INPUT_TRANSITION_MILLISECONDS = 16;
+
+function explicitKeyEvent(code, down) {
+  return {
+    type: "key",
+    data: { down, key: { type: "qcode", data: code } },
+  };
+}
+
+async function sendExplicitChord(client, codes) {
+  const transitions = [
+    ...codes.map((code) => ({ code, down: true })),
+    ...[...codes].reverse().map((code) => ({ code, down: false })),
+  ];
+  const evidence = [];
+  for (const transition of transitions) {
+    const sentAt = Date.now();
+    await client.execute("input-send-event", {
+      events: [explicitKeyEvent(transition.code, transition.down)],
+    });
+    const acknowledgedAt = Date.now();
+    evidence.push({ ...transition, sentAt, acknowledgedAt });
+    await delay(INPUT_TRANSITION_MILLISECONDS);
+  }
+  return {
+    codes,
+    requestedInterTransitionMilliseconds: INPUT_TRANSITION_MILLISECONDS,
+    transitions: evidence,
+  };
+}
+
 async function waitFor(client, command, accept, timeoutMilliseconds) {
   const started = Date.now();
   let latest;
@@ -146,7 +177,11 @@ async function main() {
     } else if (action === "screendump") {
       result = await client.execute("screendump", { filename: values[0], format: "ppm" });
     } else if (action === "super-return") {
-      result = await client.execute("send-key", { keys: keyObjects(["meta_l", "ret"]), "hold-time": 100 });
+      // Match the browser input bridge: send acknowledged down/up transitions
+      // separately and never rely on QEMU's synthetic simultaneous chord.
+      result = await sendExplicitChord(client, ["meta_l", "ret"]);
+    } else if (action === "super-w") {
+      result = await sendExplicitChord(client, ["meta_l", "w"]);
     } else if (action === "release-modifiers") {
       result = await client.execute("input-send-event", {
         events: ["meta_l", "meta_r", "ctrl", "ctrl_r", "alt", "alt_r", "shift", "shift_r"].map((code) => ({
