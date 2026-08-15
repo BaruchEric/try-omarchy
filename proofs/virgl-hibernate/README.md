@@ -25,7 +25,10 @@ two vCPUs, and `tcg,tb-size=128,thread=multi`. Their ordered block devices are:
 The native producer uses `sdl,gl=on,show-cursor=on,full-screen=on`; the browser runtime uses
 `sdl,gl=es,show-cursor=on`. The manifest binds these separately as
 `producerMachine` and `runtimeMachine`. Every other machine field and both
-ordered block records must match.
+ordered block records must match. Native evidence additionally pins
+`SDL_VIDEO_X11_WINDOW_VISUALID=0x21`, the image's 24-bit TrueColor GLX visual,
+so Xvfb's frozen framebuffer remains a self-contained RGB capture instead of
+a mutable DirectColor colormap reference.
 
 The derived initramfs omits `kms`, removes `virtio_gpu` from early modules,
 and blacklists it during the new-kernel resume phase. A pre-desktop oneshot

@@ -359,6 +359,7 @@ Xvfb ":$display_number" -screen 0 1600x900x24 -fbdir "$xvfb_fbdir" \
   >"$evidence_dir/xvfb.log" 2>&1 &
 xvfb_pid=$!
 export DISPLAY=":$display_number"
+qemu_launch=(env SDL_VIDEO_X11_WINDOW_VISUALID=0x21 "$qemu_bin")
 for _attempt in $(seq 1 120); do
   [[ -S "/tmp/.X11-unix/X$display_number" && -f $xvfb_framebuffer ]] && break
   kill -0 "$xvfb_pid" 2>/dev/null || fail "Xvfb exited before its display was ready"
@@ -403,12 +404,12 @@ source_args=(
   -drive "if=none,id=omarchy-hibernate-swap,file=$evidence_dir/omarchy-hibernate.qcow2,format=qcow2,cache=unsafe"
   -device virtio-blk-pci,drive=omarchy-hibernate-swap,serial=omarchy-resume
 )
-printf '%q ' "$qemu_bin" "${source_args[@]}" >"$evidence_dir/source-command.txt"
+printf '%q ' "${qemu_launch[@]}" "${source_args[@]}" >"$evidence_dir/source-command.txt"
 printf '\n' >>"$evidence_dir/source-command.txt"
 
 set_phase source-hibernate
 source_started_ms=$(date +%s%3N)
-"$qemu_bin" "${source_args[@]}" >>"$evidence_dir/source-qemu.log" 2>&1 &
+"${qemu_launch[@]}" "${source_args[@]}" >>"$evidence_dir/source-qemu.log" 2>&1 &
 source_pid=$!
 wait_for_socket "$source_socket" "$source_pid" "source QEMU"
 wait_for_exit "$source_pid" "$source_timeout" "source hibernation"
@@ -486,12 +487,12 @@ target_args=(
   -drive "if=none,id=omarchy-hibernate-swap,file=$evidence_dir/omarchy-hibernate.qcow2,format=qcow2,cache=unsafe"
   -device virtio-blk-pci,drive=omarchy-hibernate-swap,serial=omarchy-resume
 )
-printf '%q ' "$qemu_bin" "${target_args[@]}" >"$evidence_dir/target-command.txt"
+printf '%q ' "${qemu_launch[@]}" "${target_args[@]}" >"$evidence_dir/target-command.txt"
 printf '\n' >>"$evidence_dir/target-command.txt"
 
 set_phase fresh-target-resume
 target_started_ms=$(date +%s%3N)
-"$qemu_bin" "${target_args[@]}" >>"$evidence_dir/target-qemu.log" 2>&1 &
+"${qemu_launch[@]}" "${target_args[@]}" >>"$evidence_dir/target-qemu.log" 2>&1 &
 target_pid=$!
 wait_for_socket "$target_socket" "$target_pid" "fresh target QEMU"
 wait_for_resume_marker "$target_pid" "$evidence_dir/target-diagnostics.log"
