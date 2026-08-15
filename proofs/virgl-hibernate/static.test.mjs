@@ -462,6 +462,8 @@ test("producer metadata is nonce-safe, split by environment, and fully indexed",
     "sourceEvidenceSha256", "resumeNonceSha256", "browserQemuWasmSha256",
     "hibernationEntryMarkerSha256", "hibernationMarkerSha256",
   ]) assert.ok(runner.includes(token), `manifest generation is missing ${token}`);
+  assert.ok(validator.includes('replaceAll("\\\\,", ",")'),
+    "validator must normalize Bash %q comma escaping in recorded QEMU commands");
   assert.doesNotMatch(runner, /sourceEvidence:\s*\{[\s\S]*?artifactPath/);
   assert.match(validator, /producer manifest leaks its plaintext resume nonce/);
   assert.match(validator, /SHA256SUMS file set\/order is incomplete or nondeterministic/);

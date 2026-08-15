@@ -280,7 +280,12 @@ assert.equal(change.mode, "minimum");
 invariant(change.ratio >= 0.0005, "Foot frame change is below threshold");
 assert.equal((await json("target-running-status.json")).status, "running");
 
-for (const command of [sourceCommand, targetCommand]) {
+// The runner records an executable shell reconstruction with Bash `printf %q`.
+// Bash escapes commas in QEMU's comma-delimited option arguments, so normalize
+// that lossless presentation detail before checking the exact argument tokens.
+const normalizedSourceCommand = sourceCommand.replaceAll("\\,", ",");
+const normalizedTargetCommand = targetCommand.replaceAll("\\,", ",");
+for (const command of [normalizedSourceCommand, normalizedTargetCommand]) {
   for (const token of [
     "SDL_VIDEO_X11_WINDOW_VISUALID=0x3b7",
     "-machine pc-q35-8.2", "-cpu qemu64", "-m 1024M",
@@ -296,12 +301,12 @@ for (const command of [sourceCommand, targetCommand]) {
   invariant(command.indexOf("drive=omarchy-hibernate-root,serial=omarchy-root") < command.indexOf("id=omarchy-hibernate-swap"));
   invariant(command.indexOf("id=omarchy-hibernate-swap") < command.indexOf("drive=omarchy-hibernate-swap,serial=omarchy-resume"));
 }
-assert.doesNotMatch(sourceCommand, /(^| )-snapshot( |$)/);
-assert.match(sourceCommand, /omarchy\.hibernate_producer=1/);
-assert.match(sourceCommand, new RegExp(`omarchy\\.hibernate_nonce=${enter.nonce}`));
-assert.match(targetCommand, /(^| )-snapshot( |$)/);
-assert.match(targetCommand, /omarchy\.hibernate_target=1/);
-assert.doesNotMatch(targetCommand, /omarchy\.hibernate_producer=1/);
+assert.doesNotMatch(normalizedSourceCommand, /(^| )-snapshot( |$)/);
+assert.match(normalizedSourceCommand, /omarchy\.hibernate_producer=1/);
+assert.match(normalizedSourceCommand, new RegExp(`omarchy\\.hibernate_nonce=${enter.nonce}`));
+assert.match(normalizedTargetCommand, /(^| )-snapshot( |$)/);
+assert.match(normalizedTargetCommand, /omarchy\.hibernate_target=1/);
+assert.doesNotMatch(normalizedTargetCommand, /omarchy\.hibernate_producer=1/);
 
 const baseKernelCommandLine = [
   "root=/dev/vda", "rw", "rootwait", "console=tty0", "console=ttyS0,115200n8",
