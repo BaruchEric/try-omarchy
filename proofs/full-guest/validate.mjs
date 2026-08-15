@@ -11,6 +11,7 @@ import { verifyGuestArtifacts } from "./artifact-integrity.mjs";
 import { qcodesForCharacter } from "./qmp.mjs";
 
 const REPORT_PREFIX = "OMARCHY_GUEST_REPORT ";
+const EXPECTED_KERNEL_COMMAND_LINE = "root=/dev/vda rw rootwait rootfstype=ext4 console=tty0 console=ttyS0,115200n8 loglevel=4 systemd.show_status=true rd.systemd.show_status=true mitigations=off nowatchdog omarchy.web_demo=1";
 const REQUIRED_CONFIGS = new Set([
   "/usr/share/omarchy/default/hypr/omarchy.lua",
   "/usr/share/omarchy/default/omarchy/omarchy-menu.jsonc",
@@ -154,13 +155,17 @@ export async function validateFullGuest({ guestDirectory, evidenceDirectory }) {
 
   invariant(run.schemaVersion === 1 && run.status === "completed", "run metadata does not record completion");
   invariant(run.qemuExitCode === 0, "QEMU did not exit cleanly", run);
+  invariant(run.qmpQuitClientStatus === 0, "QMP quit request did not complete successfully", run);
   invariant(run.teardown === "qmp-quit" && run.qemuAliveAfterTeardown === false, "QEMU teardown was not clean", run);
   invariant(/QEMU emulator version 11\./.test(run.qemuVersion), "unexpected native QEMU version", run.qemuVersion);
   invariant(run.machine === "pc-q35-8.2" && run.memoryMiB === 1536 && run.cores === 2, "native machine shape differs from the browser guest shape");
   invariant(run.snapshot === true && run.network === "none", "native run was not disposable and offline");
   invariant(!Number.isNaN(Date.parse(run.startedAt)) && !Number.isNaN(Date.parse(run.finishedAt)), "run timestamps are invalid");
+  invariant(Date.parse(run.finishedAt) >= Date.parse(run.startedAt), "run completion predates its start");
+  invariant(run.kernelCommandLine === EXPECTED_KERNEL_COMMAND_LINE, "kernel command line differs from the reviewed boot contract");
 
   const currentIntegrity = await verifyGuestArtifacts(guestDirectory);
+  invariant(path.resolve(run.guestDirectory) === currentIntegrity.guestDirectory, "run metadata points at a different guest distribution");
   const expectedArtifacts = comparableArtifacts(currentIntegrity);
   invariant(JSON.stringify(comparableArtifacts(beforeIntegrity)) === JSON.stringify(expectedArtifacts), "pre-boot artifact record differs from current files");
   invariant(JSON.stringify(comparableArtifacts(afterIntegrity)) === JSON.stringify(expectedArtifacts), "post-boot artifact record differs from current files");
@@ -171,6 +176,7 @@ export async function validateFullGuest({ guestDirectory, evidenceDirectory }) {
     "serial log has no Arch Linux kernel boot evidence",
   );
   invariant(/systemd\[1\]:\s+systemd\s+/i.test(serial) || /Welcome to.*Arch Linux/i.test(serial), "serial log has no systemd Arch boot evidence");
+  invariant(/Reached target[^\r\n]*Graphical Interface/i.test(serial), "serial log never reached systemd's graphical target");
   invariant(!/(Kernel panic|not syncing|emergency mode|Reached target Emergency|Failed to mount \/sysroot)/i.test(serial), "serial log contains a blocking boot failure");
 
   const reportLines = diagnostics.split("\n").filter((line) => line.startsWith(REPORT_PREFIX));
@@ -217,6 +223,7 @@ export async function validateFullGuest({ guestDirectory, evidenceDirectory }) {
   invariant(sent.some((message) => message.execute === "send-key" && message.arguments?.keys?.some((key) => key.data === "meta_l") && message.arguments?.keys?.some((key) => key.data === "ret")), "QMP did not invoke the authentic Super+Return binding");
   invariant(hasExactTypedSession(qmp, "id\n"), "QMP log does not contain the exact visible Foot command");
   invariant(sent.some((message) => message.execute === "quit"), "QMP graceful quit command is missing");
+  invariant(qmp.some((entry) => entry.direction === "receive" && entry.payload?.event === "SHUTDOWN" && entry.payload?.data?.guest === false && entry.payload?.data?.reason === "host-qmp-quit"), "QMP host-quit shutdown event is missing");
   invariant(!/(qemu-system-x86_64: terminating on signal|Could not open|failed to initialize|fatal:)/i.test(qemuLog), "QEMU log contains a fatal launch or forced-teardown error");
 
   // Keep this check after the independent boot, compositor, input, framebuffer,

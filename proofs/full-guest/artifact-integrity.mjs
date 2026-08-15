@@ -63,10 +63,13 @@ export async function verifyGuestArtifacts(guestDirectory) {
 
   const sums = parseSums(sumsText);
   const expectedSumPaths = new Set(["guest-manifest.json"]);
+  const seenArtifactPaths = new Set();
   const artifacts = [];
   const roles = new Map();
   for (const artifact of manifest.artifacts) {
     const relativePath = safeArtifactPath(artifact.path);
+    invariant(!seenArtifactPaths.has(relativePath), `duplicate manifest artifact path: ${relativePath}`);
+    seenArtifactPaths.add(relativePath);
     invariant(typeof artifact.role === "string" && artifact.role.length > 0, `artifact role is missing: ${relativePath}`);
     invariant(Number.isSafeInteger(artifact.bytes) && artifact.bytes > 0, `invalid artifact size: ${relativePath}`);
     invariant(SHA256.test(artifact.sha256 ?? ""), `invalid artifact digest: ${relativePath}`);

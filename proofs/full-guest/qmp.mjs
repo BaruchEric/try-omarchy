@@ -21,10 +21,13 @@ class QmpClient {
     this.pending = new Map();
     this.inbox = [];
     this.greeting = null;
+    this.logTail = Promise.resolve();
   }
 
-  async log(direction, payload) {
-    await appendFile(this.logPath, `${JSON.stringify({ at: new Date().toISOString(), direction, payload })}\n`);
+  log(direction, payload) {
+    const line = `${JSON.stringify({ at: new Date().toISOString(), direction, payload })}\n`;
+    this.logTail = this.logTail.then(() => appendFile(this.logPath, line));
+    return this.logTail;
   }
 
   async connect() {

@@ -20,7 +20,6 @@ foot_open_frame="$evidence_dir/desktop-foot-open.ppm"
 foot_frame="$evidence_dir/desktop-foot.ppm"
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 qemu_pid=
-clean_teardown=false
 
 fail() {
   echo "FULL_GUEST_FAIL $*" >&2
@@ -164,7 +163,6 @@ qemu_exit_code=$?
 set -e
 qemu_pid=
 [[ $qemu_exit_code -eq 0 ]] || fail "QEMU exited with status $qemu_exit_code"
-clean_teardown=true
 
 echo "[full-guest] re-verifying artifacts after the disposable run"
 node "$proof_dir/artifact-integrity.mjs" "$guest_dir" >"$evidence_dir/artifact-integrity-after.json"
