@@ -10,13 +10,22 @@ const HOST_EVENT_TYPES = new Set([
   "ready",
   "phase",
   "serial",
+  "release",
   "guestreport",
   "guestframe",
+  "inputaccepted",
   "reload",
   "error",
   "metrics",
 ]);
-const PARENT_COMMAND_TYPES = new Set(["start", "focus"]);
+const PARENT_COMMAND_TYPES = new Set([
+  "start",
+  "focus",
+  "menu",
+  "terminal",
+]);
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+const COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -43,6 +52,72 @@ function isFiniteNonNegative(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function isReleaseIdentity(value) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["upstream", "artifactManifestSha256"])) ||
+    !isRecord(value.upstream) ||
+    !hasOnlyKeys(
+      value.upstream,
+      new Set(["repository", "commit", "version", "treeSha256"]),
+    )
+  ) {
+    return false;
+  }
+  return (
+    value.upstream.repository === "https://github.com/basecamp/omarchy" &&
+    typeof value.upstream.commit === "string" &&
+    COMMIT_PATTERN.test(value.upstream.commit) &&
+    typeof value.upstream.version === "string" &&
+    value.upstream.version.length > 0 &&
+    value.upstream.version.length <= 128 &&
+    typeof value.upstream.treeSha256 === "string" &&
+    SHA256_PATTERN.test(value.upstream.treeSha256) &&
+    typeof value.artifactManifestSha256 === "string" &&
+    SHA256_PATTERN.test(value.artifactManifestSha256)
+  );
+}
+
+function isAcceptedInput(value) {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "key") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "scancode", "down"])) &&
+      Number.isInteger(value.scancode) &&
+      value.scancode >= 4 &&
+      value.scancode <= 255 &&
+      typeof value.down === "boolean"
+    );
+  }
+  if (value.kind === "pointer") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "x", "y", "buttons"])) &&
+      Number.isInteger(value.x) &&
+      value.x >= 0 &&
+      value.x <= 32767 &&
+      Number.isInteger(value.y) &&
+      value.y >= 0 &&
+      value.y <= 32767 &&
+      Number.isInteger(value.buttons) &&
+      value.buttons >= 0 &&
+      value.buttons <= 31
+    );
+  }
+  if (value.kind === "wheel") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "x", "y"])) &&
+      Number.isInteger(value.x) &&
+      value.x >= -1 &&
+      value.x <= 1 &&
+      Number.isInteger(value.y) &&
+      value.y >= -1 &&
+      value.y <= 1 &&
+      (value.x !== 0 || value.y !== 0)
+    );
+  }
+  return false;
+}
+
 function validateHostPayload(value, expectedNonce) {
   if (!isRecord(value) || !HOST_EVENT_TYPES.has(value.type)) return null;
 
@@ -67,6 +142,20 @@ function validateHostPayload(value, expectedNonce) {
         ? value
         : null;
     }
+    case "release": {
+      const keys = new Set([
+        ...common,
+        "upstream",
+        "artifactManifestSha256",
+      ]);
+      return hasEnvelope(value, expectedNonce, keys) &&
+        isReleaseIdentity({
+          upstream: value.upstream,
+          artifactManifestSha256: value.artifactManifestSha256,
+        })
+        ? value
+        : null;
+    }
     case "guestreport": {
       const keys = new Set([...common, "report"]);
       return hasEnvelope(value, expectedNonce, keys) && isRecord(value.report)
@@ -80,15 +169,36 @@ function validateHostPayload(value, expectedNonce) {
         isRecord(frame) &&
         hasOnlyKeys(
           frame,
-          new Set(["sequence", "source", "guestWidth", "guestHeight"]),
+          new Set([
+            "sequence",
+            "source",
+            "guestWidth",
+            "guestHeight",
+            "sampledPixels",
+            "nonBlackPixels",
+          ]),
         ) &&
-        Number.isInteger(frame.sequence) &&
+        Number.isSafeInteger(frame.sequence) &&
         frame.sequence > 0 &&
         frame.source === "qemu-guest" &&
         (frame.guestWidth === undefined ||
           (Number.isInteger(frame.guestWidth) && frame.guestWidth > 0)) &&
         (frame.guestHeight === undefined ||
-          (Number.isInteger(frame.guestHeight) && frame.guestHeight > 0))
+          (Number.isInteger(frame.guestHeight) && frame.guestHeight > 0)) &&
+        Number.isSafeInteger(frame.sampledPixels) &&
+        frame.sampledPixels > 0 &&
+        frame.sampledPixels <= 1600 * 900 &&
+        Number.isSafeInteger(frame.nonBlackPixels) &&
+        frame.nonBlackPixels >= 0 &&
+        frame.nonBlackPixels <= frame.sampledPixels
+        ? value
+        : null;
+    }
+    case "inputaccepted": {
+      const keys = new Set([...common, "event", "readinessProbe"]);
+      return hasEnvelope(value, expectedNonce, keys) &&
+        isAcceptedInput(value.event) &&
+        typeof value.readinessProbe === "boolean"
         ? value
         : null;
     }
@@ -196,14 +306,24 @@ export function createVmRunNonce(cryptoScope = globalThis.crypto) {
   throw new Error("Secure randomness is unavailable for the VM run boundary.");
 }
 
-export function createVmRun(previousRun, runNonce) {
+export function createVmRun(previousRun, runNonce, releaseId) {
   if (typeof runNonce !== "string" || !NONCE_PATTERN.test(runNonce)) {
     throw new TypeError("A valid VM run nonce is required.");
+  }
+  if (
+    typeof releaseId !== "string" ||
+    !SHA256_PATTERN.test(releaseId) ||
+    /^0{64}$/.test(releaseId)
+  ) {
+    throw new TypeError(
+      "A published 64-hex active release ID is required before the VM can start.",
+    );
   }
   const generation = (previousRun?.generation ?? 0) + 1;
   const query = new URLSearchParams({
     run: runNonce,
     protocol: String(VM_HOST_PROTOCOL.version),
+    release: releaseId.toLowerCase(),
   });
   return {
     generation,

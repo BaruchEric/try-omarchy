@@ -1,7 +1,29 @@
 export const DISPLAY_WIDTH = 1600;
 export const DISPLAY_HEIGHT = 900;
-export const RELEASE_BASE_URL = "/omarchy/versions/f0020448/";
+// Publication replaces this all-zero fail-closed sentinel with the SHA-256 of
+// the exact artifact-manifest.json bytes. A commit prefix is not a trust pin.
+export const ACTIVE_RELEASE_ID =
+  "0000000000000000000000000000000000000000000000000000000000000000";
+export const RELEASE_BASE_URL = `/omarchy/versions/${ACTIVE_RELEASE_ID}/`;
 export const PRODUCTION_WORKER_URL = `${RELEASE_BASE_URL}production-worker.mjs`;
+export const ACTIVE_UPSTREAM = Object.freeze({
+  repository: "https://github.com/basecamp/omarchy",
+  commit: "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
+  version: "4.0.0.alpha",
+  treeSha256:
+    "7c053841c0b43df796cb002441f3e0cccad4a32288769f499c86b509b4f86980",
+});
+
+const SHA256_PATTERN = /^[0-9a-f]{64}$/i;
+const UNPUBLISHED_RELEASE_ID = "0".repeat(64);
+
+export function isPublishableReleaseId(value) {
+  return (
+    typeof value === "string" &&
+    SHA256_PATTERN.test(value) &&
+    value.toLowerCase() !== UNPUBLISHED_RELEASE_ID
+  );
+}
 
 export const CAPABILITY_DEFINITIONS = Object.freeze([
   { key: "webAssembly", label: "WebAssembly" },
@@ -143,7 +165,8 @@ export function getPhasePresentation(phase, guestReady = false) {
   if (guestReady) {
     return {
       title: "Omarchy desktop ready",
-      detail: "Readiness was reported by the running guest.",
+      detail:
+        "The pinned guest, visible desktop, and input-to-frame path are verified.",
       stage: 4,
     };
   }
@@ -162,10 +185,12 @@ export function normalizeRuntimeError(error) {
     "failed to fetch dynamically imported module",
     "importing a module script failed",
     "runtime manifest request failed with http 404",
+    "artifact manifest request failed with http 404",
     "production worker request failed with http 404",
     "failed to load /omarchy/",
     "failed to load module script",
     "module not found",
+    "active release id is required",
   ].some((fragment) => normalized.includes(fragment));
 
   if (artifactMissing) {
@@ -205,6 +230,50 @@ export function normalizeRuntimeError(error) {
 
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value, allowedKeys) {
+  return Object.keys(value).every((key) => allowedKeys.has(key));
+}
+
+export function isActiveReleaseIdentity(
+  value,
+  expectedReleaseId = ACTIVE_RELEASE_ID,
+) {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["upstream", "artifactManifestSha256"])) ||
+    !isRecord(value.upstream) ||
+    !hasOnlyKeys(
+      value.upstream,
+      new Set(["repository", "commit", "version", "treeSha256"]),
+    )
+  ) {
+    return false;
+  }
+  return (
+    Object.entries(ACTIVE_UPSTREAM).every(
+      ([key, expected]) => value.upstream[key] === expected,
+    ) &&
+    isPublishableReleaseId(expectedReleaseId) &&
+    value.artifactManifestSha256 === expectedReleaseId.toLowerCase()
+  );
+}
+
+export function guestReportMatchesRelease(
+  report,
+  release,
+  expectedReleaseId = ACTIVE_RELEASE_ID,
+) {
+  if (
+    !isGuestReadyReport(report) ||
+    !isActiveReleaseIdentity(release, expectedReleaseId)
+  ) {
+    return false;
+  }
+  return Object.entries(release.upstream).every(
+    ([key, expected]) => report.provenance[key] === expected,
+  );
 }
 
 /**
@@ -288,6 +357,33 @@ export function isGuestReadyReport(value) {
     "hyprctl monitors -j",
     "omarchy-version",
   ];
+  const monitorCommand = commandMap.get("hyprctl monitors -j");
+  let monitorMatches = false;
+  try {
+    const monitors = JSON.parse(monitorCommand?.stdout ?? "");
+    monitorMatches =
+      Array.isArray(monitors) &&
+      monitors.length === 1 &&
+      isRecord(monitors[0]) &&
+      monitors[0].width === DISPLAY_WIDTH &&
+      monitors[0].height === DISPLAY_HEIGHT &&
+      monitors[0].disabled !== true &&
+      monitors[0].dpmsStatus !== false;
+  } catch {
+    monitorMatches = false;
+  }
+  const installedOmarchyVersion = commandMap
+    .get("omarchy-version")
+    ?.stdout.trim();
+  const escapedReleaseVersion = value.provenance.version.replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&",
+  );
+  const omarchyVersionMatches =
+    installedOmarchyVersion === value.provenance.version ||
+    new RegExp(`^${escapedReleaseVersion}-[1-9][0-9]*(?:\\.[0-9]+)*$`).test(
+      installedOmarchyVersion ?? "",
+    );
   const commandsMatch =
     requiredCommands.every((key) => {
       const command = commandMap.get(key);
@@ -295,9 +391,8 @@ export function isGuestReadyReport(value) {
     }) &&
     commandMap.get("uname -m")?.stdout.trim() === "x86_64" &&
     /hyprland/i.test(commandMap.get("hyprctl version")?.stdout ?? "") &&
-    commandMap
-      .get("omarchy-version")
-      ?.stdout.includes(value.provenance.version);
+    monitorMatches &&
+    omarchyVersionMatches;
 
   const configs = Array.isArray(value.configs) ? value.configs : [];
   const configsMatch =
@@ -327,18 +422,69 @@ export function isGuestDisplayFrame(value) {
   return (
     isRecord(value) &&
     value.source === "qemu-guest" &&
-    Number.isInteger(value.sequence) &&
+    Number.isSafeInteger(value.sequence) &&
     value.sequence > 0 &&
     value.guestWidth === DISPLAY_WIDTH &&
-    value.guestHeight === DISPLAY_HEIGHT
+    value.guestHeight === DISPLAY_HEIGHT &&
+    Number.isSafeInteger(value.sampledPixels) &&
+    value.sampledPixels > 0 &&
+    value.sampledPixels <= DISPLAY_WIDTH * DISPLAY_HEIGHT &&
+    Number.isSafeInteger(value.nonBlackPixels) &&
+    value.nonBlackPixels > 0 &&
+    value.nonBlackPixels <= value.sampledPixels
   );
 }
 
-export function createDesktopEvidence() {
+export function isAcceptedInputEvidence(value) {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "key") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "scancode", "down"])) &&
+      Number.isInteger(value.scancode) &&
+      value.scancode >= 4 &&
+      value.scancode <= 255 &&
+      typeof value.down === "boolean"
+    );
+  }
+  if (value.kind === "pointer") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "x", "y", "buttons"])) &&
+      Number.isInteger(value.x) &&
+      value.x >= 0 &&
+      value.x <= 32767 &&
+      Number.isInteger(value.y) &&
+      value.y >= 0 &&
+      value.y <= 32767 &&
+      Number.isInteger(value.buttons) &&
+      value.buttons >= 0 &&
+      value.buttons <= 31
+    );
+  }
+  if (value.kind === "wheel") {
+    return (
+      hasOnlyKeys(value, new Set(["kind", "x", "y"])) &&
+      Number.isInteger(value.x) &&
+      value.x >= -1 &&
+      value.x <= 1 &&
+      Number.isInteger(value.y) &&
+      value.y >= -1 &&
+      value.y <= 1 &&
+      (value.x !== 0 || value.y !== 0)
+    );
+  }
+  return false;
+}
+
+export function createDesktopEvidence(expectedReleaseId = ACTIVE_RELEASE_ID) {
   return {
+    expectedReleaseId,
     eventOrdinal: 0,
+    release: null,
+    releaseOrdinal: null,
     report: null,
     reportOrdinal: null,
+    input: null,
+    inputOrdinal: null,
     frame: null,
     frameOrdinal: null,
     ready: false,
@@ -354,8 +500,31 @@ export function advanceDesktopEvidence(evidence, event) {
   const current = evidence ?? createDesktopEvidence();
   const eventOrdinal = current.eventOrdinal + 1;
 
+  if (event?.type === "release") {
+    if (!isActiveReleaseIdentity(event.release, current.expectedReleaseId)) {
+      return { ...current, eventOrdinal };
+    }
+    return {
+      ...current,
+      eventOrdinal,
+      release: event.release,
+      releaseOrdinal: eventOrdinal,
+      report: null,
+      reportOrdinal: null,
+      input: null,
+      inputOrdinal: null,
+      ready: false,
+    };
+  }
+
   if (event?.type === "guestreport") {
-    if (!isGuestReadyReport(event.report)) {
+    if (
+      !guestReportMatchesRelease(
+        event.report,
+        current.release,
+        current.expectedReleaseId,
+      )
+    ) {
       return { ...current, eventOrdinal };
     }
     return {
@@ -363,7 +532,31 @@ export function advanceDesktopEvidence(evidence, event) {
       eventOrdinal,
       report: event.report,
       reportOrdinal: eventOrdinal,
+      input: null,
+      inputOrdinal: null,
       ready: false,
+    };
+  }
+
+  if (event?.type === "inputaccepted") {
+    if (
+      !isAcceptedInputEvidence(event.input) ||
+      event.readinessProbe !== true ||
+      event.input.kind !== "pointer" ||
+      event.input.x !== 16384 ||
+      event.input.y !== 16384 ||
+      event.input.buttons !== 0 ||
+      current.report === null ||
+      current.reportOrdinal >= eventOrdinal
+    ) {
+      return { ...current, eventOrdinal };
+    }
+    return {
+      ...current,
+      eventOrdinal,
+      input: event.input,
+      inputOrdinal: eventOrdinal,
+      ready: current.ready,
     };
   }
 
@@ -385,7 +578,10 @@ export function advanceDesktopEvidence(evidence, event) {
       frameOrdinal: eventOrdinal,
       ready:
         current.ready ||
-        (current.report !== null && current.reportOrdinal < eventOrdinal),
+        (current.report !== null &&
+          current.input !== null &&
+          current.reportOrdinal < current.inputOrdinal &&
+          current.inputOrdinal < eventOrdinal),
     };
   }
 

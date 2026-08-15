@@ -9,6 +9,7 @@ import {
 } from "./vm-host-protocol.mjs";
 import {
   advanceDesktopEvidence,
+  ACTIVE_RELEASE_ID,
   appendDiagnosticLine,
   CAPABILITY_DEFINITIONS,
   createDesktopEvidence,
@@ -36,6 +37,18 @@ type GuestFrame = {
   source: string;
   guestWidth?: number;
   guestHeight?: number;
+  sampledPixels: number;
+  nonBlackPixels: number;
+};
+
+type ReleaseIdentity = {
+  upstream: {
+    repository: string;
+    commit: string;
+    version: string;
+    treeSha256: string;
+  };
+  artifactManifestSha256: string;
 };
 
 type RuntimeErrorInfo = ReturnType<typeof normalizeRuntimeError>;
@@ -63,13 +76,17 @@ export function DemoLauncher() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const machineRef = useRef<HTMLDivElement>(null);
   const activeRunRef = useRef<VmRun | null>(null);
-  const desktopEvidenceRef = useRef(createDesktopEvidence());
+  const desktopEvidenceRef = useRef(
+    createDesktopEvidence(ACTIVE_RELEASE_ID),
+  );
   const [hostRun, setHostRun] = useState<VmRun | null>(null);
   const [capabilities, setCapabilities] = useState<CapabilityReport | null>(null);
   const [phase, setPhase] = useState("idle");
   const [sessionStarted, setSessionStarted] = useState(false);
   const [guestReady, setGuestReady] = useState(false);
   const [guestReport, setGuestReport] = useState<GuestReport | null>(null);
+  const [releaseIdentity, setReleaseIdentity] =
+    useState<ReleaseIdentity | null>(null);
   const [lastFrame, setLastFrame] = useState<GuestFrame | null>(null);
   const [serialLines, setSerialLines] = useState<string[]>([]);
   const [runtimeError, setRuntimeError] = useState<RuntimeErrorInfo | null>(null);
@@ -160,6 +177,28 @@ export function DemoLauncher() {
         case "serial":
           addHostDiagnostic(`[${message.stream}] ${message.line}`);
           break;
+        case "release": {
+          const release = {
+            upstream: message.upstream,
+            artifactManifestSha256: message.artifactManifestSha256,
+          } as ReleaseIdentity;
+          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
+            type: "release",
+            release,
+          });
+          desktopEvidenceRef.current = next;
+          if (next.release !== release) {
+            addHostDiagnostic(
+              "[release] Rejected a release identity that did not match the compile-time artifact-manifest SHA-256 and pinned Omarchy source.",
+            );
+            break;
+          }
+          setReleaseIdentity(release);
+          addHostDiagnostic(
+            `[release] Verified artifact manifest ${release.artifactManifestSha256}.`,
+          );
+          break;
+        }
         case "guestframe": {
           const frame = message.frame as GuestFrame;
           setLastFrame(frame);
@@ -174,7 +213,7 @@ export function DemoLauncher() {
             setGuestReady(true);
             setRuntimeError(null);
             addHostDiagnostic(
-              "[guest] Desktop report followed by a fresh 1600x900 guest frame; session is ready.",
+              "[guest] Release-matched report, QEMU input acceptance, and a later non-black 1600x900 guest frame verified; session is ready.",
             );
             hostWindow.postMessage(
               createVmHostCommand("focus", activeRun.nonce),
@@ -196,11 +235,34 @@ export function DemoLauncher() {
             report,
           });
           desktopEvidenceRef.current = next;
+          if (next.report !== report) {
+            addHostDiagnostic(
+              "[guest] Rejected an authentic-looking report because its repository, commit, version, or source-tree SHA-256 did not exactly match the verified active release.",
+            );
+            break;
+          }
           setGuestReport(report as GuestReport);
           setGuestReady(false);
           addHostDiagnostic(
-            "[guest] Authenticity report received; waiting for a later 1600x900 guest frame.",
+            "[guest] Authenticity report matched the active release; probing the real QEMU input bridge, then waiting for a later non-black 1600x900 frame.",
           );
+          break;
+        }
+        case "inputaccepted": {
+          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
+            type: "inputaccepted",
+            input: message.event,
+            readinessProbe: message.readinessProbe,
+          });
+          const acceptedProbe =
+            message.readinessProbe === true &&
+            next.input === message.event;
+          desktopEvidenceRef.current = next;
+          if (acceptedProbe) {
+            addHostDiagnostic(
+              "[input] QEMU accepted the exact harmless readiness probe; waiting for a still-later guest framebuffer presentation.",
+            );
+          }
           break;
         }
         case "reload":
@@ -244,6 +306,7 @@ export function DemoLauncher() {
       const nextRun = createVmRun(
         activeRunRef.current,
         createVmRunNonce(window.crypto),
+        ACTIVE_RELEASE_ID,
       ) as VmRun;
       activeRunRef.current = nextRun;
       if (iframeRef.current) iframeRef.current.src = "about:blank";
@@ -251,9 +314,10 @@ export function DemoLauncher() {
       setSessionStarted(true);
       setGuestReady(false);
       setGuestReport(null);
+      setReleaseIdentity(null);
       setLastFrame(null);
       setCanvasMetrics(null);
-      desktopEvidenceRef.current = createDesktopEvidence();
+      desktopEvidenceRef.current = createDesktopEvidence(ACTIVE_RELEASE_ID);
       setRuntimeError(null);
       setControlMessage("");
       setSerialLines(
@@ -305,6 +369,17 @@ export function DemoLauncher() {
 
   function resetSession() {
     beginFreshRun(true);
+  }
+
+  function runGuestShortcut(command: "menu" | "terminal") {
+    const activeRun = activeRunRef.current;
+    const hostWindow = iframeRef.current?.contentWindow;
+    if (!guestReady || !activeRun || !hostWindow) return;
+    hostWindow.postMessage(
+      createVmHostCommand(command, activeRun.nonce),
+      window.location.origin,
+    );
+    setControlMessage("");
   }
 
   const launchLabel =
@@ -519,14 +594,32 @@ export function DemoLauncher() {
             <div className="machine-footer">
               <span>{guestReady ? identity : "Arch · Hyprland · Quickshell"}</span>
               <span>
-                {guestReady ? "Guest report received" : "Disposable session"}
+                {guestReady
+                  ? "Release · input · display verified"
+                  : "Disposable session"}
               </span>
             </div>
 
             {sessionStarted && (
               <div className="session-tools">
                 <div className="shortcut-help" id="shortcut-help">
-                  <strong>Click the desktop first.</strong>
+                  <strong>Explore the real desktop.</strong>
+                  <button
+                    className="shortcut-action"
+                    type="button"
+                    disabled={!guestReady}
+                    onClick={() => runGuestShortcut("menu")}
+                  >
+                    Open Omarchy menu
+                  </button>
+                  <button
+                    className="shortcut-action"
+                    type="button"
+                    disabled={!guestReady}
+                    onClick={() => runGuestShortcut("terminal")}
+                  >
+                    Open terminal
+                  </button>
                   <span>
                     <kbd>Super</kbd> + <kbd>Space</kbd> Omarchy menu
                   </span>
@@ -554,6 +647,12 @@ export function DemoLauncher() {
                     <span>
                       <b>Guest</b>
                       {identity}
+                    </span>
+                    <span>
+                      <b>Release manifest</b>
+                      {releaseIdentity
+                        ? releaseIdentity.artifactManifestSha256
+                        : "waiting for verified identity"}
                     </span>
                     <span>
                       <b>Frame</b>

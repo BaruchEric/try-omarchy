@@ -1,24 +1,45 @@
+import {
+  fetchVerifiedWorkerBootstrap,
+  normalizedPointerForCanvas,
+  normalizeRuntimeGuestFrame,
+  normalizeRuntimeInputAccepted,
+  validateRuntimeRelease,
+} from "/vm/host-utils.mjs";
+
 const PROTOCOL_CHANNEL = "omarchy-vm-host";
 const PROTOCOL_VERSION = 1;
 const DISPLAY_WIDTH = 1600;
 const DISPLAY_HEIGHT = 900;
-const RELEASE_BASE_PATH = "/omarchy/versions/f0020448/";
-const PRODUCTION_WORKER_ASSET = "production-worker.mjs";
 const NONCE_PATTERN = /^[A-Za-z0-9_-]{20,128}$/;
+const RELEASE_ID_PATTERN = /^[a-f0-9]{64}$/;
+const UNPUBLISHED_RELEASE_ID = "0".repeat(64);
 
 const query = new URLSearchParams(window.location.search);
 const runNonce = query.get("run") ?? "";
+const releaseId = (query.get("release") ?? "").toLowerCase();
 const requestedProtocol = Number(query.get("protocol"));
 const canvas = document.getElementById("canvas");
 const hostBoundaryValid =
   canvas instanceof HTMLCanvasElement &&
   NONCE_PATTERN.test(runNonce) &&
+  RELEASE_ID_PATTERN.test(releaseId) &&
+  releaseId !== UNPUBLISHED_RELEASE_ID &&
   requestedProtocol === PROTOCOL_VERSION &&
   window.parent !== window;
 let started = false;
 let runtimeWorker = null;
+let runtimeWorkerBlobUrl = null;
+let verifiedBootstrap = null;
+let verifiedRuntimeRelease = null;
+let guestReportSeen = false;
+let runtimeRunning = false;
+let readinessProbeSent = false;
+let readinessProbeAwaiting = false;
+let readinessProbeAccepted = false;
 let pendingPointer = null;
 let pointerFrame = 0;
+let pointerButtonsActive = false;
+let lastPointer = { x: 0.5, y: 0.5 };
 const pressedKeys = new Set();
 
 function isRecord(value) {
@@ -59,6 +80,23 @@ function postError(error, message = "The isolated VM host could not start.") {
   });
 }
 
+function revokeWorkerBlobUrl() {
+  if (!runtimeWorkerBlobUrl) return;
+  URL.revokeObjectURL(runtimeWorkerBlobUrl);
+  runtimeWorkerBlobUrl = null;
+}
+
+function stopRuntime() {
+  runtimeWorker?.terminate();
+  runtimeWorker = null;
+  revokeWorkerBlobUrl();
+}
+
+function rejectWorkerMessage(message) {
+  stopRuntime();
+  postError(message, "The emulator Worker violated its verified protocol.");
+}
+
 function reportCanvasMetrics() {
   const rect = canvas.getBoundingClientRect();
   const devicePixelRatio =
@@ -92,6 +130,7 @@ function reportCanvasMetrics() {
 
 function bindWorker(worker) {
   worker.addEventListener("message", (event) => {
+    revokeWorkerBlobUrl();
     const detail = event.data;
     if (!isRecord(detail) || typeof detail.type !== "string") return;
 
@@ -102,6 +141,12 @@ function bindWorker(worker) {
           ? undefined
           : text(detail.error, "The emulator reported a failure.");
         post("phase", { phase, ...(reason === undefined ? {} : { reason }) });
+        if (phase === "running") {
+          runtimeRunning = true;
+          sendReadinessProbe();
+        } else if (phase === "failed" || phase === "exited") {
+          runtimeRunning = false;
+        }
         break;
       }
       case "serial": {
@@ -112,48 +157,88 @@ function bindWorker(worker) {
         });
         break;
       }
+      case "release": {
+        if (verifiedRuntimeRelease) {
+          rejectWorkerMessage("The Worker emitted more than one release identity.");
+          break;
+        }
+        const release = validateRuntimeRelease(detail, verifiedBootstrap);
+        if (!release) {
+          rejectWorkerMessage(
+            "The Worker release identity did not match its verified bootstrap manifest.",
+          );
+          break;
+        }
+        verifiedRuntimeRelease = release;
+        post("release", release);
+        break;
+      }
       case "guestreport":
-        if (isRecord(detail.report)) post("guestreport", { report: detail.report });
-        else postError("The Worker emitted a non-object guest report.", "The guest authenticity report was malformed.");
-        break;
-      case "guestreporterror":
-        postError(detail.error, "The guest authenticity report could not be parsed.");
-        break;
-      case "guestframe":
-        if (
-          detail.source === "qemu-guest" &&
-          Number.isInteger(detail.sequence) &&
-          detail.sequence > 0
-        ) {
-          post("guestframe", {
-            frame: {
-              sequence: detail.sequence,
-              source: "qemu-guest",
-              ...(Number.isInteger(detail.guestWidth) && detail.guestWidth > 0
-                ? { guestWidth: detail.guestWidth }
-                : {}),
-              ...(Number.isInteger(detail.guestHeight) && detail.guestHeight > 0
-                ? { guestHeight: detail.guestHeight }
-                : {}),
-            },
-          });
+        if (!verifiedRuntimeRelease) {
+          rejectWorkerMessage(
+            "The Worker emitted guest evidence before its release identity.",
+          );
+        } else if (guestReportSeen) {
+          rejectWorkerMessage("The Worker emitted more than one guest report.");
+        } else if (isRecord(detail.report)) {
+          guestReportSeen = true;
+          post("guestreport", { report: detail.report });
+          sendReadinessProbe();
+        } else {
+          rejectWorkerMessage("The Worker emitted a non-object guest report.");
         }
         break;
+      case "guestreporterror":
+        stopRuntime();
+        postError(detail.error, "The guest authenticity report could not be parsed.");
+        break;
+      case "guestframe": {
+        const frame = normalizeRuntimeGuestFrame(detail);
+        if (!frame) {
+          rejectWorkerMessage("The Worker emitted malformed guest-frame evidence.");
+        } else if (!verifiedRuntimeRelease) {
+          rejectWorkerMessage(
+            "The Worker emitted guest pixels before its release identity.",
+          );
+        } else {
+          post("guestframe", { frame });
+        }
+        break;
+      }
       case "display":
         if (detail.width !== DISPLAY_WIDTH || detail.height !== DISPLAY_HEIGHT) {
-          postError(
+          rejectWorkerMessage(
             `Runtime requested ${String(detail.width)}x${String(detail.height)}.`,
-            "The guest display did not match the verified 1600×900 profile.",
           );
         }
         break;
       case "inputerror":
         post("serial", {
           stream: "stderr",
-          line: `[input] ${text(detail.error, "The guest rejected an input event.")}`,
+          line: `[input] ${text(detail.error, "The QEMU input bridge rejected an input event.")}`,
         });
         break;
+      case "inputaccepted": {
+        const acceptedInput = normalizeRuntimeInputAccepted(detail);
+        if (!acceptedInput) {
+          rejectWorkerMessage("The Worker emitted malformed accepted-input evidence.");
+          break;
+        }
+        const readinessProbe =
+          readinessProbeAwaiting &&
+          acceptedInput.kind === "pointer" &&
+          acceptedInput.x === 16384 &&
+          acceptedInput.y === 16384 &&
+          acceptedInput.buttons === 0;
+        if (readinessProbe) {
+          readinessProbeAwaiting = false;
+          readinessProbeAccepted = true;
+        }
+        post("inputaccepted", { event: acceptedInput, readinessProbe });
+        break;
+      }
       case "error":
+        stopRuntime();
         postError(detail.error);
         break;
     }
@@ -161,12 +246,31 @@ function bindWorker(worker) {
 
   worker.addEventListener("error", (event) => {
     event.preventDefault();
+    stopRuntime();
     postError(event.error ?? event.message, "The isolated emulator Worker failed.");
   });
 
   worker.addEventListener("messageerror", () => {
+    stopRuntime();
     postError("The Worker returned an unreadable message.", "The isolated emulator Worker failed.");
   });
+}
+
+function sendReadinessProbe() {
+  if (
+    readinessProbeSent ||
+    !runtimeRunning ||
+    !guestReportSeen ||
+    !verifiedRuntimeRelease
+  ) {
+    return;
+  }
+  readinessProbeSent = true;
+  readinessProbeAwaiting = true;
+  sendInput(
+    { kind: "pointer", x: 0.5, y: 0.5, buttons: 0 },
+    { readinessProbe: true },
+  );
 }
 
 async function startRuntime() {
@@ -175,27 +279,24 @@ async function startRuntime() {
   post("phase", { phase: "loading-runtime" });
 
   try {
-    const releaseBaseUrl = new URL(RELEASE_BASE_PATH, window.location.href);
+    const releaseBaseUrl = new URL(
+      `/omarchy/versions/${releaseId}/`,
+      window.location.href,
+    );
     if (releaseBaseUrl.origin !== window.location.origin) {
       throw new Error("The immutable release must be served from this site.");
     }
-    const workerUrl = new URL(PRODUCTION_WORKER_ASSET, releaseBaseUrl);
-    const workerResponse = await fetch(workerUrl, {
-      method: "HEAD",
-      credentials: "same-origin",
-      cache: "no-store",
-      redirect: "error",
+    post("phase", { phase: "loading-artifact-manifest" });
+    verifiedBootstrap = await fetchVerifiedWorkerBootstrap({
+      releaseBaseUrl,
+      expectedReleaseId: releaseId,
     });
-    if (!workerResponse.ok) {
-      throw new Error(
-        `Production Worker request failed with HTTP ${workerResponse.status}: ${workerUrl.pathname}`,
-      );
-    }
-    const workerType = workerResponse.headers.get("content-type") ?? "";
-    if (!/^(?:text|application)\/javascript\b/i.test(workerType)) {
-      throw new Error(`Production Worker has an unsafe Content-Type: ${workerType || "missing"}`);
-    }
-    runtimeWorker = new Worker(workerUrl, {
+    runtimeWorkerBlobUrl = URL.createObjectURL(
+      new Blob([verifiedBootstrap.workerBytes], {
+        type: "text/javascript",
+      }),
+    );
+    runtimeWorker = new Worker(runtimeWorkerBlobUrl, {
       type: "module",
       name: `omarchy-vm-${runNonce.slice(0, 12)}`,
     });
@@ -213,8 +314,7 @@ async function startRuntime() {
       [offscreen],
     );
   } catch (error) {
-    runtimeWorker?.terminate();
-    runtimeWorker = null;
+    stopRuntime();
     postError(error);
   }
 }
@@ -230,27 +330,29 @@ function isParentCommand(event) {
     value.channel === PROTOCOL_CHANNEL &&
     value.version === PROTOCOL_VERSION &&
     value.runNonce === runNonce &&
-    (value.type === "start" || value.type === "focus")
+    ["start", "focus", "menu", "terminal"].includes(value.type)
   );
 }
 
-function normalizedPointer(event) {
+function normalizedPointer(event, clamp = false) {
   const rect = canvas.getBoundingClientRect();
-  if (!(rect.width > 0 && rect.height > 0)) return null;
-  const scale = Math.min(rect.width / DISPLAY_WIDTH, rect.height / DISPLAY_HEIGHT);
-  const contentWidth = DISPLAY_WIDTH * scale;
-  const contentHeight = DISPLAY_HEIGHT * scale;
-  const left = rect.left + (rect.width - contentWidth) / 2;
-  const top = rect.top + (rect.height - contentHeight) / 2;
-  const x = (event.clientX - left) / contentWidth;
-  const y = (event.clientY - top) / contentHeight;
-  if (x < 0 || x > 1 || y < 0 || y > 1) return null;
-  return { x, y, buttons: event.buttons & 31 };
+  const point = normalizedPointerForCanvas(
+    event.clientX,
+    event.clientY,
+    rect,
+    { clamp },
+  );
+  if (!point) return null;
+  lastPointer = point;
+  return { ...point, buttons: event.buttons & 31 };
 }
 
-function sendInput(event) {
-  if (!runtimeWorker) return;
+function sendInput(event, { readinessProbe = false } = {}) {
+  if (!runtimeWorker || (!readinessProbe && !readinessProbeAccepted)) {
+    return false;
+  }
   runtimeWorker.postMessage({ type: "input", event });
+  return true;
 }
 
 function flushPointer() {
@@ -261,20 +363,53 @@ function flushPointer() {
 }
 
 function queuePointer(event, immediate = false) {
-  const point = normalizedPointer(event);
-  if (!point) return;
+  if (!readinessProbeAccepted) return false;
+  const point = normalizedPointer(event, event.buttons !== 0);
+  if (!point) return false;
   pendingPointer = point;
+  pointerButtonsActive = point.buttons !== 0;
   if (immediate) {
     if (pointerFrame) cancelAnimationFrame(pointerFrame);
     flushPointer();
   } else if (!pointerFrame) {
     pointerFrame = requestAnimationFrame(flushPointer);
   }
+  return true;
 }
 
 function releasePressedKeys() {
   for (const code of pressedKeys) sendInput({ kind: "key", code, down: false });
   pressedKeys.clear();
+}
+
+function releasePointerButtons(event) {
+  const point = event
+    ? normalizedPointer(event, true)
+    : { ...lastPointer, buttons: 0 };
+  if (pointerFrame) cancelAnimationFrame(pointerFrame);
+  pointerFrame = 0;
+  pendingPointer = null;
+  sendInput({
+    kind: "pointer",
+    x: point?.x ?? lastPointer.x,
+    y: point?.y ?? lastPointer.y,
+    buttons: 0,
+  });
+  pointerButtonsActive = false;
+}
+
+function releaseAllInput() {
+  releasePressedKeys();
+  if (pointerButtonsActive) releasePointerButtons();
+}
+
+function sendShortcut(type) {
+  const trigger = type === "menu" ? "Space" : "Enter";
+  canvas.focus({ preventScroll: true });
+  sendInput({ kind: "key", code: "MetaLeft", down: true });
+  sendInput({ kind: "key", code: trigger, down: true });
+  sendInput({ kind: "key", code: trigger, down: false });
+  sendInput({ kind: "key", code: "MetaLeft", down: false });
 }
 
 if (!hostBoundaryValid) {
@@ -290,8 +425,9 @@ if (!hostBoundaryValid) {
       event.preventDefault();
       return;
     }
-    pressedKeys.add(event.code);
-    sendInput({ kind: "key", code: event.code, down: true });
+    if (sendInput({ kind: "key", code: event.code, down: true })) {
+      pressedKeys.add(event.code);
+    }
     event.preventDefault();
   });
   canvas.addEventListener("keyup", (event) => {
@@ -302,37 +438,41 @@ if (!hostBoundaryValid) {
   });
   canvas.addEventListener("pointerdown", (event) => {
     canvas.focus({ preventScroll: true });
-    canvas.setPointerCapture?.(event.pointerId);
-    queuePointer(event, true);
+    if (queuePointer(event, true)) canvas.setPointerCapture?.(event.pointerId);
     event.preventDefault();
   });
   canvas.addEventListener("pointermove", (event) => queuePointer(event));
   canvas.addEventListener("pointerup", (event) => {
-    queuePointer(event, true);
+    releasePointerButtons(event);
     if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
     event.preventDefault();
   });
-  canvas.addEventListener("pointercancel", (event) => {
-    const point = normalizedPointer(event);
-    if (point) sendInput({ kind: "pointer", ...point, buttons: 0 });
+  canvas.addEventListener("pointercancel", releasePointerButtons);
+  canvas.addEventListener("lostpointercapture", (event) => {
+    if (pointerButtonsActive) releasePointerButtons(event);
   });
   canvas.addEventListener("wheel", (event) => {
     if (!runtimeWorker || (event.deltaX === 0 && event.deltaY === 0)) return;
     sendInput({ kind: "wheel", deltaX: event.deltaX, deltaY: event.deltaY });
     event.preventDefault();
   }, { passive: false });
-  canvas.addEventListener("blur", releasePressedKeys);
+  canvas.addEventListener("blur", releaseAllInput);
   canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
   window.addEventListener("message", (event) => {
     if (!isParentCommand(event)) return;
     if (event.data.type === "start") void startRuntime();
-    else canvas.focus({ preventScroll: true });
+    else if (event.data.type === "focus") canvas.focus({ preventScroll: true });
+    else sendShortcut(event.data.type);
   });
 
   window.addEventListener("beforeunload", () => {
-    releasePressedKeys();
-    runtimeWorker?.terminate();
+    releaseAllInput();
+    stopRuntime();
+  });
+  window.addEventListener("blur", releaseAllInput);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") releaseAllInput();
   });
 
   if (typeof ResizeObserver === "function") {

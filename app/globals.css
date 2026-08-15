@@ -593,6 +593,29 @@ h1 {
   white-space: nowrap;
 }
 
+.shortcut-action {
+  min-height: 28px;
+  border: 1px solid #454540;
+  padding: 0 9px;
+  background: #151513;
+  color: #c1c1ba;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.shortcut-action:hover:not(:disabled),
+.shortcut-action:focus-visible {
+  border-color: var(--acid);
+  color: var(--acid);
+}
+
+.shortcut-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 .shortcut-help small {
   width: 100%;
   color: #5e5e59;
