@@ -7,14 +7,29 @@ import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CANONICAL_CHECKPOINT_IDENTITY,
+  CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE,
+  CANONICAL_HIBERNATION_PRODUCER_MACHINE,
+  CANONICAL_HIBERNATION_RUNTIME_MACHINE,
+  HIBERNATION_SWAP_UUID,
+  HIBERNATION_SWAP_VIRTUAL_BYTES,
+  normalizedJsonBytes,
   validateCheckpointSourceEvidence,
   validateCheckpointSourceEvidenceShape,
+  validateHibernationResumeEvidence,
+  validateHibernationSourceEvidence,
+  validateProductionManifest,
 } from "../web/production-worker.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 const CHECKPOINT_MANIFEST_NAME = "checkpoint-manifest.json";
 const VMSTATE_NAME = "omarchy-preboot.vmstate";
 const BOOT_DELTA_NAME = "checkpoint-overlay.qcow2";
+const HIBERNATION_MANIFEST_NAME = "hibernate-manifest.json";
+const HIBERNATION_ROOT_DELTA_NAME = "hibernate-root-overlay.qcow2";
+const HIBERNATION_SWAP_NAME = "omarchy-hibernate.qcow2";
+const HIBERNATION_INITRAMFS_NAME = "initramfs-virgl-hibernate.img";
+const BASE_INITRAMFS_NAME = "initramfs-linux.img";
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const EXPECTED = Object.freeze({
   baseGuestManifestSha256: CANONICAL_CHECKPOINT_IDENTITY.baseGuestManifestSha256,
   rootfsSha256: CANONICAL_CHECKPOINT_IDENTITY.rootfsSha256,
@@ -135,6 +150,117 @@ export function validateCheckpointProducerManifest(value, expected = EXPECTED) {
   return value;
 }
 
+export function validateHibernationProducerManifest(value) {
+  exactKeys(value, [
+    "schemaVersion", "kind", "derivedInitramfs", "rootDelta", "swapImage", "producer",
+    "identity", "qemu", "producerMachine", "runtimeMachine", "restoreContract", "sourceEvidence",
+    "resumeEvidence",
+  ], "hibernation manifest");
+  invariant(value.schemaVersion === 1, "hibernation manifest schemaVersion must be 1");
+  invariant(value.kind === "omarchy-web-guest-hibernation", "hibernation manifest kind is invalid");
+  validateHibernationSourceEvidence(value.sourceEvidence);
+  validateHibernationResumeEvidence(value.resumeEvidence);
+  validateArtifactDescriptor(value.derivedInitramfs, {
+    artifactPath: HIBERNATION_INITRAMFS_NAME,
+    bytes: "<bytes>",
+    sha256: "<sha256>",
+    format: "linux-initramfs",
+    baseArtifactPath: BASE_INITRAMFS_NAME,
+  }, "hibernation manifest derivedInitramfs");
+  validateArtifactDescriptor(value.rootDelta, {
+    path: HIBERNATION_ROOT_DELTA_NAME,
+    bytes: "<bytes>",
+    sha256: "<sha256>",
+    format: "qcow2",
+    backingFilename: "rootfs.ext4",
+    backingFormat: "raw",
+  }, "hibernation manifest rootDelta");
+  validateArtifactDescriptor(value.swapImage, {
+    path: HIBERNATION_SWAP_NAME,
+    bytes: "<bytes>",
+    sha256: "<sha256>",
+    format: "qcow2",
+    virtualBytes: HIBERNATION_SWAP_VIRTUAL_BYTES,
+    swapUuid: HIBERNATION_SWAP_UUID,
+  }, "hibernation manifest swapImage");
+  exactKeys(value.producer, ["qemuBinarySha256"], "hibernation manifest producer");
+  invariant(SHA256.test(value.producer.qemuBinarySha256 ?? ""),
+    "hibernation producer QEMU binary SHA-256 is invalid");
+  const identityKeys = [
+    "baseGuestManifestSha256", "rootfsSha256", "guestProvenanceSha256", "kernelSha256",
+    "baseInitramfsSha256", "derivedInitramfsSha256", "browserQemuWasmSha256",
+  ];
+  exactKeys(value.identity, identityKeys, "hibernation manifest identity");
+  invariant(identityKeys.every((key) => SHA256.test(value.identity[key] ?? "")),
+    "hibernation identity digests are invalid");
+  invariant(value.identity.derivedInitramfsSha256 === value.derivedInitramfs.sha256,
+    "hibernation derived initramfs identity is inconsistent");
+  exactKeys(value.qemu, ["repository", "sourceCommit", "version"], "hibernation manifest qemu");
+  invariant(
+    digestBytes(normalizedJsonBytes(value.qemu)) ===
+      digestBytes(normalizedJsonBytes(CANONICAL_CHECKPOINT_IDENTITY.qemu)),
+    "hibernation QEMU source identity is invalid",
+  );
+  invariant(
+    digestBytes(normalizedJsonBytes(value.producerMachine)) ===
+      digestBytes(normalizedJsonBytes(CANONICAL_HIBERNATION_PRODUCER_MACHINE)),
+    "hibernation native machine topology is invalid",
+  );
+  invariant(
+    digestBytes(normalizedJsonBytes(value.runtimeMachine)) ===
+      digestBytes(normalizedJsonBytes(CANONICAL_HIBERNATION_RUNTIME_MACHINE)),
+    "hibernation browser machine topology is invalid",
+  );
+  const restoreKeys = [
+    "coldBootFallbackAllowed", "disposableWrites", "gpuBoundAtHibernate", "kernelCommandLineBase",
+    "resumeNonceSha256", "runtimeDisplay", "sourceBootId", "sourceEvidenceSha256",
+    "sourceKernelCommandLineRedacted", "sourceKernelCommandLineSha256", "targetKernelCommandLine",
+    "virtioGpuLoadedAfterResume",
+  ];
+  exactKeys(value.restoreContract, restoreKeys, "hibernation manifest restoreContract");
+  const restore = value.restoreContract;
+  invariant(restore.coldBootFallbackAllowed === false && restore.gpuBoundAtHibernate === false &&
+    restore.virtioGpuLoadedAfterResume === true,
+  "hibernation restore flags are invalid");
+  invariant(
+    restore.disposableWrites === "target -snapshot layers over immutable root delta and hibernation image",
+    "hibernation disposable-write contract is invalid",
+  );
+  invariant(restore.runtimeDisplay === CANONICAL_HIBERNATION_RUNTIME_MACHINE.display,
+    "hibernation browser runtime display is invalid");
+  invariant(SHA256.test(restore.resumeNonceSha256 ?? "") &&
+    SHA256.test(restore.sourceEvidenceSha256 ?? "") &&
+    SHA256.test(restore.sourceKernelCommandLineSha256 ?? ""),
+  "hibernation restore digests are invalid");
+  invariant(UUID.test(restore.sourceBootId ?? ""), "hibernation source boot ID is invalid");
+  invariant(
+    digestBytes(normalizedJsonBytes(value.sourceEvidence)) === restore.sourceEvidenceSha256,
+    "hibernation source evidence digest is invalid",
+  );
+  invariant(restore.resumeNonceSha256 === value.sourceEvidence.nonceSha256 &&
+    restore.sourceBootId === value.sourceEvidence.sourceBootId &&
+    restore.gpuBoundAtHibernate === value.sourceEvidence.gpuBoundAtHibernate,
+  "hibernation source evidence does not match the restore contract");
+  for (const key of ["kernelCommandLineBase", "sourceKernelCommandLineRedacted", "targetKernelCommandLine"]) {
+    invariant(typeof restore[key] === "string" && restore[key].length > 0 && restore[key].length <= 2048 &&
+      !/[\r\n\0]/.test(restore[key]), `hibernation ${key} is invalid`);
+  }
+  invariant(
+    restore.kernelCommandLineBase === CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE &&
+    restore.sourceKernelCommandLineRedacted ===
+      `${restore.kernelCommandLineBase} omarchy.hibernate_producer=1 omarchy.hibernate_nonce=<redacted>` &&
+    restore.targetKernelCommandLine === `${restore.kernelCommandLineBase} omarchy.hibernate_target=1`,
+    "hibernation source and target role suffixes are invalid",
+  );
+  const arguments_ = restore.kernelCommandLineBase.split(/\s+/);
+  invariant(arguments_.includes("root=/dev/vda") &&
+    arguments_.includes(`resume=UUID=${HIBERNATION_SWAP_UUID}`) &&
+    arguments_.includes("ignore_loglevel") && arguments_.includes("hibernate.compressor=lzo") &&
+    !arguments_.some((argument) => argument.startsWith("omarchy.hibernate_")),
+  "hibernation kernel command line is missing its exact resume contract");
+  return value;
+}
+
 function artifactFromGuestManifest(guestManifest, path) {
   const matches = guestManifest?.artifacts?.filter((artifact) => artifact?.path === path) ?? [];
   invariant(matches.length === 1, `guest manifest must record ${path} exactly once`);
@@ -157,12 +283,16 @@ export async function buildRuntimeManifest({
   ]);
   const baseManifest = JSON.parse(baseBytes);
   invariant(!("checkpoint" in baseManifest), "base runtime manifest must remain the explicit cold-boot profile");
-  if (forceCold) {
-    return Object.freeze({ mode: "cold", manifest: baseManifest });
-  }
-  const checkpointPaths = [CHECKPOINT_MANIFEST_NAME, VMSTATE_NAME, BOOT_DELTA_NAME]
-    .map((name) => join(guestDirectory, name));
-  const presence = await Promise.all(checkpointPaths.map(async (path) => {
+  const checkpointNames = [CHECKPOINT_MANIFEST_NAME, VMSTATE_NAME, BOOT_DELTA_NAME];
+  const hibernationNames = [
+    HIBERNATION_MANIFEST_NAME,
+    HIBERNATION_ROOT_DELTA_NAME,
+    HIBERNATION_SWAP_NAME,
+    HIBERNATION_INITRAMFS_NAME,
+  ];
+  const allNames = [...checkpointNames, ...hibernationNames];
+  const allPresence = await Promise.all(allNames.map(async (name) => {
+    const path = join(guestDirectory, name);
     try {
       return (await stat(path)).isFile();
     } catch (error) {
@@ -170,10 +300,166 @@ export async function buildRuntimeManifest({
       throw error;
     }
   }));
-  if (presence.every((exists) => !exists)) {
+  const checkpointPresence = allPresence.slice(0, checkpointNames.length);
+  const hibernationPresence = allPresence.slice(checkpointNames.length);
+  if (forceCold) {
+    invariant(
+      hibernationPresence.every((exists) => !exists),
+      "force-cold packaging refuses to ignore any guest-hibernation artifact",
+    );
     return Object.freeze({ mode: "cold", manifest: baseManifest });
   }
-  invariant(presence.every(Boolean), "checkpoint packaging refuses a partial descriptor/vmstate/boot-delta set");
+  if (allPresence.every((exists) => !exists)) {
+    return Object.freeze({ mode: "cold", manifest: baseManifest });
+  }
+  invariant(
+    !(checkpointPresence.some(Boolean) && hibernationPresence.some(Boolean)),
+    "runtime packaging refuses ambiguous migration-checkpoint and hibernation artifact sets",
+  );
+
+  if (hibernationPresence.some(Boolean)) {
+    invariant(
+      hibernationPresence.every(Boolean),
+      "hibernation packaging refuses a partial descriptor/root-delta/swap/derived-initramfs set",
+    );
+    const [producerBytes, rootDeltaRecord, swapImageRecord, derivedInitramfsRecord, wasmRecord] =
+      await Promise.all([
+        readFile(join(guestDirectory, HIBERNATION_MANIFEST_NAME)),
+        fileRecord(join(guestDirectory, HIBERNATION_ROOT_DELTA_NAME)),
+        fileRecord(join(guestDirectory, HIBERNATION_SWAP_NAME)),
+        fileRecord(join(guestDirectory, HIBERNATION_INITRAMFS_NAME)),
+        fileRecord(qemuWasmPath),
+      ]);
+    const producer = validateHibernationProducerManifest(JSON.parse(producerBytes));
+    invariant(
+      producer.rootDelta.bytes === rootDeltaRecord.bytes &&
+        producer.rootDelta.sha256 === rootDeltaRecord.sha256,
+      "hibernation root delta differs from hibernate-manifest.json",
+    );
+    invariant(
+      producer.swapImage.bytes === swapImageRecord.bytes &&
+        producer.swapImage.sha256 === swapImageRecord.sha256,
+      "hibernation swap image differs from hibernate-manifest.json",
+    );
+    invariant(
+      producer.derivedInitramfs.bytes === derivedInitramfsRecord.bytes &&
+        producer.derivedInitramfs.sha256 === derivedInitramfsRecord.sha256,
+      "hibernation derived initramfs differs from hibernate-manifest.json",
+    );
+    invariant(
+      producer.identity.browserQemuWasmSha256 === wasmRecord.sha256,
+      "hibernation browser QEMU Wasm identity is invalid",
+    );
+
+    const guestManifest = JSON.parse(guestManifestBytes);
+    invariant(
+      digestBytes(guestManifestBytes) === producer.identity.baseGuestManifestSha256,
+      "hibernation base guest manifest identity is invalid",
+    );
+    const artifactBindings = [
+      ["rootfs.ext4", "rootfsSha256", "rootfs"],
+      ["provenance.json", "guestProvenanceSha256", "guest provenance"],
+      ["vmlinuz-linux", "kernelSha256", "kernel"],
+      [BASE_INITRAMFS_NAME, "baseInitramfsSha256", "base initramfs"],
+    ];
+    for (const [path, identityKey, label] of artifactBindings) {
+      const artifact = artifactFromGuestManifest(guestManifest, path);
+      const actual = await fileRecord(join(guestDirectory, path));
+      invariant(artifact.bytes === actual.bytes && artifact.sha256 === actual.sha256,
+        `hibernation ${label} differs from the guest manifest`);
+      invariant(artifact.sha256 === producer.identity[identityKey],
+        `hibernation ${label} identity is invalid`);
+    }
+
+    const checkpoint = {
+      schemaVersion: 1,
+      mode: "guest-hibernation-resume",
+      derivedInitramfs: {
+        artifactPath: producer.derivedInitramfs.artifactPath,
+        mountPath: "/pack/initramfs-virgl-hibernate.img",
+        bytes: producer.derivedInitramfs.bytes,
+        sha256: producer.derivedInitramfs.sha256,
+        format: producer.derivedInitramfs.format,
+        baseArtifactPath: producer.derivedInitramfs.baseArtifactPath,
+      },
+      rootDelta: {
+        artifactPath: producer.rootDelta.path,
+        mountPath: "/pack/hibernate-root-overlay.qcow2",
+        bytes: producer.rootDelta.bytes,
+        sha256: producer.rootDelta.sha256,
+        format: producer.rootDelta.format,
+        backingFilename: producer.rootDelta.backingFilename,
+        backingFormat: producer.rootDelta.backingFormat,
+      },
+      swapImage: {
+        artifactPath: producer.swapImage.path,
+        mountPath: "/pack/omarchy-hibernate.qcow2",
+        bytes: producer.swapImage.bytes,
+        sha256: producer.swapImage.sha256,
+        format: producer.swapImage.format,
+        virtualBytes: producer.swapImage.virtualBytes,
+        swapUuid: producer.swapImage.swapUuid,
+      },
+      producer: {
+        manifestArtifactPath: HIBERNATION_MANIFEST_NAME,
+        manifestBytes: producerBytes.byteLength,
+        manifestSha256: digestBytes(producerBytes),
+        qemuBinarySha256: producer.producer.qemuBinarySha256,
+      },
+      sourceEvidence: { ...producer.sourceEvidence },
+      resumeEvidence: structuredClone(producer.resumeEvidence),
+      identity: {
+        ...producer.identity,
+        browserQemuWasmSha256: wasmRecord.sha256,
+        qemu: { ...producer.qemu },
+        producerMachine: structuredClone(producer.producerMachine),
+        runtimeMachine: structuredClone(producer.runtimeMachine),
+      },
+      restoreContract: { ...producer.restoreContract },
+    };
+
+    const manifest = structuredClone(baseManifest);
+    const arguments_ = manifest.qemu?.arguments;
+    invariant(Array.isArray(arguments_), "hibernation base manifest must declare QEMU arguments");
+    const exactArgument = (flag, expectedValue, label) => {
+      const indexes = arguments_.flatMap((value, index) => value === flag ? [index] : []);
+      invariant(indexes.length === 1 && arguments_[indexes[0] + 1] === expectedValue,
+        `hibernation base manifest ${label} is invalid`);
+      return indexes[0];
+    };
+    exactArgument("-display", checkpoint.restoreContract.runtimeDisplay, "runtime display");
+    const displayDeviceIndexes = arguments_.flatMap((value, index) =>
+      value === "-device" && arguments_[index + 1] === checkpoint.identity.runtimeMachine.displayDevice ? [index] : []);
+    invariant(displayDeviceIndexes.length === 1, "hibernation base manifest VirGL device is invalid");
+    invariant(!arguments_.includes("-cpu"), "hibernation base manifest must not predeclare a CPU override");
+    const smpIndex = exactArgument("-smp", checkpoint.identity.runtimeMachine.smp, "SMP topology");
+    arguments_.splice(smpIndex, 0, "-cpu", checkpoint.identity.runtimeMachine.cpu);
+    const appendIndex = exactArgument(
+      "-append",
+      baseManifest.qemu.arguments[baseManifest.qemu.arguments.indexOf("-append") + 1],
+      "kernel command line",
+    );
+    arguments_[appendIndex + 1] = checkpoint.restoreContract.targetKernelCommandLine;
+    const initrdIndex = exactArgument(
+      "-initrd",
+      baseManifest.guest.initramfs.mountPath,
+      "base initramfs",
+    );
+    arguments_[initrdIndex + 1] = checkpoint.derivedInitramfs.mountPath;
+    manifest.guest.initramfs = {
+      artifactPath: checkpoint.derivedInitramfs.artifactPath,
+      mountPath: checkpoint.derivedInitramfs.mountPath,
+    };
+    manifest.checkpoint = checkpoint;
+    validateProductionManifest(manifest);
+    return Object.freeze({ mode: "hibernation", manifest });
+  }
+
+  invariant(
+    checkpointPresence.every(Boolean),
+    "checkpoint packaging refuses a partial descriptor/vmstate/boot-delta set",
+  );
+  const checkpointPaths = checkpointNames.map((name) => join(guestDirectory, name));
 
   const [producerBytes, vmstateRecord, bootDeltaRecord, wasmRecord] = await Promise.all([
     readFile(checkpointPaths[0]),
@@ -255,8 +541,20 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     throw new Error(`usage: ${basename(process.argv[1])} GUEST_DIRECTORY OUTPUT_MANIFEST`);
   }
   const experimentValue = process.env.OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT;
-  const graphicsExperiment = process.env.OMARCHY_GRAPHICS_EXPERIMENT;
+  let graphicsExperiment = process.env.OMARCHY_GRAPHICS_EXPERIMENT;
   const vcpuExperiment = process.env.OMARCHY_VCPU_EXPERIMENT;
+  const hibernationRequested = await stat(join(guestDirectory, HIBERNATION_MANIFEST_NAME))
+    .then((info) => info.isFile())
+    .catch((error) => {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    });
+  if (hibernationRequested) {
+    invariant(!graphicsExperiment || graphicsExperiment === "virgl-webgl2",
+      "guest hibernation requires the VirGL/WebGL2 runtime profile");
+    invariant(!vcpuExperiment, "guest hibernation requires its exact two-vCPU restore topology");
+    graphicsExperiment = "virgl-webgl2";
+  }
   invariant(
     experimentValue === undefined || experimentValue === "" || experimentValue === "250" ||
       experimentValue === "750" ||
@@ -300,7 +598,7 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     guestDirectory,
     qemuWasmPath,
     expected,
-    forceCold: graphicsExperiment === "virgl-webgl2",
+    forceCold: graphicsExperiment === "virgl-webgl2" && !hibernationRequested,
   });
   if (vcpuExperiment === "4") {
     result.manifest.qemu.cores = 4;
@@ -309,8 +607,9 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     invariant(smpIndexes.length === 1, "canonical two-vCPU SMP argument must occur exactly once");
     result.manifest.qemu.arguments[smpIndexes[0]] = "4,sockets=1,cores=4,threads=1";
   }
-  if (graphicsExperiment === "virgl-webgl2" && result.mode !== "cold") {
-    throw new Error("VirGL/WebGL2 experiment must cold boot and cannot reuse a software-GPU checkpoint");
+  if (graphicsExperiment === "virgl-webgl2" &&
+      result.mode !== "cold" && result.mode !== "hibernation") {
+    throw new Error("VirGL/WebGL2 may use only cold boot or its exact guest-hibernation profile");
   }
   await writeFile(outputPath, `${JSON.stringify(result.manifest, null, 2)}\n`, "utf8");
   if (experimentValue === "250") {

@@ -48,6 +48,10 @@ const TCG_BOUNDED_CLOCK_MARKER =
   "retained-cap=%d gc-pressure-bytes=%d core=%d";
 const VIRGL_GRAPHICS_EXPERIMENT = "virgl-webgl2";
 const WEBGL2_PRESENT_EXPERIMENT = "webgl2-present";
+const HIBERNATION_MODE = "guest-hibernation-resume";
+const HIBERNATION_REPORT_PREFIX = "OMARCHY_HIBERNATION_REPORT ";
+const HIBERNATION_ROOT_DELTA_NAME = "hibernate-root-overlay.qcow2";
+const HIBERNATION_SWAP_NAME = "omarchy-hibernate.qcow2";
 const GRAPHICS_EXPERIMENTS = new Set([
   VIRGL_GRAPHICS_EXPERIMENT,
   WEBGL2_PRESENT_EXPERIMENT,
@@ -84,6 +88,7 @@ function replaceArgumentExactlyOnce(arguments_, from, to, label) {
 function validateRuntimeManifest(manifest, threshold, graphics, vcpus) {
   if (manifest.schemaVersion !== 2) return;
   const canonicalShape = structuredClone(manifest);
+  const hibernation = canonicalShape.checkpoint?.mode === HIBERNATION_MODE;
   if (vcpus === 4) {
     assert.equal(canonicalShape.qemu.cores, 4, "four-vCPU manifest metadata is missing");
     canonicalShape.qemu.cores = 2;
@@ -95,7 +100,21 @@ function validateRuntimeManifest(manifest, threshold, graphics, vcpus) {
     );
   }
   if (graphics === VIRGL_GRAPHICS_EXPERIMENT) {
-    assert.equal(manifest.checkpoint, undefined, "VirGL/WebGL2 experiment must cold boot");
+    if (hibernation) {
+      assert.equal(
+        canonicalShape.checkpoint.rootDelta.artifactPath,
+        HIBERNATION_ROOT_DELTA_NAME,
+        "hibernation root delta name is invalid",
+      );
+      assert.equal(
+        canonicalShape.checkpoint.swapImage.artifactPath,
+        HIBERNATION_SWAP_NAME,
+        "hibernation swap image name is invalid",
+      );
+      validateProductionManifest(canonicalShape);
+      return;
+    }
+    assert.equal(manifest.checkpoint, undefined, "VirGL/WebGL2 requires cold boot or authenticated guest hibernation");
     replaceArgumentExactlyOnce(
       canonicalShape.qemu.arguments,
       "sdl,gl=es,show-cursor=on",
@@ -237,8 +256,15 @@ export function verifyCheckpointWasmIdentity(manifest, wasm) {
 export async function verifyRuntimeArtifacts(outputDirectory) {
   const manifest = JSON.parse(await readFile(join(outputDirectory, "runtime-manifest.json"), "utf8"));
   const tcgExperiment = experimentalTcgProfile();
-  const graphics = graphicsExperiment();
+  const requestedGraphics = graphicsExperiment();
   const vcpus = vcpuExperiment();
+  const hibernation = manifest.checkpoint?.mode === HIBERNATION_MODE;
+  assert.ok(
+    !hibernation || requestedGraphics === null || requestedGraphics === VIRGL_GRAPHICS_EXPERIMENT,
+    "guest hibernation requires the VirGL/WebGL2 runtime profile",
+  );
+  assert.ok(!hibernation || vcpus === null, "guest hibernation requires its exact two-vCPU restore topology");
+  const graphics = hibernation ? VIRGL_GRAPHICS_EXPERIMENT : requestedGraphics;
   assert.ok(
     tcgExperiment === null || graphics === null ||
       ([750, 1500].includes(tcgExperiment.instantiateThreshold) &&
@@ -420,6 +446,12 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       productionWorker.includes("validateCheckpointSourceEvidence") &&
       productionWorker.includes("checkpoint-source-evidence") &&
       productionWorker.includes("CHECKPOINT_REPORT_REPLAY") &&
+      productionWorker.includes(HIBERNATION_REPORT_PREFIX) &&
+      productionWorker.includes(HIBERNATION_MODE) &&
+      productionWorker.includes(HIBERNATION_ROOT_DELTA_NAME) &&
+      productionWorker.includes(HIBERNATION_SWAP_NAME) &&
+      productionWorker.includes("live-hibernation-serial") &&
+      productionWorker.includes('this.#post("hibernationresume"') &&
       productionWorker.includes("createCheckpointVmstateRangeLedger") &&
       productionWorker.includes("OVERLAY_QUOTA_EXCEEDED");
     sourceChecks.selfContainedOuterWorker = !/^\s*import\s/m.test(productionWorker) &&

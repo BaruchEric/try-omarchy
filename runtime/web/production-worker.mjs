@@ -21,8 +21,15 @@ const CHECKPOINT_ROOTFS_CACHE_BYTES = 88 * 1024 * 1024;
 const CHECKPOINT_DELTA_CACHE_BYTES = 32 * 1024 * 1024;
 const CHECKPOINT_VMSTATE_CACHE_BYTES = 8 * 1024 * 1024;
 const CHECKPOINT_VMSTATE_CHUNK_BYTES = 8 * 1024 * 1024;
+const HIBERNATION_ROOTFS_CACHE_BYTES = 64 * 1024 * 1024;
+const HIBERNATION_ROOT_DELTA_CACHE_BYTES = 32 * 1024 * 1024;
+const HIBERNATION_SWAP_CACHE_BYTES = 32 * 1024 * 1024;
 const GUEST_REPORT_PREFIX = "OMARCHY_GUEST_REPORT ";
 const GUEST_STAGE_PREFIX = "OMARCHY_GUEST_STAGE ";
+const HIBERNATION_REPORT_PREFIX = "OMARCHY_HIBERNATION_REPORT ";
+const RENDERER_REPORT_PREFIX = "OMARCHY_RENDERER_REPORT ";
+const HIBERNATION_COLD_BOOT_PREFIX = "OMARCHY_HIBERNATION_COLD_BOOT ";
+const HIBERNATION_FAILURE_PREFIX = "OMARCHY_HIBERNATION_FAILURE ";
 const RUNTIME_DIAGNOSTIC_PREFIX = "OMARCHY_RUNTIME_DIAGNOSTIC ";
 const DESKTOP_PROOF_ACK_PREFIX = "omarchy-input-ack-";
 const DESKTOP_PROOF_ACK_HEX = /^[a-f0-9]{32}$/;
@@ -38,6 +45,10 @@ const QEMU_RUNNING_POLL_MS = 25;
 const CHECKPOINT_DESKTOP_SETTLE_MIN_RUNNING_MS = 15_000;
 const CHECKPOINT_DESKTOP_SETTLE_MIN_FRAME_GAP_MS = 5_000;
 const CHECKPOINT_DESKTOP_SETTLE_TIMEOUT_MS = 180_000;
+const HIBERNATION_RESUME_TIMEOUT_MS = 180_000;
+const HIBERNATION_GUEST_REPORT_TIMEOUT_MS = 90_000;
+const MAX_DEFERRED_HIBERNATION_EVIDENCE_LINES = 64;
+const MAX_DEFERRED_HIBERNATION_EVIDENCE_BYTES = 256 * 1024;
 const MAX_DEFERRED_HOST_INPUTS = 128;
 const DESKTOP_PROOF_FRAME_NONE = 0;
 const DESKTOP_PROOF_FRAME_BASELINE = 1;
@@ -51,6 +62,18 @@ const GUEST_STAGE_NAMES = new Set(["autologin", "uwsm", "hyprland", "quickshell"
 const GUEST_STAGE_STATUSES = new Set(["started", "waiting", "ready", "failed"]);
 const OFFICIAL_OMARCHY_REPOSITORY = "https://github.com/basecamp/omarchy";
 const COMMIT = /^[a-f0-9]{40}$/;
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const RESUME_NONCE = /^[a-f0-9]{64}$/;
+
+export const HIBERNATION_SWAP_UUID = "4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f";
+export const HIBERNATION_SWAP_VIRTUAL_BYTES = 1_610_612_736;
+
+const HIBERNATION_KERNEL_EVIDENCE = Object.freeze([
+  "PM: Image signature found, resuming",
+  "PM: Image loading done",
+  "Hibernation image restored successfully",
+]);
+const HIBERNATION_KERNEL_FAILURE = /(?:hibernation|PM:).*(?:image (?:not found|mismatch|loading failed)|resume failed|error)/i;
 
 function deepFreeze(value) {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) return value;
@@ -114,6 +137,11 @@ export const CANONICAL_PRODUCTION_MANIFEST = deepFreeze({
   },
 });
 
+export const CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE =
+  `${CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[
+    CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-append") + 1
+  ]} resume=UUID=${HIBERNATION_SWAP_UUID} ignore_loglevel hibernate.compressor=lzo`;
+
 export const CANONICAL_PAGED_DISK_ARGUMENTS = deepFreeze([
   "-snapshot",
   "-drive",
@@ -144,6 +172,50 @@ export const CANONICAL_CHECKPOINT_ARGUMENTS = deepFreeze([
   "file=/pack/checkpoint-overlay.qcow2,if=virtio,format=qcow2,media=disk,cache=unsafe",
   "-incoming",
   "file:/pack/omarchy-preboot.vmstate",
+]);
+
+export const CANONICAL_HIBERNATION_PRODUCER_MACHINE = deepFreeze({
+  type: "pc-q35-8.2",
+  memoryMiB: 1024,
+  smp: "2,sockets=1,cores=2,threads=1",
+  accel: "tcg,tb-size=128,thread=multi",
+  cpu: "qemu64",
+  display: "sdl,gl=on,show-cursor=on",
+  displayDevice: "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
+  blockDevices: [
+    {
+      driveId: "omarchy-hibernate-root",
+      device: "virtio-blk-pci",
+      serial: "omarchy-root",
+      role: "root",
+      format: "qcow2",
+    },
+    {
+      driveId: "omarchy-hibernate-swap",
+      device: "virtio-blk-pci",
+      serial: "omarchy-resume",
+      role: "resume",
+      format: "qcow2",
+    },
+  ],
+});
+
+export const CANONICAL_HIBERNATION_RUNTIME_MACHINE = deepFreeze({
+  ...CANONICAL_HIBERNATION_PRODUCER_MACHINE,
+  display: "sdl,gl=es,show-cursor=on",
+  blockDevices: CANONICAL_HIBERNATION_PRODUCER_MACHINE.blockDevices.map((device) => ({ ...device })),
+});
+
+export const CANONICAL_HIBERNATION_ARGUMENTS = deepFreeze([
+  "-snapshot",
+  "-drive",
+  "file=/pack/hibernate-root-overlay.qcow2,if=none,format=qcow2,media=disk,cache=unsafe,id=omarchy-hibernate-root",
+  "-device",
+  "virtio-blk-pci,drive=omarchy-hibernate-root,serial=omarchy-root",
+  "-drive",
+  "file=/pack/omarchy-hibernate.qcow2,if=none,format=qcow2,media=disk,cache=unsafe,id=omarchy-hibernate-swap",
+  "-device",
+  "virtio-blk-pci,drive=omarchy-hibernate-swap,serial=omarchy-resume",
 ]);
 
 export class ProductionWorkerError extends Error {
@@ -307,6 +379,293 @@ export function parseGuestReportLine(line) {
   const payload = JSON.parse(line.slice(payloadStart, payloadEnd));
   if (!isRecord(payload)) throw new TypeError("Guest report payload must be a JSON object.");
   return payload;
+}
+
+export function parseHibernationReportLine(line) {
+  if (typeof line !== "string") return null;
+  const marker = line.indexOf(HIBERNATION_REPORT_PREFIX);
+  if (marker < 0) return null;
+  if (line.indexOf(HIBERNATION_REPORT_PREFIX, marker + HIBERNATION_REPORT_PREFIX.length) >= 0) {
+    throw new SyntaxError("Hibernation report line contains more than one evidence marker.");
+  }
+  const payloadStart = marker + HIBERNATION_REPORT_PREFIX.length;
+  const lineEnd = line.slice(payloadStart).search(/[\r\n]/);
+  const payloadEnd = lineEnd < 0 ? line.length : payloadStart + lineEnd;
+  const trailing = line.slice(payloadEnd);
+  if (/[^\r\n]/.test(trailing)) {
+    throw new SyntaxError("Hibernation report line contains data after its line ending.");
+  }
+  const encoded = new TextEncoder().encode(line.slice(payloadStart, payloadEnd));
+  if (encoded.byteLength === 0 || encoded.byteLength > 2048) {
+    throw new SyntaxError("Hibernation report payload exceeds its byte bound.");
+  }
+  const payload = JSON.parse(line.slice(payloadStart, payloadEnd));
+  if (!isRecord(payload)) throw new TypeError("Hibernation report payload must be a JSON object.");
+  const expectedKeys = [
+    "gpuDriver", "nonce", "renderNode", "renderer", "schemaVersion", "sourceBootId", "status", "swapUuid",
+  ];
+  const actualKeys = Object.keys(payload).sort();
+  if (actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    throw new TypeError("Hibernation report payload must contain exactly the documented keys.");
+  }
+  if (payload.schemaVersion !== 1 || payload.status !== "resumed" ||
+      !RESUME_NONCE.test(payload.nonce ?? "") || !UUID.test(payload.sourceBootId ?? "") ||
+      !UUID.test(payload.swapUuid ?? "") || payload.gpuDriver !== "virtio_gpu" ||
+      payload.renderer !== "virgl" ||
+      payload.renderNode !== "/dev/dri/renderD128") {
+    throw new TypeError("Hibernation report payload contains an invalid field value.");
+  }
+  return payload;
+}
+
+export function parseRendererReportLine(line) {
+  if (typeof line !== "string") return null;
+  const marker = line.indexOf(RENDERER_REPORT_PREFIX);
+  if (marker < 0) return null;
+  if (line.indexOf(RENDERER_REPORT_PREFIX, marker + RENDERER_REPORT_PREFIX.length) >= 0) {
+    throw new SyntaxError("Renderer report line contains more than one evidence marker.");
+  }
+  const payloadStart = marker + RENDERER_REPORT_PREFIX.length;
+  const lineEnd = line.slice(payloadStart).search(/[\r\n]/);
+  const payloadEnd = lineEnd < 0 ? line.length : payloadStart + lineEnd;
+  if (/[^\r\n]/.test(line.slice(payloadEnd))) {
+    throw new SyntaxError("Renderer report line contains data after its line ending.");
+  }
+  const payloadBytes = new TextEncoder().encode(line.slice(payloadStart, payloadEnd));
+  if (payloadBytes.byteLength === 0 || payloadBytes.byteLength > 2048) {
+    throw new SyntaxError("Renderer report payload exceeds its byte bound.");
+  }
+  const payload = JSON.parse(line.slice(payloadStart, payloadEnd));
+  const expectedKeys = ["renderNode", "renderer", "schemaVersion", "vendor", "version"];
+  const actualKeys = Object.keys(payload ?? {}).sort();
+  if (!isRecord(payload) || actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    throw new TypeError("Renderer report payload must contain exactly the documented keys.");
+  }
+  if (payload.schemaVersion !== 1 || payload.renderNode !== "/dev/dri/renderD128" ||
+      typeof payload.renderer !== "string" || !/virgl/i.test(payload.renderer) ||
+      typeof payload.vendor !== "string" || typeof payload.version !== "string" ||
+      [payload.renderer, payload.vendor, payload.version].some((value) =>
+        value.length === 0 || value.length > 256 || /[\r\n\0]/.test(value))) {
+    throw new TypeError("Renderer report does not prove a bounded VirGL render node.");
+  }
+  return payload;
+}
+
+export class HibernationResumeGate {
+  #checkpoint;
+  #scope;
+  #onFailure;
+  #timeoutMs;
+  #state = "idle";
+  #timer = null;
+  #kernelIndex = 0;
+  #kernelEvidence = [];
+  #rendererReport = null;
+  #promise;
+  #resolve;
+  #reject;
+
+  constructor({
+    checkpoint,
+    scope = globalThis,
+    onFailure = () => {},
+    timeoutMs = HIBERNATION_RESUME_TIMEOUT_MS,
+  } = {}) {
+    if (!isHibernationCheckpoint(checkpoint)) {
+      fail("INVALID_HIBERNATION_GATE", "Hibernation resume gate requires a hibernation checkpoint.");
+    }
+    validateCheckpointProfile(checkpoint);
+    if (!scope?.crypto?.subtle || typeof scope.setTimeout !== "function" ||
+        typeof scope.clearTimeout !== "function" || typeof onFailure !== "function" ||
+        !Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      fail("INVALID_HIBERNATION_GATE", "Hibernation resume gate dependencies are invalid.");
+    }
+    this.#checkpoint = checkpoint;
+    this.#scope = scope;
+    this.#onFailure = onFailure;
+    this.#timeoutMs = timeoutMs;
+    this.#promise = new Promise((resolve, reject) => {
+      this.#resolve = resolve;
+      this.#reject = reject;
+    });
+    this.#promise.catch(() => {});
+  }
+
+  get state() { return this.#state; }
+  get blocksGuestEvidence() { return this.#state !== "ready"; }
+
+  begin() {
+    if (this.#state !== "idle") return false;
+    this.#state = "awaiting-kernel-resume";
+    this.#timer = this.#scope.setTimeout(() => {
+      if (this.#state === "ready" || this.#state === "failed") return;
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_RESUME_TIMEOUT",
+        "Guest hibernation did not produce authenticated resume evidence within its bound.",
+      ));
+    }, this.#timeoutMs);
+    return true;
+  }
+
+  wait() { return this.#promise; }
+
+  #clearTimer() {
+    if (this.#timer !== null) this.#scope.clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+
+  #abort(error) {
+    if (this.#state === "failed") return;
+    this.#state = "failed";
+    this.#clearTimer();
+    // Resume-gate input can contain the plaintext one-time nonce. Never let
+    // untrusted serial payloads or parser messages escape through public
+    // Worker diagnostics, including if a future call site adds error details.
+    const failure = error instanceof ProductionWorkerError
+      ? new ProductionWorkerError(error.code, error.message)
+      : new ProductionWorkerError(
+        "HIBERNATION_RESUME_FAILED",
+        "Guest hibernation resume evidence is invalid.",
+      );
+    try { this.#onFailure(failure); } catch {}
+    this.#reject(failure);
+  }
+
+  async #authenticateMarker(marker) {
+    try {
+      const restore = this.#checkpoint.restoreContract;
+      const nonceSha256 = await sha256Hex(new TextEncoder().encode(marker.nonce), this.#scope);
+      const markerSha256 = await sha256Hex(normalizedJsonBytes(marker), this.#scope);
+      const rendererReportSha256 = await sha256Hex(normalizedJsonBytes(this.#rendererReport), this.#scope);
+      this.#rendererReport = null;
+      if (nonceSha256 !== restore.resumeNonceSha256 ||
+          markerSha256 !== this.#checkpoint.resumeEvidence.hibernationMarkerSha256 ||
+          marker.sourceBootId !== restore.sourceBootId ||
+          marker.swapUuid !== this.#checkpoint.swapImage.swapUuid) {
+        fail("HIBERNATION_REPORT_MISMATCH", "Hibernation report does not match its authenticated resume contract.");
+      }
+      if (this.#state !== "verifying-marker") return;
+      this.#state = "ready";
+      this.#clearTimer();
+      this.#resolve(Object.freeze({
+        markerSha256,
+        kernelEvidence: Object.freeze([...this.#kernelEvidence]),
+        rendererReportSha256,
+      }));
+    } catch (error) {
+      this.#abort(error);
+    }
+  }
+
+  handleSerialLine(line) {
+    if (typeof line !== "string") return false;
+    const hibernationControlLine = [
+      HIBERNATION_REPORT_PREFIX,
+      HIBERNATION_COLD_BOOT_PREFIX,
+      HIBERNATION_FAILURE_PREFIX,
+      RENDERER_REPORT_PREFIX,
+    ].some((prefix) => line.includes(prefix));
+    // Hibernation control records can carry the plaintext resume nonce. Keep
+    // consuming them after a terminal failure so an immediate replay cannot
+    // fall through to the public serial channel while shutdown is pending.
+    if (this.#state === "failed") return hibernationControlLine;
+    if (this.#state === "idle") {
+      if (!hibernationControlLine) return false;
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_REPORT_INVALID",
+        "Hibernation control evidence arrived before the resume gate began.",
+      ));
+      return true;
+    }
+    if (line.includes(HIBERNATION_COLD_BOOT_PREFIX) ||
+        (this.#state !== "ready" &&
+         (line.includes(GUEST_REPORT_PREFIX) || line.includes(GUEST_STAGE_PREFIX)))) {
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_COLD_BOOT_FALLBACK",
+        "Hibernation target reached a cold-boot guest path before authenticated resume.",
+      ));
+      return true;
+    }
+    if (line.includes(HIBERNATION_FAILURE_PREFIX) || HIBERNATION_KERNEL_FAILURE.test(line)) {
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_RESUME_FAILED",
+        "Guest kernel or resume hook reported a hibernation failure.",
+      ));
+      return true;
+    }
+
+    const evidenceMatches = [];
+    for (const [index, evidence] of HIBERNATION_KERNEL_EVIDENCE.entries()) {
+      const first = line.indexOf(evidence);
+      if (first < 0) continue;
+      evidenceMatches.push(index);
+      if (line.indexOf(evidence, first + evidence.length) >= 0) evidenceMatches.push(index);
+    }
+    if (evidenceMatches.length > 0) {
+      if (hibernationControlLine) {
+        this.#abort(new ProductionWorkerError(
+          "HIBERNATION_RESUME_EVIDENCE_INVALID",
+          "Guest kernel and hibernation control evidence were combined on one serial line.",
+        ));
+        return true;
+      }
+      const [evidenceIndex] = evidenceMatches;
+      if (this.#state === "ready" || evidenceMatches.length !== 1 ||
+          evidenceIndex !== this.#kernelIndex) {
+        this.#abort(new ProductionWorkerError(
+          "HIBERNATION_RESUME_EVIDENCE_INVALID",
+          "Guest kernel hibernation evidence is duplicated, combined, or out of order.",
+        ));
+        return true;
+      }
+      this.#kernelEvidence.push(HIBERNATION_KERNEL_EVIDENCE[evidenceIndex]);
+      this.#kernelIndex += 1;
+      return true;
+    }
+
+    if (line.includes(RENDERER_REPORT_PREFIX)) {
+      if (this.#state === "ready" || this.#state === "verifying-marker" ||
+          this.#kernelIndex !== HIBERNATION_KERNEL_EVIDENCE.length || this.#rendererReport !== null) {
+        this.#abort(new ProductionWorkerError(
+          "HIBERNATION_RENDERER_REPORT_INVALID",
+          "Renderer report was duplicated or arrived before complete kernel resume evidence.",
+        ));
+        return true;
+      }
+      try {
+        this.#rendererReport = parseRendererReportLine(line);
+      } catch (error) {
+        this.#abort(new ProductionWorkerError(
+          "HIBERNATION_RENDERER_REPORT_INVALID",
+          "Renderer report is malformed or does not prove VirGL.",
+        ));
+      }
+      return true;
+    }
+
+    if (!line.includes(HIBERNATION_REPORT_PREFIX)) return false;
+    if (this.#state === "ready" || this.#state === "verifying-marker" ||
+        this.#kernelIndex !== HIBERNATION_KERNEL_EVIDENCE.length || this.#rendererReport === null) {
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_REPORT_INVALID",
+        "Hibernation report was duplicated or arrived before complete kernel resume evidence.",
+      ));
+      return true;
+    }
+    try {
+      const marker = parseHibernationReportLine(line);
+      this.#state = "verifying-marker";
+      void this.#authenticateMarker(marker);
+    } catch (error) {
+      this.#abort(new ProductionWorkerError(
+        "HIBERNATION_REPORT_INVALID",
+        "Hibernation report is malformed.",
+      ));
+    }
+    return true;
+  }
 }
 
 export function validateGuestStage(stage, previous = null) {
@@ -721,6 +1080,10 @@ function validateCheckpointFile(value, expected, label) {
       if (!SHA256.test(value[key] ?? "") || value[key] !== value[key].toLowerCase()) {
         exactProfileMismatch(`manifest.checkpoint.${label}.${key}`, expectedValue, value[key]);
       }
+    } else if (expectedValue === "<uuid>") {
+      if (!UUID.test(value[key] ?? "") || value[key] !== value[key].toLowerCase()) {
+        exactProfileMismatch(`manifest.checkpoint.${label}.${key}`, expectedValue, value[key]);
+      }
     } else if (!Object.is(value[key], expectedValue)) {
       exactProfileMismatch(`manifest.checkpoint.${label}.${key}`, expectedValue, value[key]);
     }
@@ -728,10 +1091,196 @@ function validateCheckpointFile(value, expected, label) {
   return value;
 }
 
+export function isHibernationCheckpoint(checkpoint) {
+  return checkpoint?.schemaVersion === 1 && checkpoint?.mode === "guest-hibernation-resume";
+}
+
+export function validateHibernationSourceEvidence(value) {
+  const expectedKeys = [
+    "diagnosticsSha256", "gpuBoundAtHibernate", "hibernationEntryMarkerSha256",
+    "nonceSha256", "sourceBootId",
+  ].sort();
+  const actualKeys = Object.keys(value ?? {}).sort();
+  if (!isRecord(value) || actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    exactProfileMismatch("manifest.checkpoint.sourceEvidence keys", expectedKeys, actualKeys);
+  }
+  for (const key of ["diagnosticsSha256", "hibernationEntryMarkerSha256", "nonceSha256"]) {
+    if (!SHA256.test(value[key] ?? "") || value[key] !== value[key].toLowerCase()) {
+      exactProfileMismatch(`manifest.checkpoint.sourceEvidence.${key}`, "<sha256>", value[key]);
+    }
+  }
+  if (!UUID.test(value.sourceBootId ?? "") || value.sourceBootId !== value.sourceBootId?.toLowerCase() ||
+      value.gpuBoundAtHibernate !== false) {
+    exactProfileMismatch(
+      "manifest.checkpoint.sourceEvidence",
+      "pre-desktop source identity with GPU unbound at hibernate entry",
+      value,
+    );
+  }
+  return value;
+}
+
+export function validateHibernationResumeEvidence(value) {
+  const digestKeys = [
+    "desktopFrame1HealthSha256", "desktopFrame1Sha256", "desktopFrame2HealthSha256",
+    "desktopFrame2Sha256", "diagnosticsSha256", "footChangeSha256", "footFrameHealthSha256",
+    "footFrameSha256", "hibernationMarkerSha256", "normalizedGuestReportSha256",
+    "rendererProbeSha256", "reportValidationSha256",
+  ];
+  const expectedKeys = [...digestKeys, "freshPostResumeInteraction", "renderer"].sort();
+  const actualKeys = Object.keys(value ?? {}).sort();
+  if (!isRecord(value) || actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    exactProfileMismatch("manifest.checkpoint.resumeEvidence keys", expectedKeys, actualKeys);
+  }
+  if (digestKeys.some((key) => !SHA256.test(value[key] ?? "") || value[key] !== value[key].toLowerCase())) {
+    exactProfileMismatch("manifest.checkpoint.resumeEvidence digests", "lowercase SHA-256 values", value);
+  }
+  if (value.freshPostResumeInteraction !== true || typeof value.renderer !== "string" ||
+      value.renderer.length === 0 || value.renderer.length > 256 || !/virgl/i.test(value.renderer) ||
+      /[\r\n\0]/.test(value.renderer)) {
+    exactProfileMismatch(
+      "manifest.checkpoint.resumeEvidence",
+      "fresh native post-resume VirGL report, healthy frames, and interaction proof",
+      value,
+    );
+  }
+  return value;
+}
+
+function validateHibernationCheckpointProfile(checkpoint) {
+  const expectedKeys = [
+    "derivedInitramfs", "identity", "mode", "producer", "restoreContract", "resumeEvidence",
+    "rootDelta", "schemaVersion", "sourceEvidence", "swapImage",
+  ].sort();
+  const actualKeys = Object.keys(checkpoint).sort();
+  if (actualKeys.length !== expectedKeys.length ||
+      actualKeys.some((key, index) => key !== expectedKeys[index])) {
+    exactProfileMismatch("manifest.checkpoint keys", expectedKeys, actualKeys);
+  }
+  validateCheckpointFile(checkpoint.rootDelta, {
+    artifactPath: "hibernate-root-overlay.qcow2",
+    mountPath: "/pack/hibernate-root-overlay.qcow2",
+    bytes: "<positive-safe-integer>",
+    sha256: "<sha256>",
+    format: "qcow2",
+    backingFilename: "rootfs.ext4",
+    backingFormat: "raw",
+  }, "rootDelta");
+  validateCheckpointFile(checkpoint.derivedInitramfs, {
+    artifactPath: "initramfs-virgl-hibernate.img",
+    mountPath: "/pack/initramfs-virgl-hibernate.img",
+    bytes: "<positive-safe-integer>",
+    sha256: "<sha256>",
+    format: "linux-initramfs",
+    baseArtifactPath: "initramfs-linux.img",
+  }, "derivedInitramfs");
+  validateCheckpointFile(checkpoint.swapImage, {
+    artifactPath: "omarchy-hibernate.qcow2",
+    mountPath: "/pack/omarchy-hibernate.qcow2",
+    bytes: "<positive-safe-integer>",
+    sha256: "<sha256>",
+    format: "qcow2",
+    virtualBytes: HIBERNATION_SWAP_VIRTUAL_BYTES,
+    swapUuid: HIBERNATION_SWAP_UUID,
+  }, "swapImage");
+  validateCheckpointFile(checkpoint.producer, {
+    manifestArtifactPath: "hibernate-manifest.json",
+    manifestBytes: "<positive-safe-integer>",
+    manifestSha256: "<sha256>",
+    qemuBinarySha256: "<sha256>",
+  }, "producer");
+  validateHibernationSourceEvidence(checkpoint.sourceEvidence);
+  validateHibernationResumeEvidence(checkpoint.resumeEvidence);
+
+  const identityKeys = [
+    "baseGuestManifestSha256", "baseInitramfsSha256", "browserQemuWasmSha256",
+    "derivedInitramfsSha256", "guestProvenanceSha256", "kernelSha256", "producerMachine",
+    "qemu", "rootfsSha256", "runtimeMachine",
+  ].sort();
+  const identity = checkpoint.identity;
+  if (!isRecord(identity) || Object.keys(identity).sort().join("\0") !== identityKeys.join("\0")) {
+    exactProfileMismatch("manifest.checkpoint.identity keys", identityKeys, Object.keys(identity ?? {}).sort());
+  }
+  for (const key of [
+    "baseGuestManifestSha256", "baseInitramfsSha256", "browserQemuWasmSha256",
+    "derivedInitramfsSha256", "guestProvenanceSha256", "kernelSha256", "rootfsSha256",
+  ]) {
+    if (!SHA256.test(identity[key] ?? "") || identity[key] !== identity[key].toLowerCase()) {
+      exactProfileMismatch(`manifest.checkpoint.identity.${key}`, "<sha256>", identity[key]);
+    }
+  }
+  assertExactProfile(identity.qemu, CANONICAL_CHECKPOINT_IDENTITY.qemu,
+    "manifest.checkpoint.identity.qemu");
+  assertExactProfile(identity.producerMachine, CANONICAL_HIBERNATION_PRODUCER_MACHINE,
+    "manifest.checkpoint.identity.producerMachine");
+  assertExactProfile(identity.runtimeMachine, CANONICAL_HIBERNATION_RUNTIME_MACHINE,
+    "manifest.checkpoint.identity.runtimeMachine");
+  if (checkpoint.derivedInitramfs.sha256 !== identity.derivedInitramfsSha256) {
+    exactProfileMismatch(
+      "manifest.checkpoint.derivedInitramfs.sha256",
+      identity.derivedInitramfsSha256,
+      checkpoint.derivedInitramfs.sha256,
+    );
+  }
+
+  const restore = checkpoint.restoreContract;
+  const restoreKeys = [
+    "coldBootFallbackAllowed", "disposableWrites", "gpuBoundAtHibernate", "kernelCommandLineBase",
+    "resumeNonceSha256", "runtimeDisplay", "sourceBootId", "sourceEvidenceSha256",
+    "sourceKernelCommandLineRedacted", "sourceKernelCommandLineSha256", "targetKernelCommandLine",
+    "virtioGpuLoadedAfterResume",
+  ].sort();
+  if (!isRecord(restore) || Object.keys(restore).sort().join("\0") !== restoreKeys.join("\0")) {
+    exactProfileMismatch("manifest.checkpoint.restoreContract keys", restoreKeys, Object.keys(restore ?? {}).sort());
+  }
+  for (const key of ["resumeNonceSha256", "sourceEvidenceSha256", "sourceKernelCommandLineSha256"]) {
+    if (!SHA256.test(restore[key] ?? "") || restore[key] !== restore[key].toLowerCase()) {
+      exactProfileMismatch(`manifest.checkpoint.restoreContract.${key}`, "<sha256>", restore[key]);
+    }
+  }
+  if (!UUID.test(restore.sourceBootId ?? "") || restore.sourceBootId !== restore.sourceBootId?.toLowerCase()) {
+    exactProfileMismatch("manifest.checkpoint.restoreContract.sourceBootId", "<lowercase-uuid>", restore.sourceBootId);
+  }
+  if (restore.coldBootFallbackAllowed !== false || restore.gpuBoundAtHibernate !== false ||
+      restore.virtioGpuLoadedAfterResume !== true ||
+      restore.runtimeDisplay !== CANONICAL_HIBERNATION_RUNTIME_MACHINE.display ||
+      restore.disposableWrites !== "target -snapshot layers over immutable root delta and hibernation image") {
+    exactProfileMismatch("manifest.checkpoint.restoreContract", "canonical fail-closed hibernation contract", restore);
+  }
+  for (const key of ["kernelCommandLineBase", "sourceKernelCommandLineRedacted", "targetKernelCommandLine"]) {
+    if (typeof restore[key] !== "string" || restore[key].length === 0 || restore[key].length > 2048 ||
+        /[\r\n\0]/.test(restore[key])) {
+      exactProfileMismatch(`manifest.checkpoint.restoreContract.${key}`, "<bounded-kernel-command-line>", restore[key]);
+    }
+  }
+  const targetArguments = restore.kernelCommandLineBase.split(/\s+/);
+  const resumeArgument = `resume=UUID=${HIBERNATION_SWAP_UUID}`;
+  if (restore.kernelCommandLineBase !== CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE ||
+      restore.targetKernelCommandLine !== `${restore.kernelCommandLineBase} omarchy.hibernate_target=1` ||
+      restore.sourceKernelCommandLineRedacted !==
+        `${restore.kernelCommandLineBase} omarchy.hibernate_producer=1 omarchy.hibernate_nonce=<redacted>` ||
+      targetArguments.some((argument) => argument.startsWith("omarchy.hibernate_")) ||
+      !targetArguments.includes(resumeArgument) || !targetArguments.includes("ignore_loglevel") ||
+      !targetArguments.includes("hibernate.compressor=lzo") || !targetArguments.includes("root=/dev/vda") ||
+      restore.resumeNonceSha256 !== checkpoint.sourceEvidence.nonceSha256 ||
+      restore.sourceBootId !== checkpoint.sourceEvidence.sourceBootId ||
+      restore.gpuBoundAtHibernate !== checkpoint.sourceEvidence.gpuBoundAtHibernate) {
+    exactProfileMismatch(
+      "manifest.checkpoint.restoreContract.targetKernelCommandLine",
+      `a shared base containing root=/dev/vda, ${resumeArgument}, ignore_loglevel, and hibernate.compressor=lzo with exclusive source/target role suffixes`,
+      restore.targetKernelCommandLine,
+    );
+  }
+  return checkpoint;
+}
+
 export function validateCheckpointProfile(checkpoint) {
   if (!isRecord(checkpoint)) {
     exactProfileMismatch("manifest.checkpoint", "canonical checkpoint profile", checkpoint);
   }
+  if (isHibernationCheckpoint(checkpoint)) return validateHibernationCheckpointProfile(checkpoint);
   const expectedKeys = ["bootDelta", "identity", "mode", "producer", "schemaVersion", "vmstate"];
   const actualKeys = Object.keys(checkpoint).sort();
   if (actualKeys.length !== expectedKeys.length ||
@@ -781,9 +1330,72 @@ export function validateCheckpointProducerDocument(value, checkpoint) {
   if (!isRecord(value)) {
     fail("CHECKPOINT_PROVENANCE_MISMATCH", "Checkpoint producer manifest must be an object.");
   }
-  validateCheckpointSourceEvidenceShape(value.sourceEvidence);
+  if (isHibernationCheckpoint(checkpoint)) {
+    validateHibernationSourceEvidence(value.sourceEvidence);
+    assertExactProfile(value.sourceEvidence, checkpoint.sourceEvidence,
+      "hibernation producer manifest.sourceEvidence");
+  } else {
+    validateCheckpointSourceEvidenceShape(value.sourceEvidence);
+  }
   const comparableValue = { ...value };
   delete comparableValue.sourceEvidence;
+  if (isHibernationCheckpoint(checkpoint)) {
+    const expected = {
+      schemaVersion: 1,
+      kind: "omarchy-web-guest-hibernation",
+      derivedInitramfs: {
+        artifactPath: checkpoint.derivedInitramfs.artifactPath,
+        bytes: checkpoint.derivedInitramfs.bytes,
+        sha256: checkpoint.derivedInitramfs.sha256,
+        format: checkpoint.derivedInitramfs.format,
+        baseArtifactPath: checkpoint.derivedInitramfs.baseArtifactPath,
+      },
+      rootDelta: {
+        path: checkpoint.rootDelta.artifactPath,
+        bytes: checkpoint.rootDelta.bytes,
+        sha256: checkpoint.rootDelta.sha256,
+        format: checkpoint.rootDelta.format,
+        backingFilename: checkpoint.rootDelta.backingFilename,
+        backingFormat: checkpoint.rootDelta.backingFormat,
+      },
+      swapImage: {
+        path: checkpoint.swapImage.artifactPath,
+        bytes: checkpoint.swapImage.bytes,
+        sha256: checkpoint.swapImage.sha256,
+        format: checkpoint.swapImage.format,
+        virtualBytes: checkpoint.swapImage.virtualBytes,
+        swapUuid: checkpoint.swapImage.swapUuid,
+      },
+      producer: { qemuBinarySha256: checkpoint.producer.qemuBinarySha256 },
+      resumeEvidence: { ...checkpoint.resumeEvidence },
+      identity: {
+        baseGuestManifestSha256: checkpoint.identity.baseGuestManifestSha256,
+        rootfsSha256: checkpoint.identity.rootfsSha256,
+        guestProvenanceSha256: checkpoint.identity.guestProvenanceSha256,
+        kernelSha256: checkpoint.identity.kernelSha256,
+        baseInitramfsSha256: checkpoint.identity.baseInitramfsSha256,
+        derivedInitramfsSha256: checkpoint.identity.derivedInitramfsSha256,
+        browserQemuWasmSha256: checkpoint.identity.browserQemuWasmSha256,
+      },
+      qemu: { ...checkpoint.identity.qemu },
+      producerMachine: structuredClone(checkpoint.identity.producerMachine),
+      runtimeMachine: structuredClone(checkpoint.identity.runtimeMachine),
+      restoreContract: { ...checkpoint.restoreContract },
+    };
+    try {
+      assertExactProfile(comparableValue, expected, "hibernation producer manifest");
+    } catch (error) {
+      if (error instanceof ProductionWorkerError) {
+        fail(
+          "CHECKPOINT_PROVENANCE_MISMATCH",
+          "Hibernation producer manifest does not match the verified browser resume contract.",
+          { cause: serializeError(error) },
+        );
+      }
+      throw error;
+    }
+    return value;
+  }
   const expected = {
     schemaVersion: 1,
     kind: "omarchy-web-preboot-checkpoint",
@@ -835,6 +1447,23 @@ export function validateCheckpointProducerDocument(value, checkpoint) {
   return value;
 }
 
+export async function validateHibernationProducerEvidence(
+  value,
+  checkpoint,
+  scope = globalThis,
+) {
+  if (!isHibernationCheckpoint(checkpoint)) {
+    fail("INVALID_HIBERNATION_EVIDENCE", "Hibernation producer evidence requires a hibernation checkpoint.");
+  }
+  validateCheckpointProducerDocument(value, checkpoint);
+  validateHibernationSourceEvidence(value.sourceEvidence);
+  const sourceEvidenceSha256 = await sha256Hex(normalizedJsonBytes(value.sourceEvidence), scope);
+  if (sourceEvidenceSha256 !== checkpoint.restoreContract.sourceEvidenceSha256) {
+    fail("CHECKPOINT_SOURCE_EVIDENCE_INVALID", "Hibernation source evidence digest is invalid.");
+  }
+  return value;
+}
+
 export function validateCheckpointGuestManifestDocument(value, checkpoint, expectedUpstream) {
   try {
     if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.artifacts)) {
@@ -845,8 +1474,15 @@ export function validateCheckpointGuestManifestDocument(value, checkpoint, expec
     const artifacts = validateArtifactManifest(value);
     const rootfs = artifactAt(artifacts, "rootfs.ext4");
     const provenance = artifactAt(artifacts, "provenance.json");
+    const kernel = isHibernationCheckpoint(checkpoint) ? artifactAt(artifacts, "vmlinuz-linux") : null;
+    const initramfs = isHibernationCheckpoint(checkpoint)
+      ? artifactAt(artifacts, checkpoint.derivedInitramfs.baseArtifactPath)
+      : null;
     if (rootfs.sha256 !== checkpoint.identity.rootfsSha256 ||
-        provenance.sha256 !== checkpoint.identity.guestProvenanceSha256) {
+        provenance.sha256 !== checkpoint.identity.guestProvenanceSha256 ||
+        (isHibernationCheckpoint(checkpoint) &&
+         (kernel.sha256 !== checkpoint.identity.kernelSha256 ||
+          initramfs.sha256 !== checkpoint.identity.baseInitramfsSha256))) {
       fail("CHECKPOINT_GUEST_MISMATCH", "Checkpoint guest manifest contents are not canonical.");
     }
   } catch (error) {
@@ -865,16 +1501,81 @@ export function validateProductionManifest(manifest) {
     assertExactProfile(manifest, CANONICAL_PRODUCTION_MANIFEST);
     return manifest;
   }
-  const coldProfile = { ...manifest };
+  const coldProfile = {
+    ...manifest,
+    qemu: { ...manifest.qemu, arguments: [...(manifest.qemu?.arguments ?? [])] },
+  };
   delete coldProfile.checkpoint;
-  assertExactProfile(coldProfile, CANONICAL_PRODUCTION_MANIFEST);
   validateCheckpointProfile(manifest.checkpoint);
+  if (isHibernationCheckpoint(manifest.checkpoint)) {
+    const { runtimeMachine } = manifest.checkpoint.identity;
+    assertExactProfile(coldProfile.guest.initramfs, {
+      artifactPath: manifest.checkpoint.derivedInitramfs.artifactPath,
+      mountPath: manifest.checkpoint.derivedInitramfs.mountPath,
+    }, "manifest.guest.initramfs");
+    coldProfile.guest = {
+      ...coldProfile.guest,
+      initramfs: { ...CANONICAL_PRODUCTION_MANIFEST.guest.initramfs },
+    };
+    const initrdIndexes = coldProfile.qemu.arguments.flatMap((value, index) => value === "-initrd" ? [index] : []);
+    if (initrdIndexes.length !== 1 ||
+        coldProfile.qemu.arguments[initrdIndexes[0] + 1] !== manifest.checkpoint.derivedInitramfs.mountPath) {
+      exactProfileMismatch(
+        "manifest.qemu.arguments hibernation initrd",
+        manifest.checkpoint.derivedInitramfs.mountPath,
+        initrdIndexes.length === 1 ? coldProfile.qemu.arguments[initrdIndexes[0] + 1] : initrdIndexes,
+      );
+    }
+    coldProfile.qemu.arguments[initrdIndexes[0] + 1] =
+      CANONICAL_PRODUCTION_MANIFEST.guest.initramfs.mountPath;
+    const appendIndexes = coldProfile.qemu.arguments.flatMap((value, index) => value === "-append" ? [index] : []);
+    if (appendIndexes.length !== 1 ||
+        coldProfile.qemu.arguments[appendIndexes[0] + 1] !== manifest.checkpoint.restoreContract.targetKernelCommandLine) {
+      exactProfileMismatch(
+        "manifest.qemu.arguments hibernation command line",
+        manifest.checkpoint.restoreContract.targetKernelCommandLine,
+        appendIndexes.length === 1 ? coldProfile.qemu.arguments[appendIndexes[0] + 1] : appendIndexes,
+      );
+    }
+    const canonicalAppend = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-append");
+    coldProfile.qemu.arguments[appendIndexes[0] + 1] =
+      CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[canonicalAppend + 1];
+
+    const cpuIndexes = coldProfile.qemu.arguments.flatMap((value, index) => value === "-cpu" ? [index] : []);
+    if (cpuIndexes.length !== 1 || coldProfile.qemu.arguments[cpuIndexes[0] + 1] !== runtimeMachine.cpu) {
+      exactProfileMismatch("manifest.qemu.arguments hibernation CPU", runtimeMachine.cpu, cpuIndexes);
+    }
+    coldProfile.qemu.arguments.splice(cpuIndexes[0], 2);
+
+    const runtimeDisplay = manifest.checkpoint.restoreContract.runtimeDisplay;
+    const displayIndexes = coldProfile.qemu.arguments.flatMap((value, index) =>
+      value === "-display" && coldProfile.qemu.arguments[index + 1] === runtimeDisplay ? [index] : []);
+    if (displayIndexes.length !== 1) {
+      exactProfileMismatch("manifest.qemu.arguments hibernation display", runtimeDisplay, displayIndexes);
+    }
+    coldProfile.qemu.arguments[displayIndexes[0] + 1] =
+      CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-display") + 1];
+    const deviceIndexes = coldProfile.qemu.arguments.flatMap((value, index) =>
+      value === "-device" && coldProfile.qemu.arguments[index + 1] === runtimeMachine.displayDevice ? [index] : []);
+    if (deviceIndexes.length !== 1) {
+      exactProfileMismatch("manifest.qemu.arguments hibernation display device", runtimeMachine.displayDevice, deviceIndexes);
+    }
+    const canonicalDevice = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.findIndex((value, index, values) =>
+      values[index - 1] === "-device" &&
+      /^virtio-vga(?:-gl)?,max_outputs=1,xres=1600,yres=900$/.test(value));
+    if (canonicalDevice < 0) {
+      exactProfileMismatch("canonical display device", "one canonical virtio-vga display", canonicalDevice);
+    }
+    coldProfile.qemu.arguments[deviceIndexes[0] + 1] = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[canonicalDevice];
+  }
+  assertExactProfile(coldProfile, CANONICAL_PRODUCTION_MANIFEST);
   return manifest;
 }
 
 export function checkpointArgumentsForManifest(manifest) {
   if (!isRecord(manifest) || !("checkpoint" in manifest)) return null;
   validateProductionManifest(manifest);
+  if (isHibernationCheckpoint(manifest.checkpoint)) return [...CANONICAL_HIBERNATION_ARGUMENTS];
   return [...CANONICAL_CHECKPOINT_ARGUMENTS];
 }
 
@@ -1144,8 +1845,15 @@ export function validateCheckpointArtifacts(manifest, artifacts) {
     fail("INVALID_ARTIFACT_MANIFEST", "Checkpoint release artifacts must be an indexed manifest.");
   }
   const checkpoint = manifest.checkpoint;
-  const vmstate = assertCheckpointArtifactRecord(artifacts, checkpoint.vmstate, "VM state");
-  const bootDelta = assertCheckpointArtifactRecord(artifacts, checkpoint.bootDelta, "Boot delta");
+  const hibernation = isHibernationCheckpoint(checkpoint);
+  const vmstate = hibernation ? null : assertCheckpointArtifactRecord(artifacts, checkpoint.vmstate, "VM state");
+  const bootDelta = hibernation ? null : assertCheckpointArtifactRecord(artifacts, checkpoint.bootDelta, "Boot delta");
+  const rootDelta = hibernation
+    ? assertCheckpointArtifactRecord(artifacts, checkpoint.rootDelta, "Hibernation root delta")
+    : null;
+  const swapImage = hibernation
+    ? assertCheckpointArtifactRecord(artifacts, checkpoint.swapImage, "Hibernation swap image")
+    : null;
   const producerManifest = artifactAt(artifacts, checkpoint.producer.manifestArtifactPath);
   if (producerManifest.bytes !== checkpoint.producer.manifestBytes ||
       producerManifest.sha256 !== checkpoint.producer.manifestSha256) {
@@ -1171,28 +1879,56 @@ export function validateCheckpointArtifacts(manifest, artifacts) {
   if (wasm.sha256 !== checkpoint.identity.browserQemuWasmSha256) {
     fail("CHECKPOINT_QEMU_MISMATCH", "Checkpoint is not compatible with the verified browser QEMU build.");
   }
+  const kernel = hibernation ? artifactAt(artifacts, manifest.guest.kernel.artifactPath) : null;
+  const initramfs = hibernation ? assertCheckpointArtifactRecord(
+    artifacts,
+    checkpoint.derivedInitramfs,
+    "Hibernation initramfs",
+  ) : null;
+  const baseInitramfs = hibernation
+    ? artifactAt(artifacts, checkpoint.derivedInitramfs.baseArtifactPath)
+    : null;
+  if (hibernation && (kernel.sha256 !== checkpoint.identity.kernelSha256 ||
+      initramfs.sha256 !== checkpoint.identity.derivedInitramfsSha256 ||
+      baseInitramfs.sha256 !== checkpoint.identity.baseInitramfsSha256)) {
+    fail("HIBERNATION_BOOTSTRAP_MISMATCH", "Hibernation kernel or initramfs differs from its resume image.");
+  }
   return Object.freeze({
     vmstate,
     bootDelta,
+    rootDelta,
+    swapImage,
     producerManifest,
     guestManifest,
     rootfs,
     provenance,
     wasm,
+    kernel,
+    initramfs,
+    baseInitramfs,
   });
 }
 
 export function checkpointCachePlan(manifest) {
   if (!isRecord(manifest) || !("checkpoint" in manifest)) return null;
   validateProductionManifest(manifest);
-  const plan = Object.freeze({
-    rootfs: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: CHECKPOINT_ROOTFS_CACHE_BYTES }),
-    bootDelta: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: CHECKPOINT_DELTA_CACHE_BYTES }),
-    vmstate: Object.freeze({
-      chunkBytes: CHECKPOINT_VMSTATE_CHUNK_BYTES,
-      maxCachedBytes: CHECKPOINT_VMSTATE_CACHE_BYTES,
-    }),
-  });
+  const plan = isHibernationCheckpoint(manifest.checkpoint)
+    ? Object.freeze({
+        rootfs: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: HIBERNATION_ROOTFS_CACHE_BYTES }),
+        rootDelta: Object.freeze({
+          chunkBytes: 1024 * 1024,
+          maxCachedBytes: HIBERNATION_ROOT_DELTA_CACHE_BYTES,
+        }),
+        swapImage: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: HIBERNATION_SWAP_CACHE_BYTES }),
+      })
+    : Object.freeze({
+        rootfs: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: CHECKPOINT_ROOTFS_CACHE_BYTES }),
+        bootDelta: Object.freeze({ chunkBytes: 1024 * 1024, maxCachedBytes: CHECKPOINT_DELTA_CACHE_BYTES }),
+        vmstate: Object.freeze({
+          chunkBytes: CHECKPOINT_VMSTATE_CHUNK_BYTES,
+          maxCachedBytes: CHECKPOINT_VMSTATE_CACHE_BYTES,
+        }),
+      });
   const total = Object.values(plan).reduce((sum, item) => sum + item.maxCachedBytes, 0);
   if (total !== CHECKPOINT_TOTAL_CACHE_BYTES) {
     fail("CHECKPOINT_CACHE_MISMATCH", "Checkpoint paging exceeds the canonical 128 MiB cache budget.");
@@ -1762,6 +2498,11 @@ export class OmarchyProductionWorkerHost {
   #terminationScheduled = false;
   #desktopProof;
   #checkpointDesktopSettle = null;
+  #hibernationResumeGate = null;
+  #hibernationResumeEvidence = null;
+  #hibernationGuestReportTimer = null;
+  #deferredHibernationEvidence = [];
+  #deferredHibernationEvidenceBytes = 0;
   #deferredHostInputs = [];
 
   constructor(scope = globalThis) {
@@ -1795,6 +2536,10 @@ export class OmarchyProductionWorkerHost {
   #terminateRuntime() {
     if (this.#terminationScheduled) return;
     this.#terminationScheduled = true;
+    if (this.#hibernationGuestReportTimer !== null) {
+      this.#scope.clearTimeout?.(this.#hibernationGuestReportTimer);
+      this.#hibernationGuestReportTimer = null;
+    }
     try {
       this.#instance?.PThread?.terminateAllThreads?.();
     } catch (error) {
@@ -1858,7 +2603,10 @@ export class OmarchyProductionWorkerHost {
         JSON.parse(new TextDecoder().decode(runtimeManifestFile.bytes)),
       );
       const checkpointArtifacts = validateCheckpointArtifacts(runtimeManifest, artifacts);
+      const hibernationCheckpoint = checkpointArtifacts !== null &&
+        isHibernationCheckpoint(runtimeManifest.checkpoint);
       let checkpointSourceEvidence = null;
+      let hibernationProducerDocument = null;
       if (checkpointArtifacts !== null) {
         this.#setPhase("loading-checkpoint-provenance");
         const [producerFile, guestManifestFile] = await Promise.all([
@@ -1891,13 +2639,39 @@ export class OmarchyProductionWorkerHost {
           runtimeManifest.checkpoint,
           this.#releaseIdentity.upstream,
         );
-        await validateCheckpointSourceEvidence(
-          producerDocument.sourceEvidence,
-          this.#releaseIdentity.upstream,
-          this.#scope,
-        );
-        checkpointSourceEvidence = producerDocument.sourceEvidence;
+        if (hibernationCheckpoint) {
+          await validateHibernationProducerEvidence(
+            producerDocument,
+            runtimeManifest.checkpoint,
+            this.#scope,
+          );
+          hibernationProducerDocument = producerDocument;
+        } else {
+          await validateCheckpointSourceEvidence(
+            producerDocument.sourceEvidence,
+            this.#releaseIdentity.upstream,
+            this.#scope,
+          );
+          checkpointSourceEvidence = producerDocument.sourceEvidence;
+        }
       }
+      const checkpointPaths = checkpointArtifacts === null ? [] : hibernationCheckpoint
+        ? [
+            runtimeManifest.checkpoint.derivedInitramfs.artifactPath,
+            runtimeManifest.checkpoint.derivedInitramfs.baseArtifactPath,
+            runtimeManifest.checkpoint.rootDelta.artifactPath,
+            runtimeManifest.checkpoint.swapImage.artifactPath,
+            runtimeManifest.checkpoint.producer.manifestArtifactPath,
+            "guest-manifest.json",
+            "provenance.json",
+          ]
+        : [
+            runtimeManifest.checkpoint.vmstate.artifactPath,
+            runtimeManifest.checkpoint.bootDelta.artifactPath,
+            runtimeManifest.checkpoint.producer.manifestArtifactPath,
+            "guest-manifest.json",
+            "provenance.json",
+          ];
       for (const path of [
         runtimeManifest.assets.hostWorker,
         runtimeManifest.assets.workerInput,
@@ -1907,13 +2681,7 @@ export class OmarchyProductionWorkerHost {
         ...Object.values(runtimeManifest.assets.locate),
         ...Object.values(runtimeManifest.assets.firmware),
         ...["rootfs", "kernel", "initramfs"].map((key) => runtimeManifest.guest[key].artifactPath),
-        ...(checkpointArtifacts === null ? [] : [
-          runtimeManifest.checkpoint.vmstate.artifactPath,
-          runtimeManifest.checkpoint.bootDelta.artifactPath,
-          runtimeManifest.checkpoint.producer.manifestArtifactPath,
-          "guest-manifest.json",
-          "provenance.json",
-        ]),
+        ...checkpointPaths,
       ]) artifactAt(artifacts, path);
       canvas.width = runtimeManifest.display.width;
       canvas.height = runtimeManifest.display.height;
@@ -1979,49 +2747,92 @@ export class OmarchyProductionWorkerHost {
       } else {
         const checkpoint = runtimeManifest.checkpoint;
         this.#setPhase("preflighting-checkpoint");
-        const vmstateRangeLedger = createCheckpointVmstateRangeLedger();
         const commonCheckpointOptions = {
           scope: this.#scope,
           origin: this.#scope.location.origin,
         };
-        const [bootDeltaFile, vmstateFile] = await Promise.all([
-          prepareImmutablePagedFile({
-            url: releaseUrl(base, checkpointArtifacts.bootDelta.path),
-            path: checkpoint.bootDelta.mountPath,
-            byteLength: checkpointArtifacts.bootDelta.bytes,
-            sha256: checkpointArtifacts.bootDelta.sha256,
-            ...cachePlan.bootDelta,
-          }, {
-            ...commonCheckpointOptions,
-            onRequest: (request) => this.#post("diskrequest", { artifact: "checkpoint-boot-delta", request }),
-          }),
-          prepareImmutablePagedFile({
-            url: releaseUrl(base, checkpointArtifacts.vmstate.path),
-            path: checkpoint.vmstate.mountPath,
-            byteLength: checkpointArtifacts.vmstate.bytes,
-            sha256: checkpointArtifacts.vmstate.sha256,
-            ...cachePlan.vmstate,
-          }, {
-            ...commonCheckpointOptions,
-            onRequest: (request) => {
-              vmstateRangeLedger.record(request);
-              this.#post("diskrequest", {
-                artifact: "checkpoint-vmstate",
+        if (hibernationCheckpoint) {
+          const [rootDeltaFile, swapImageFile] = await Promise.all([
+            prepareImmutablePagedFile({
+              url: releaseUrl(base, checkpointArtifacts.rootDelta.path),
+              path: checkpoint.rootDelta.mountPath,
+              byteLength: checkpointArtifacts.rootDelta.bytes,
+              sha256: checkpointArtifacts.rootDelta.sha256,
+              ...cachePlan.rootDelta,
+            }, {
+              ...commonCheckpointOptions,
+              onRequest: (request) => this.#post("diskrequest", {
+                artifact: "hibernation-root-delta",
                 request,
-                checkpointLedger: vmstateRangeLedger.snapshot(),
-              });
-            },
-          }),
-        ]);
-        checkpointPagedFiles = [bootDeltaFile, vmstateFile];
+              }),
+            }),
+            prepareImmutablePagedFile({
+              url: releaseUrl(base, checkpointArtifacts.swapImage.path),
+              path: checkpoint.swapImage.mountPath,
+              byteLength: checkpointArtifacts.swapImage.bytes,
+              sha256: checkpointArtifacts.swapImage.sha256,
+              ...cachePlan.swapImage,
+            }, {
+              ...commonCheckpointOptions,
+              onRequest: (request) => this.#post("diskrequest", {
+                artifact: "hibernation-swap-image",
+                request,
+              }),
+            }),
+          ]);
+          checkpointPagedFiles = [rootDeltaFile, swapImageFile];
+          this.#post("checkpoint", {
+            mode: checkpoint.mode,
+            derivedInitramfsBytes: checkpoint.derivedInitramfs.bytes,
+            rootDeltaBytes: checkpoint.rootDelta.bytes,
+            swapImageBytes: checkpoint.swapImage.bytes,
+            swapVirtualBytes: checkpoint.swapImage.virtualBytes,
+            cacheBytes: CHECKPOINT_TOTAL_CACHE_BYTES,
+          });
+        } else {
+          const vmstateRangeLedger = createCheckpointVmstateRangeLedger();
+          const [bootDeltaFile, vmstateFile] = await Promise.all([
+            prepareImmutablePagedFile({
+              url: releaseUrl(base, checkpointArtifacts.bootDelta.path),
+              path: checkpoint.bootDelta.mountPath,
+              byteLength: checkpointArtifacts.bootDelta.bytes,
+              sha256: checkpointArtifacts.bootDelta.sha256,
+              ...cachePlan.bootDelta,
+            }, {
+              ...commonCheckpointOptions,
+              onRequest: (request) => this.#post("diskrequest", {
+                artifact: "checkpoint-boot-delta",
+                request,
+              }),
+            }),
+            prepareImmutablePagedFile({
+              url: releaseUrl(base, checkpointArtifacts.vmstate.path),
+              path: checkpoint.vmstate.mountPath,
+              byteLength: checkpointArtifacts.vmstate.bytes,
+              sha256: checkpointArtifacts.vmstate.sha256,
+              ...cachePlan.vmstate,
+            }, {
+              ...commonCheckpointOptions,
+              onRequest: (request) => {
+                vmstateRangeLedger.record(request);
+                this.#post("diskrequest", {
+                  artifact: "checkpoint-vmstate",
+                  request,
+                  checkpointLedger: vmstateRangeLedger.snapshot(),
+                });
+              },
+            }),
+          ]);
+          checkpointPagedFiles = [bootDeltaFile, vmstateFile];
+          this.#post("checkpoint", {
+            mode: checkpoint.mode,
+            vmstateBytes: checkpoint.vmstate.bytes,
+            bootDeltaBytes: checkpoint.bootDelta.bytes,
+            cacheBytes: CHECKPOINT_TOTAL_CACHE_BYTES,
+            vmstateRangeLedger: vmstateRangeLedger.snapshot(),
+          });
+        }
         pagedDiskArguments = checkpointArgumentsForManifest(runtimeManifest);
-        this.#post("checkpoint", {
-          mode: checkpoint.mode,
-          vmstateBytes: checkpoint.vmstate.bytes,
-          bootDeltaBytes: checkpoint.bootDelta.bytes,
-          cacheBytes: CHECKPOINT_TOTAL_CACHE_BYTES,
-          vmstateRangeLedger: vmstateRangeLedger.snapshot(),
-        });
       }
 
       const locate = runtimeManifest.assets.locate;
@@ -2037,10 +2848,16 @@ export class OmarchyProductionWorkerHost {
       this.#setPhase("starting-emulator");
       const { default: createQemu } = await import(executables.urls.module);
       if (typeof createQemu !== "function") fail("INVALID_QEMU_MODULE", "QEMU module has no default factory export.");
+      if (hibernationCheckpoint) {
+        this.#hibernationResumeGate = new HibernationResumeGate({
+          checkpoint: runtimeManifest.checkpoint,
+          scope: this.#scope,
+          onFailure: (error) => this.fail(error),
+        });
+        this.#hibernationResumeGate.begin();
+      }
 
-      const emitSerial = (stream, value) => {
-        const line = String(value);
-        if (this.#desktopProof.handleSerialLine(line)) return;
+      const processSerial = (stream, line) => {
         this.#post("serial", { stream, line });
         if (stream === "stderr") {
           const startupFailure = qemuStartupFailureForLine(line);
@@ -2068,12 +2885,25 @@ export class OmarchyProductionWorkerHost {
           const report = parseGuestReportLine(line);
           if (report) {
             authenticateRuntimeGuestReport(report, {
-              checkpoint: checkpointArtifacts !== null,
+              checkpoint: checkpointArtifacts !== null && !hibernationCheckpoint,
               alreadySeen: this.#guestReportSeen,
               expectedUpstream: this.#releaseIdentity.upstream,
             });
             this.#guestReportSeen = true;
-            this.#post("guestreport", { report, origin: "live-guest-serial" });
+            if (this.#hibernationGuestReportTimer !== null) {
+              this.#scope.clearTimeout(this.#hibernationGuestReportTimer);
+              this.#hibernationGuestReportTimer = null;
+            }
+            this.#post("guestreport", hibernationCheckpoint ? {
+              report,
+              origin: "live-hibernation-serial",
+              resume: {
+                descriptorSha256: runtimeManifest.checkpoint.producer.manifestSha256,
+                markerSha256: this.#hibernationResumeEvidence.markerSha256,
+                sourceBootId: runtimeManifest.checkpoint.restoreContract.sourceBootId,
+                swapUuid: runtimeManifest.checkpoint.swapImage.swapUuid,
+              },
+            } : { report, origin: "live-guest-serial" });
             this.#desktopProof.beginAfterAuthenticatedReport();
           }
         } catch (error) {
@@ -2084,6 +2914,37 @@ export class OmarchyProductionWorkerHost {
             { cause: serializeError(error) },
           ));
         }
+      };
+      const queueHibernationEvidence = (stream, line) => {
+        const lineBytes = new TextEncoder().encode(line).byteLength;
+        if (this.#deferredHibernationEvidence.length >= MAX_DEFERRED_HIBERNATION_EVIDENCE_LINES ||
+            this.#deferredHibernationEvidenceBytes + lineBytes >
+              MAX_DEFERRED_HIBERNATION_EVIDENCE_BYTES) {
+          this.fail(new ProductionWorkerError(
+            "HIBERNATION_EVIDENCE_QUEUE_FULL",
+            "Post-resume guest evidence exceeded its bounded authentication queue.",
+          ));
+          return;
+        }
+        this.#deferredHibernationEvidence.push(Object.freeze({ stream, line }));
+        this.#deferredHibernationEvidenceBytes += lineBytes;
+      };
+      const emitSerial = (stream, value) => {
+        const line = String(value);
+        if (this.#desktopProof.handleSerialLine(line)) return;
+        const hibernationEvidenceLine = hibernationCheckpoint &&
+          (line.includes(GUEST_REPORT_PREFIX) || line.includes(GUEST_STAGE_PREFIX));
+        if (hibernationEvidenceLine && this.#hibernationResumeEvidence === null &&
+            this.#hibernationResumeGate?.state === "verifying-marker") {
+          queueHibernationEvidence(stream, line);
+          return;
+        }
+        if (this.#hibernationResumeGate?.handleSerialLine(line)) return;
+        if (hibernationEvidenceLine && this.#hibernationResumeEvidence === null) {
+          queueHibernationEvidence(stream, line);
+          return;
+        }
+        processSerial(stream, line);
       };
       const moduleOptions = {
         canvas,
@@ -2170,6 +3031,41 @@ export class OmarchyProductionWorkerHost {
       this.#post("runtimediagnostic", {
         line: `${RUNTIME_DIAGNOSTIC_PREFIX}qemu-running checks=${runningEvidence.checks} elapsed-ms=${runningEvidence.elapsedMs.toFixed(3)}`,
       });
+      if (hibernationCheckpoint) {
+        if (hibernationProducerDocument === null || this.#guestReportSeen) {
+          fail(
+            "HIBERNATION_REPORT_ORDER_INVALID",
+            "Hibernation runtime reached resume acceptance without an authenticated descriptor or emitted a guest report too early.",
+          );
+        }
+        this.#hibernationResumeEvidence = await this.#hibernationResumeGate.wait();
+        const resumeEvidence = Object.freeze({
+          schemaVersion: 1,
+          checkpointMode: "guest-hibernation-resume",
+          descriptorSha256: runtimeManifest.checkpoint.producer.manifestSha256,
+          markerSha256: this.#hibernationResumeEvidence.markerSha256,
+          rendererReportSha256: this.#hibernationResumeEvidence.rendererReportSha256,
+          renderer: "virgl",
+          sourceBootId: runtimeManifest.checkpoint.restoreContract.sourceBootId,
+          swapUuid: runtimeManifest.checkpoint.swapImage.swapUuid,
+          kernelEvidence: this.#hibernationResumeEvidence.kernelEvidence,
+          runtimeDisplay: runtimeManifest.checkpoint.restoreContract.runtimeDisplay,
+          derivedInitramfsSha256: runtimeManifest.checkpoint.identity.derivedInitramfsSha256,
+        });
+        this.#post("hibernationresume", { evidence: resumeEvidence });
+        this.#hibernationGuestReportTimer = this.#scope.setTimeout(() => this.fail(
+          new ProductionWorkerError(
+            "HIBERNATION_GUEST_REPORT_TIMEOUT",
+            "Resumed guest did not emit a fresh authenticated serial report within its bound.",
+          ),
+        ), HIBERNATION_GUEST_REPORT_TIMEOUT_MS);
+        const deferredEvidence = this.#deferredHibernationEvidence.splice(0);
+        this.#deferredHibernationEvidenceBytes = 0;
+        for (const { stream, line } of deferredEvidence) {
+          processSerial(stream, line);
+          if (this.#phase === "failed") break;
+        }
+      }
       if (checkpointSourceEvidence !== null) {
         if (this.#guestReportSeen) {
           fail("CHECKPOINT_REPORT_REPLAY", "Checkpoint source report was duplicated by the resumed guest.");
@@ -2220,7 +3116,8 @@ export class OmarchyProductionWorkerHost {
       fail("NOT_RUNNING", "The VM must be running before input is accepted.");
     }
     const event = sanitizeWorkerInput(value);
-    if (this.#checkpointDesktopSettle?.blocksHostInput || this.#desktopProof.blocksHostInput) {
+    if ((this.#hibernationResumeGate !== null && !this.#guestReportSeen) ||
+        this.#checkpointDesktopSettle?.blocksHostInput || this.#desktopProof.blocksHostInput) {
       if (this.#deferredHostInputs.length >= MAX_DEFERRED_HOST_INPUTS) {
         fail("INPUT_QUEUE_FULL", "Host input queue is full while desktop proof is active.");
       }

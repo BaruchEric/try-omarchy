@@ -569,9 +569,13 @@ test("desktop proof acknowledgement secret is consumed before public serial forw
   assert.match(source, /const CHECKPOINT_DESKTOP_SETTLE_MIN_RUNNING_MS = 15_000;/);
   assert.match(source, /const CHECKPOINT_DESKTOP_SETTLE_MIN_FRAME_GAP_MS = 5_000;/);
   const parser = source.indexOf("if (this.#desktopProof.handleSerialLine(line)) return");
-  const forwarding = source.indexOf('this.#post("serial", { stream, line })', parser);
-  assert.ok(parser >= 0 && forwarding > parser);
-  assert.match(source.slice(parser, forwarding), /if \(this\.#desktopProof\.handleSerialLine\(line\)\) return/);
+  const forwardingCall = source.indexOf("processSerial(stream, line)", parser);
+  const forwardingImplementation = source.indexOf('this.#post("serial", { stream, line })');
+  assert.ok(parser >= 0 && forwardingCall > parser && forwardingImplementation >= 0);
+  assert.match(
+    source.slice(parser, forwardingCall),
+    /if \(this\.#desktopProof\.handleSerialLine\(line\)\) return/,
+  );
   const publicFrame = source.indexOf('this.#post("guestframe"');
   const proofFrame = source.indexOf("this.#desktopProof.handleFrame", publicFrame);
   assert.ok(publicFrame >= 0 && proofFrame > publicFrame,
