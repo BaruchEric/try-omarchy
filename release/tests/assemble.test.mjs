@@ -6,12 +6,20 @@ import path from "node:path";
 import test from "node:test";
 
 import { assembleRelease } from "../assemble.mjs";
+import { prepareRelease } from "../promote.mjs";
 import {
   CANONICAL_CHECKPOINT_IDENTITY,
   CANONICAL_PRODUCTION_RUNTIME_MANIFEST,
 } from "../runtime-contract.mjs";
 import { verifyArtifactManifest } from "../../scripts/verification/verify-artifact-manifest.mjs";
-import { checkpointSourceEvidence, qcow2Fixture } from "./checkpoint-fixture.mjs";
+import {
+  checkpointSourceEvidence,
+  hibernationProducerDocument,
+  hibernationProfile,
+  hibernationRuntimeManifest,
+  qcow2Fixture,
+  standaloneQcow2Fixture,
+} from "./checkpoint-fixture.mjs";
 
 const BUILDER_DIGEST = `sha256:${"a".repeat(64)}`;
 const FIXTURE_UPSTREAM = Object.freeze({
@@ -204,6 +212,61 @@ function checkpointProducerDocument(checkpoint) {
   };
 }
 
+async function enableHibernation({ runtime, guest }, { corruptSwap = false } = {}) {
+  const [guestManifestBytes, guestManifest, runtimeBuild] = await Promise.all([
+    readFile(path.join(guest, "guest-manifest.json")),
+    readFile(path.join(guest, "guest-manifest.json"), "utf8").then(JSON.parse),
+    readFile(path.join(runtime, "runtime-build.json"), "utf8").then(JSON.parse),
+  ]);
+  const guestArtifact = (artifactPath) =>
+    guestManifest.artifacts.find(({ path: candidate }) => candidate === artifactPath);
+  const runtimeArtifact = (artifactPath) =>
+    runtimeBuild.artifacts.find(({ path: candidate }) => candidate === artifactPath);
+  const derivedInitramfs = Buffer.from("derived-initramfs-fixture");
+  const rootDelta = qcow2Fixture({
+    virtualBytes: guestArtifact("rootfs.ext4").bytes,
+  });
+  const swapImage = standaloneQcow2Fixture();
+  if (corruptSwap) {
+    swapImage.writeBigUInt64BE(512n * 1024n * 1024n, 24);
+  }
+  let profile = hibernationProfile({
+    upstream: FIXTURE_UPSTREAM,
+    baseGuestManifestSha256: digest(guestManifestBytes),
+    rootfsSha256: guestArtifact("rootfs.ext4").sha256,
+    guestProvenanceSha256: guestArtifact("provenance.json").sha256,
+    kernelSha256: guestArtifact("vmlinuz-linux").sha256,
+    baseInitramfsSha256: guestArtifact("initramfs-linux.img").sha256,
+    derivedInitramfsSha256: digest(derivedInitramfs),
+    browserQemuWasmSha256: runtimeArtifact("qemu.wasm").sha256,
+  });
+  profile.derivedInitramfs.bytes = derivedInitramfs.byteLength;
+  profile.rootDelta.bytes = rootDelta.byteLength;
+  profile.rootDelta.sha256 = digest(rootDelta);
+  profile.swapImage.bytes = swapImage.byteLength;
+  profile.swapImage.sha256 = digest(swapImage);
+  const producerBytes = Buffer.from(
+    `${JSON.stringify(hibernationProducerDocument(profile, FIXTURE_UPSTREAM))}\n`,
+  );
+  profile.producer.manifestBytes = producerBytes.byteLength;
+  profile.producer.manifestSha256 = digest(producerBytes);
+  const runtimeManifest = hibernationRuntimeManifest(
+    CANONICAL_PRODUCTION_RUNTIME_MANIFEST,
+    profile,
+  );
+  await Promise.all([
+    writeFile(path.join(guest, profile.derivedInitramfs.artifactPath), derivedInitramfs),
+    writeFile(path.join(guest, profile.rootDelta.artifactPath), rootDelta),
+    writeFile(path.join(guest, profile.swapImage.artifactPath), swapImage),
+    writeFile(path.join(guest, profile.producer.manifestArtifactPath), producerBytes),
+    writeFile(
+      path.join(runtime, "runtime-manifest.json"),
+      `${JSON.stringify(runtimeManifest)}\n`,
+    ),
+  ]);
+  return { profile, runtimeManifest };
+}
+
 test("assembles verified fragments into a validator-clean atomic release", async () => {
   const { outputDirectory, config } = await fixture();
   const { manifest } = await assembleRelease(config);
@@ -361,6 +424,60 @@ test("assembly fails closed on partial checkpoint declarations and source sets",
       /checkpoint base guest manifest rootfs SHA-256 does not match checkpoint identity/,
     );
   });
+});
+
+test("assembly packages the exact hibernation descriptor and all four artifacts", async () => {
+  const value = await fixture();
+  const { profile } = await enableHibernation(value);
+  const { manifest } = await assembleRelease(value.config);
+  assert.deepEqual(
+    manifest.artifacts
+      .filter(({ role }) => role.startsWith("hibernation-"))
+      .map(({ path, role }) => ({ path, role })),
+    [
+      {
+        path: "hibernate-manifest.json",
+        role: "hibernation-metadata",
+      },
+      {
+        path: "hibernate-root-overlay.qcow2",
+        role: "hibernation-root-delta",
+      },
+      {
+        path: "initramfs-virgl-hibernate.img",
+        role: "hibernation-initramfs",
+      },
+      {
+        path: "omarchy-hibernate.qcow2",
+        role: "hibernation-swap-image",
+      },
+    ],
+  );
+  assert.equal(
+    manifest.artifacts.find(({ path: artifactPath }) =>
+      artifactPath === profile.producer.manifestArtifactPath).sha256,
+    profile.producer.manifestSha256,
+  );
+  assert.equal(
+    manifest.artifacts.some(({ role }) => role === "preboot-vmstate"),
+    false,
+  );
+  const prepared = await prepareRelease(value.outputDirectory);
+  assert.equal(prepared.manifest.artifacts.length, manifest.artifacts.length);
+  assert.equal(
+    prepared.items.find(({ path: artifactPath }) =>
+      artifactPath === profile.swapImage.artifactPath).sha256,
+    profile.swapImage.sha256,
+  );
+});
+
+test("assembly rejects a descriptor-hashed swap image with the wrong virtual size", async () => {
+  const value = await fixture();
+  await enableHibernation(value, { corruptSwap: true });
+  await assert.rejects(
+    assembleRelease(value.config),
+    /hibernation swap image virtual size differs from the resume descriptor/,
+  );
 });
 
 test("requires one exact bounded-overlay runtime artifact", async (t) => {

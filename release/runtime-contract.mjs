@@ -1,8 +1,14 @@
 import canonicalProductionRuntimeManifestJson from "../runtime/config/demo.json" with { type: "json" };
+import { createHash } from "node:crypto";
 import {
   CANONICAL_CHECKPOINT_IDENTITY as canonicalRuntimeCheckpointIdentity,
+  isHibernationCheckpoint as runtimeIsHibernationCheckpoint,
+  normalizedJsonBytes,
+  validateCheckpointProducerDocument as validateRuntimeCheckpointProducerDocument,
+  validateCheckpointProfile as validateRuntimeCheckpointProfile,
   validateCheckpointSourceEvidence,
   validateCheckpointSourceEvidenceShape,
+  validateProductionManifest as validateRuntimeProductionManifest,
 } from "../runtime/web/production-worker.mjs";
 
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -48,6 +54,33 @@ export const CHECKPOINT_RELEASE_ARTIFACTS = Object.freeze([
     key: "producer",
     path: "checkpoint-manifest.json",
     role: "preboot-checkpoint-metadata",
+    mediaType: "application/json",
+  }),
+]);
+
+export const HIBERNATION_RELEASE_ARTIFACTS = Object.freeze([
+  Object.freeze({
+    key: "derivedInitramfs",
+    path: "initramfs-virgl-hibernate.img",
+    role: "hibernation-initramfs",
+    mediaType: "application/vnd.linux.initramfs",
+  }),
+  Object.freeze({
+    key: "rootDelta",
+    path: "hibernate-root-overlay.qcow2",
+    role: "hibernation-root-delta",
+    mediaType: "application/vnd.qemu.qcow2",
+  }),
+  Object.freeze({
+    key: "swapImage",
+    path: "omarchy-hibernate.qcow2",
+    role: "hibernation-swap-image",
+    mediaType: "application/vnd.qemu.qcow2",
+  }),
+  Object.freeze({
+    key: "producer",
+    path: "hibernate-manifest.json",
+    role: "hibernation-metadata",
     mediaType: "application/json",
   }),
 ]);
@@ -175,7 +208,15 @@ function validateCheckpointDescriptor(value, expected, field) {
   return value;
 }
 
+export function isGuestHibernationProfile(checkpoint) {
+  return runtimeIsHibernationCheckpoint(checkpoint);
+}
+
 export function validateCheckpointProfile(checkpoint) {
+  if (isGuestHibernationProfile(checkpoint)) {
+    validateRuntimeCheckpointProfile(checkpoint);
+    return checkpoint;
+  }
   validateExactKeys(
     checkpoint,
     ["schemaVersion", "mode", "vmstate", "bootDelta", "producer", "identity"],
@@ -227,7 +268,10 @@ export function checkpointArtifactRecords(runtimeManifest) {
   validateExactProductionRuntimeProfile(runtimeManifest);
   if (!Object.hasOwn(runtimeManifest, "checkpoint")) return Object.freeze([]);
   const { checkpoint } = runtimeManifest;
-  return Object.freeze(CHECKPOINT_RELEASE_ARTIFACTS.map((definition) => {
+  const definitions = isGuestHibernationProfile(checkpoint)
+    ? HIBERNATION_RELEASE_ARTIFACTS
+    : CHECKPOINT_RELEASE_ARTIFACTS;
+  return Object.freeze(definitions.map((definition) => {
     const descriptor = definition.key === "producer"
       ? {
           bytes: checkpoint.producer.manifestBytes,
@@ -247,6 +291,52 @@ export function checkpointArtifactRecords(runtimeManifest) {
 export async function validateCheckpointProducerDocument(value, checkpoint, expectedUpstream) {
   validateCheckpointProfile(checkpoint);
   invariant(isRecord(value), "checkpoint producer manifest must be an object");
+  if (isGuestHibernationProfile(checkpoint)) {
+    validateRuntimeCheckpointProducerDocument(value, checkpoint);
+    void expectedUpstream;
+    validateExactKeys(
+      value.sourceEvidence,
+      [
+        "diagnosticsSha256",
+        "hibernationEntryMarkerSha256",
+        "nonceSha256",
+        "sourceBootId",
+        "gpuBoundAtHibernate",
+      ],
+      "hibernation source evidence",
+    );
+    for (const key of [
+      "diagnosticsSha256",
+      "hibernationEntryMarkerSha256",
+      "nonceSha256",
+    ]) {
+      invariant(
+        SHA256.test(value.sourceEvidence[key] ?? ""),
+        `hibernation source evidence ${key} must be a lowercase SHA-256`,
+      );
+    }
+    invariant(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        value.sourceEvidence.sourceBootId ?? "",
+      ) && value.sourceEvidence.gpuBoundAtHibernate === false,
+      "hibernation source evidence must prove a canonical pre-GPU source boot",
+    );
+    invariant(
+      value.sourceEvidence.sourceBootId ===
+        checkpoint.restoreContract.sourceBootId &&
+        value.sourceEvidence.nonceSha256 ===
+          checkpoint.restoreContract.resumeNonceSha256,
+      "hibernation source boot or nonce differs from the exact resume descriptor",
+    );
+    const sourceEvidenceSha256 = createHash("sha256")
+      .update(normalizedJsonBytes(value.sourceEvidence))
+      .digest("hex");
+    invariant(
+      sourceEvidenceSha256 === checkpoint.restoreContract.sourceEvidenceSha256,
+      "hibernation source evidence digest differs from the exact resume descriptor",
+    );
+    return value;
+  }
   validateCheckpointSourceEvidenceShape(value.sourceEvidence);
   const comparableValue = { ...value };
   delete comparableValue.sourceEvidence;
@@ -331,6 +421,17 @@ export function validateCheckpointGuestManifestDocument(value, checkpoint) {
     artifactIdentity("provenance.json").sha256 === checkpoint.identity.guestProvenanceSha256,
     "checkpoint base guest manifest provenance SHA-256 does not match checkpoint identity",
   );
+  if (isGuestHibernationProfile(checkpoint)) {
+    invariant(
+      artifactIdentity("vmlinuz-linux").sha256 === checkpoint.identity.kernelSha256,
+      "hibernation base guest manifest kernel SHA-256 does not match checkpoint identity",
+    );
+    invariant(
+      artifactIdentity(checkpoint.derivedInitramfs.baseArtifactPath).sha256 ===
+        checkpoint.identity.baseInitramfsSha256,
+      "hibernation base guest manifest initramfs SHA-256 does not match checkpoint identity",
+    );
+  }
   return value;
 }
 
@@ -357,6 +458,10 @@ export function validateExactProductionRuntimeProfile(runtimeManifest) {
     );
   }
   if (isRecord(runtimeManifest) && Object.hasOwn(runtimeManifest, "checkpoint")) {
+    if (isGuestHibernationProfile(runtimeManifest.checkpoint)) {
+      validateRuntimeProductionManifest(runtimeManifest);
+      return runtimeManifest;
+    }
     const coldProfile = { ...runtimeManifest };
     delete coldProfile.checkpoint;
     validateExactValue(
@@ -390,8 +495,12 @@ function artifactAtPath(artifacts, artifactPath, { role, mediaType }, label = ar
 }
 
 function validateCheckpointReleaseArtifacts(runtimeManifest, artifacts) {
-  const reservedPaths = new Set(CHECKPOINT_RELEASE_ARTIFACTS.map(({ path }) => path));
-  const reservedRoles = new Set(CHECKPOINT_RELEASE_ARTIFACTS.map(({ role }) => role));
+  const checkpointDefinitions = [
+    ...CHECKPOINT_RELEASE_ARTIFACTS,
+    ...HIBERNATION_RELEASE_ARTIFACTS,
+  ];
+  const reservedPaths = new Set(checkpointDefinitions.map(({ path }) => path));
+  const reservedRoles = new Set(checkpointDefinitions.map(({ role }) => role));
   if (!Object.hasOwn(runtimeManifest, "checkpoint")) {
     invariant(
       !artifacts.some((artifact) =>
@@ -402,6 +511,7 @@ function validateCheckpointReleaseArtifacts(runtimeManifest, artifacts) {
   }
 
   const checkpoint = runtimeManifest.checkpoint;
+  const hibernation = isGuestHibernationProfile(checkpoint);
   const expectedRecords = checkpointArtifactRecords(runtimeManifest);
   for (const expected of expectedRecords) {
     const record = artifactAtPath(artifacts, expected.path, expected, expected.path);
@@ -413,7 +523,10 @@ function validateCheckpointReleaseArtifacts(runtimeManifest, artifacts) {
       record.bytes === expected.bytes && record.sha256 === expected.sha256,
       `${expected.path} must match the runtime checkpoint byte length and SHA-256`,
     );
-    if (expected.role === "preboot-checkpoint-metadata") {
+    if (
+      expected.role === "preboot-checkpoint-metadata" ||
+      expected.role === "hibernation-metadata"
+    ) {
       invariant(
         record.bytes <= MAX_CHECKPOINT_METADATA_BYTES,
         "checkpoint producer manifest exceeds the 4 MiB browser verification limit",
@@ -458,6 +571,42 @@ function validateCheckpointReleaseArtifacts(runtimeManifest, artifacts) {
     wasm.sha256 === checkpoint.identity.browserQemuWasmSha256,
     "checkpoint browser QEMU Wasm SHA-256 does not match checkpoint identity",
   );
+  if (hibernation) {
+    const kernel = artifactAtPath(artifacts, runtimeManifest.guest.kernel.artifactPath, {
+      role: "guest-kernel",
+      mediaType: "application/vnd.linux.kernel",
+    }, "hibernation kernel");
+    invariant(
+      kernel.sha256 === checkpoint.identity.kernelSha256,
+      "hibernation kernel SHA-256 does not match checkpoint identity",
+    );
+    const baseInitramfs = artifactAtPath(
+      artifacts,
+      checkpoint.derivedInitramfs.baseArtifactPath,
+      {
+        role: "guest-initramfs",
+        mediaType: "application/vnd.linux.initramfs",
+      },
+      "hibernation base initramfs",
+    );
+    invariant(
+      baseInitramfs.sha256 === checkpoint.identity.baseInitramfsSha256,
+      "hibernation base initramfs SHA-256 does not match checkpoint identity",
+    );
+    const derivedInitramfs = artifactAtPath(
+      artifacts,
+      checkpoint.derivedInitramfs.artifactPath,
+      {
+        role: "hibernation-initramfs",
+        mediaType: "application/vnd.linux.initramfs",
+      },
+      "hibernation derived initramfs",
+    );
+    invariant(
+      derivedInitramfs.sha256 === checkpoint.identity.derivedInitramfsSha256,
+      "hibernation derived initramfs SHA-256 does not match checkpoint identity",
+    );
+  }
 }
 
 function validateProductionProfileArtifactReferences(runtimeManifest, artifacts) {
@@ -473,13 +622,22 @@ function validateProductionProfileArtifactReferences(runtimeManifest, artifacts)
     runtimeManifest.guest.kernel.artifactPath,
     runtimeManifest.guest.initramfs.artifactPath,
     ...(Object.hasOwn(runtimeManifest, "checkpoint")
-      ? [
-          runtimeManifest.checkpoint.vmstate.artifactPath,
-          runtimeManifest.checkpoint.bootDelta.artifactPath,
-          runtimeManifest.checkpoint.producer.manifestArtifactPath,
-          "guest-manifest.json",
-          "provenance.json",
-        ]
+      ? isGuestHibernationProfile(runtimeManifest.checkpoint)
+        ? [
+            runtimeManifest.checkpoint.derivedInitramfs.baseArtifactPath,
+            runtimeManifest.checkpoint.rootDelta.artifactPath,
+            runtimeManifest.checkpoint.swapImage.artifactPath,
+            runtimeManifest.checkpoint.producer.manifestArtifactPath,
+            "guest-manifest.json",
+            "provenance.json",
+          ]
+        : [
+            runtimeManifest.checkpoint.vmstate.artifactPath,
+            runtimeManifest.checkpoint.bootDelta.artifactPath,
+            runtimeManifest.checkpoint.producer.manifestArtifactPath,
+            "guest-manifest.json",
+            "provenance.json",
+          ]
       : []),
   ];
   const uniquePaths = new Set(referencedPaths);

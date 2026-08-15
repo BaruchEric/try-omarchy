@@ -21,6 +21,19 @@ const CHECKPOINT_SOURCE_EVIDENCE_KEYS = Object.freeze([
   "checkpointFrameSha256",
   "checkpointFrameHealthSha256",
 ]);
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const HIBERNATION_RESUME_BINDING_KEYS = Object.freeze([
+  "descriptorSha256",
+  "markerSha256",
+  "sourceBootId",
+  "swapUuid",
+]);
+const HIBERNATION_KERNEL_EVIDENCE = Object.freeze([
+  "PM: Image signature found, resuming",
+  "PM: Image loading done",
+  "Hibernation image restored successfully",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -97,11 +110,76 @@ function normalizeCheckpointDigests(value) {
   );
 }
 
+export function normalizeHibernationResumeBinding(value) {
+  if (!hasExactKeys(value, HIBERNATION_RESUME_BINDING_KEYS)) return null;
+  if (
+    !SHA256_PATTERN.test(value.descriptorSha256 ?? "") ||
+    !SHA256_PATTERN.test(value.markerSha256 ?? "") ||
+    !UUID_PATTERN.test(value.sourceBootId ?? "") ||
+    !UUID_PATTERN.test(value.swapUuid ?? "")
+  ) {
+    return null;
+  }
+  return Object.freeze(
+    Object.fromEntries(
+      HIBERNATION_RESUME_BINDING_KEYS.map((key) => [key, value[key]]),
+    ),
+  );
+}
+
+export function normalizeHibernationResumeEvidence(value) {
+  const keys = [
+    "schemaVersion",
+    "checkpointMode",
+    ...HIBERNATION_RESUME_BINDING_KEYS,
+    "rendererReportSha256",
+    "renderer",
+    "kernelEvidence",
+    "runtimeDisplay",
+    "derivedInitramfsSha256",
+  ];
+  if (!hasExactKeys(value, keys)) return null;
+  const binding = normalizeHibernationResumeBinding(
+    Object.fromEntries(
+      HIBERNATION_RESUME_BINDING_KEYS.map((key) => [key, value[key]]),
+    ),
+  );
+  if (
+    !binding ||
+    value.schemaVersion !== 1 ||
+    value.checkpointMode !== "guest-hibernation-resume" ||
+    !SHA256_PATTERN.test(value.rendererReportSha256 ?? "") ||
+    value.renderer !== "virgl" ||
+    !sameJsonValue(value.kernelEvidence, HIBERNATION_KERNEL_EVIDENCE) ||
+    value.runtimeDisplay !== "sdl,gl=es,show-cursor=on" ||
+    !SHA256_PATTERN.test(value.derivedInitramfsSha256 ?? "")
+  ) {
+    return null;
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    checkpointMode: "guest-hibernation-resume",
+    ...binding,
+    rendererReportSha256: value.rendererReportSha256,
+    renderer: "virgl",
+    kernelEvidence: HIBERNATION_KERNEL_EVIDENCE,
+    runtimeDisplay: "sdl,gl=es,show-cursor=on",
+    derivedInitramfsSha256: value.derivedInitramfsSha256,
+  });
+}
+
 export function normalizeGuestReportProvenance(value) {
   if (!isRecord(value) || typeof value.origin !== "string") return null;
   if (value.origin === "live-guest-serial") {
     return hasExactKeys(value, ["origin"])
       ? Object.freeze({ origin: "live-guest-serial" })
+      : null;
+  }
+  if (value.origin === "live-hibernation-serial") {
+    if (!hasExactKeys(value, ["origin", "resume"])) return null;
+    const resume = normalizeHibernationResumeBinding(value.resume);
+    return resume
+      ? Object.freeze({ origin: "live-hibernation-serial", resume })
       : null;
   }
   if (
@@ -124,6 +202,11 @@ export function guestReportProvenanceMatches(value, expected) {
   const required = normalizeGuestReportProvenance(expected);
   if (!actual || !required || actual.origin !== required.origin) return false;
   if (actual.origin === "live-guest-serial") return true;
+  if (actual.origin === "live-hibernation-serial") {
+    return HIBERNATION_RESUME_BINDING_KEYS.every(
+      (key) => actual.resume[key] === required.resume[key],
+    );
+  }
   return CHECKPOINT_SOURCE_EVIDENCE_KEYS.every(
     (key) => actual.sourceEvidence[key] === required.sourceEvidence[key],
   );
@@ -257,6 +340,439 @@ async function fetchVerifiedJsonArtifact(
   return { bytes, value };
 }
 
+function canonicalHibernationSourceEvidence(value) {
+  const keys = [
+    "diagnosticsSha256",
+    "hibernationEntryMarkerSha256",
+    "nonceSha256",
+    "sourceBootId",
+    "gpuBoundAtHibernate",
+  ];
+  if (!hasExactKeys(value, keys)) return null;
+  if (
+    !SHA256_PATTERN.test(value.diagnosticsSha256 ?? "") ||
+    !SHA256_PATTERN.test(value.hibernationEntryMarkerSha256 ?? "") ||
+    !SHA256_PATTERN.test(value.nonceSha256 ?? "") ||
+    !UUID_PATTERN.test(value.sourceBootId ?? "") ||
+    value.gpuBoundAtHibernate !== false
+  ) {
+    return null;
+  }
+  return Object.freeze({ ...value });
+}
+
+function artifactIdentity(manifest, path, role, mediaTypeValue) {
+  const records = manifest.artifacts.filter(
+    (artifact) => isRecord(artifact) && artifact.path === path,
+  );
+  if (records.length !== 1) {
+    fail(`Artifact manifest must contain exactly one ${path}.`);
+  }
+  const [artifact] = records;
+  if (
+    artifact.role !== role ||
+    mediaType(artifact.mediaType) !== mediaTypeValue ||
+    !Number.isSafeInteger(artifact.bytes) ||
+    artifact.bytes <= 0 ||
+    !SHA256_PATTERN.test(artifact.sha256 ?? "")
+  ) {
+    fail(`${path} metadata is invalid.`);
+  }
+  return artifact;
+}
+
+function validatedHibernationCheckpoint(checkpoint) {
+  const checkpointKeys = [
+    "schemaVersion",
+    "mode",
+    "derivedInitramfs",
+    "rootDelta",
+    "swapImage",
+    "producer",
+    "sourceEvidence",
+    "resumeEvidence",
+    "identity",
+    "restoreContract",
+  ];
+  if (
+    !hasExactKeys(checkpoint, checkpointKeys) ||
+    checkpoint.schemaVersion !== 1 ||
+    checkpoint.mode !== "guest-hibernation-resume"
+  ) {
+    fail("Runtime hibernation descriptor is invalid.");
+  }
+  const descriptor = (value, expected, label) => {
+    if (!hasExactKeys(value, Object.keys(expected))) {
+      fail(`Runtime hibernation ${label} descriptor is invalid.`);
+    }
+    for (const [key, expectedValue] of Object.entries(expected)) {
+      if (expectedValue === "sha256") {
+        if (!SHA256_PATTERN.test(value[key] ?? "")) {
+          fail(`Runtime hibernation ${label} descriptor is invalid.`);
+        }
+      } else if (expectedValue === "positive") {
+        if (!Number.isSafeInteger(value[key]) || value[key] <= 0) {
+          fail(`Runtime hibernation ${label} descriptor is invalid.`);
+        }
+      } else if (value[key] !== expectedValue) {
+        fail(`Runtime hibernation ${label} descriptor is invalid.`);
+      }
+    }
+  };
+  descriptor(checkpoint.derivedInitramfs, {
+    artifactPath: "initramfs-virgl-hibernate.img",
+    mountPath: "/pack/initramfs-virgl-hibernate.img",
+    bytes: "positive",
+    sha256: "sha256",
+    format: "linux-initramfs",
+    baseArtifactPath: "initramfs-linux.img",
+  }, "derived initramfs");
+  descriptor(checkpoint.rootDelta, {
+    artifactPath: "hibernate-root-overlay.qcow2",
+    mountPath: "/pack/hibernate-root-overlay.qcow2",
+    bytes: "positive",
+    sha256: "sha256",
+    format: "qcow2",
+    backingFilename: "rootfs.ext4",
+    backingFormat: "raw",
+  }, "root delta");
+  descriptor(checkpoint.swapImage, {
+    artifactPath: "omarchy-hibernate.qcow2",
+    mountPath: "/pack/omarchy-hibernate.qcow2",
+    bytes: "positive",
+    sha256: "sha256",
+    format: "qcow2",
+    virtualBytes: 1_610_612_736,
+    swapUuid: "4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f",
+  }, "swap image");
+  descriptor(checkpoint.producer, {
+    manifestArtifactPath: "hibernate-manifest.json",
+    manifestBytes: "positive",
+    manifestSha256: "sha256",
+    qemuBinarySha256: "sha256",
+  }, "producer");
+  const identityKeys = [
+    "baseGuestManifestSha256",
+    "rootfsSha256",
+    "guestProvenanceSha256",
+    "kernelSha256",
+    "baseInitramfsSha256",
+    "derivedInitramfsSha256",
+    "browserQemuWasmSha256",
+    "qemu",
+    "producerMachine",
+    "runtimeMachine",
+  ];
+  if (!hasExactKeys(checkpoint.identity, identityKeys)) {
+    fail("Runtime hibernation identity is invalid.");
+  }
+  for (const key of identityKeys.slice(0, 7)) {
+    if (!SHA256_PATTERN.test(checkpoint.identity[key] ?? "")) {
+      fail("Runtime hibernation identity is invalid.");
+    }
+  }
+  if (
+    checkpoint.derivedInitramfs.sha256 !==
+      checkpoint.identity.derivedInitramfsSha256 ||
+    !hasExactKeys(checkpoint.identity.qemu, [
+      "repository",
+      "sourceCommit",
+      "version",
+    ]) ||
+    checkpoint.identity.qemu.repository !==
+      "https://github.com/ktock/qemu-wasm.git" ||
+    checkpoint.identity.qemu.sourceCommit !==
+      "0ef7b4e2814b231705d8371dd7997f5b72e70baf" ||
+    checkpoint.identity.qemu.version !== "8.2.0"
+  ) {
+    fail("Runtime hibernation identity is invalid.");
+  }
+  const expectedProducerMachine = {
+    type: "pc-q35-8.2",
+    memoryMiB: 1024,
+    smp: "2,sockets=1,cores=2,threads=1",
+    accel: "tcg,tb-size=128,thread=multi",
+    cpu: "qemu64",
+    display: "sdl,gl=on,show-cursor=on",
+    displayDevice: "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
+    blockDevices: [
+      {
+        driveId: "omarchy-hibernate-root",
+        device: "virtio-blk-pci",
+        serial: "omarchy-root",
+        role: "root",
+        format: "qcow2",
+      },
+      {
+        driveId: "omarchy-hibernate-swap",
+        device: "virtio-blk-pci",
+        serial: "omarchy-resume",
+        role: "resume",
+        format: "qcow2",
+      },
+    ],
+  };
+  const expectedRuntimeMachine = {
+    ...expectedProducerMachine,
+    display: "sdl,gl=es,show-cursor=on",
+    blockDevices: expectedProducerMachine.blockDevices.map((device) => ({
+      ...device,
+    })),
+  };
+  if (!sameJsonValue(checkpoint.identity.producerMachine, expectedProducerMachine)) {
+    fail("Runtime hibernation native machine identity is invalid.");
+  }
+  if (!sameJsonValue(checkpoint.identity.runtimeMachine, expectedRuntimeMachine)) {
+    fail("Runtime hibernation browser machine identity is invalid.");
+  }
+  const restore = checkpoint.restoreContract;
+  const restoreKeys = [
+    "coldBootFallbackAllowed",
+    "disposableWrites",
+    "gpuBoundAtHibernate",
+    "kernelCommandLineBase",
+    "resumeNonceSha256",
+    "sourceBootId",
+    "sourceEvidenceSha256",
+    "sourceKernelCommandLineRedacted",
+    "sourceKernelCommandLineSha256",
+    "targetKernelCommandLine",
+    "runtimeDisplay",
+    "virtioGpuLoadedAfterResume",
+  ];
+  if (
+    !hasExactKeys(restore, restoreKeys) ||
+    restore.coldBootFallbackAllowed !== false ||
+    restore.gpuBoundAtHibernate !== false ||
+    restore.virtioGpuLoadedAfterResume !== true ||
+    restore.disposableWrites !==
+      "target -snapshot layers over immutable root delta and hibernation image" ||
+    restore.runtimeDisplay !== "sdl,gl=es,show-cursor=on" ||
+    !SHA256_PATTERN.test(restore.resumeNonceSha256 ?? "") ||
+    !SHA256_PATTERN.test(restore.sourceEvidenceSha256 ?? "") ||
+    !SHA256_PATTERN.test(restore.sourceKernelCommandLineSha256 ?? "") ||
+    !UUID_PATTERN.test(restore.sourceBootId ?? "") ||
+    typeof restore.kernelCommandLineBase !== "string" ||
+    restore.targetKernelCommandLine !==
+      `${restore.kernelCommandLineBase} omarchy.hibernate_target=1` ||
+    restore.sourceKernelCommandLineRedacted !==
+      `${restore.kernelCommandLineBase} omarchy.hibernate_producer=1 omarchy.hibernate_nonce=<redacted>` ||
+    !restore.kernelCommandLineBase.includes(
+      `resume=UUID=${checkpoint.swapImage.swapUuid}`,
+    )
+  ) {
+    fail("Runtime hibernation restore contract is invalid.");
+  }
+  const sourceEvidence = canonicalHibernationSourceEvidence(
+    checkpoint.sourceEvidence,
+  );
+  if (
+    !sourceEvidence ||
+    sourceEvidence.sourceBootId !== restore.sourceBootId ||
+    sourceEvidence.nonceSha256 !== restore.resumeNonceSha256 ||
+    sourceEvidence.gpuBoundAtHibernate !== restore.gpuBoundAtHibernate
+  ) {
+    fail("Runtime hibernation source evidence is invalid.");
+  }
+  const resume = checkpoint.resumeEvidence;
+  const resumeDigestKeys = [
+    "diagnosticsSha256",
+    "hibernationMarkerSha256",
+    "rendererProbeSha256",
+    "normalizedGuestReportSha256",
+    "reportValidationSha256",
+    "desktopFrame1Sha256",
+    "desktopFrame1HealthSha256",
+    "desktopFrame2Sha256",
+    "desktopFrame2HealthSha256",
+    "footFrameSha256",
+    "footFrameHealthSha256",
+    "footChangeSha256",
+  ];
+  if (
+    !hasExactKeys(resume, [
+      ...resumeDigestKeys,
+      "renderer",
+      "freshPostResumeInteraction",
+    ]) ||
+    resumeDigestKeys.some((key) => !SHA256_PATTERN.test(resume[key] ?? "")) ||
+    typeof resume.renderer !== "string" ||
+    resume.renderer.length === 0 ||
+    resume.renderer.length > 256 ||
+    !/virgl/i.test(resume.renderer) ||
+    /[\r\n\0]/.test(resume.renderer) ||
+    resume.freshPostResumeInteraction !== true
+  ) {
+    fail("Runtime hibernation resume evidence is invalid.");
+  }
+  return checkpoint;
+}
+
+async function verifiedHibernationContract({
+  manifest,
+  checkpoint,
+  releaseBaseUrl,
+  fetchImpl,
+  cryptoScope,
+}) {
+  validatedHibernationCheckpoint(checkpoint);
+  const producerArtifact = jsonArtifactRecord(
+    manifest,
+    checkpoint.producer.manifestArtifactPath,
+    "hibernation-metadata",
+    MAX_MANIFEST_BYTES,
+  );
+  if (
+    producerArtifact.bytes !== checkpoint.producer.manifestBytes ||
+    producerArtifact.sha256 !== checkpoint.producer.manifestSha256
+  ) {
+    fail("Hibernation manifest differs from the verified runtime descriptor.");
+  }
+  const producerFile = await fetchVerifiedJsonArtifact(
+    producerArtifact,
+    releaseBaseUrl,
+    "Hibernation manifest",
+    fetchImpl,
+    cryptoScope,
+  );
+  const document = producerFile.value;
+  const documentKeys = [
+    "schemaVersion",
+    "kind",
+    "derivedInitramfs",
+    "rootDelta",
+    "swapImage",
+    "producer",
+    "resumeEvidence",
+    "identity",
+    "qemu",
+    "producerMachine",
+    "runtimeMachine",
+    "restoreContract",
+    "sourceEvidence",
+  ];
+  if (
+    !hasExactKeys(document, documentKeys) ||
+    document.schemaVersion !== 1 ||
+    document.kind !== "omarchy-web-guest-hibernation"
+  ) {
+    fail("Hibernation producer manifest is malformed.");
+  }
+  const expectedDocument = {
+    derivedInitramfs: {
+      artifactPath: checkpoint.derivedInitramfs.artifactPath,
+      bytes: checkpoint.derivedInitramfs.bytes,
+      sha256: checkpoint.derivedInitramfs.sha256,
+      format: checkpoint.derivedInitramfs.format,
+      baseArtifactPath: checkpoint.derivedInitramfs.baseArtifactPath,
+    },
+    rootDelta: {
+      path: checkpoint.rootDelta.artifactPath,
+      bytes: checkpoint.rootDelta.bytes,
+      sha256: checkpoint.rootDelta.sha256,
+      format: checkpoint.rootDelta.format,
+      backingFilename: checkpoint.rootDelta.backingFilename,
+      backingFormat: checkpoint.rootDelta.backingFormat,
+    },
+    swapImage: {
+      path: checkpoint.swapImage.artifactPath,
+      bytes: checkpoint.swapImage.bytes,
+      sha256: checkpoint.swapImage.sha256,
+      format: checkpoint.swapImage.format,
+      virtualBytes: checkpoint.swapImage.virtualBytes,
+      swapUuid: checkpoint.swapImage.swapUuid,
+    },
+    producer: { qemuBinarySha256: checkpoint.producer.qemuBinarySha256 },
+    resumeEvidence: checkpoint.resumeEvidence,
+    identity: Object.fromEntries(
+      [
+        "baseGuestManifestSha256",
+        "rootfsSha256",
+        "guestProvenanceSha256",
+        "kernelSha256",
+        "baseInitramfsSha256",
+        "derivedInitramfsSha256",
+        "browserQemuWasmSha256",
+      ].map((key) => [key, checkpoint.identity[key]]),
+    ),
+    qemu: checkpoint.identity.qemu,
+    producerMachine: checkpoint.identity.producerMachine,
+    runtimeMachine: checkpoint.identity.runtimeMachine,
+    restoreContract: checkpoint.restoreContract,
+  };
+  for (const [key, expected] of Object.entries(expectedDocument)) {
+    if (!sameJsonValue(document[key], expected)) {
+      fail(`Hibernation producer ${key} differs from the runtime descriptor.`);
+    }
+  }
+  const sourceEvidence = canonicalHibernationSourceEvidence(
+    document.sourceEvidence,
+  );
+  if (
+    !sourceEvidence ||
+    !sameJsonValue(sourceEvidence, checkpoint.sourceEvidence) ||
+    sourceEvidence.sourceBootId !== checkpoint.restoreContract.sourceBootId ||
+    sourceEvidence.nonceSha256 !== checkpoint.restoreContract.resumeNonceSha256 ||
+    (await sha256Hex(
+      new TextEncoder().encode(normalizedJsonText(sourceEvidence)),
+      cryptoScope,
+    )) !== checkpoint.restoreContract.sourceEvidenceSha256
+  ) {
+    fail("Hibernation source evidence differs from the runtime descriptor.");
+  }
+  for (const [definition, descriptor] of [
+    [
+      ["hibernation-initramfs", "application/vnd.linux.initramfs"],
+      checkpoint.derivedInitramfs,
+    ],
+    [
+      ["hibernation-root-delta", "application/vnd.qemu.qcow2"],
+      checkpoint.rootDelta,
+    ],
+    [
+      ["hibernation-swap-image", "application/vnd.qemu.qcow2"],
+      checkpoint.swapImage,
+    ],
+  ]) {
+    const artifact = artifactIdentity(
+      manifest,
+      descriptor.artifactPath,
+      definition[0],
+      definition[1],
+    );
+    if (
+      artifact.bytes !== descriptor.bytes ||
+      artifact.sha256 !== descriptor.sha256
+    ) {
+      fail(`${descriptor.artifactPath} differs from the hibernation descriptor.`);
+    }
+  }
+  const resumeBinding = Object.freeze({
+    descriptorSha256: checkpoint.producer.manifestSha256,
+    markerSha256: checkpoint.resumeEvidence.hibernationMarkerSha256,
+    sourceBootId: checkpoint.restoreContract.sourceBootId,
+    swapUuid: checkpoint.swapImage.swapUuid,
+  });
+  const hibernationResume = Object.freeze({
+    schemaVersion: 1,
+    checkpointMode: "guest-hibernation-resume",
+    ...resumeBinding,
+    renderer: "virgl",
+    kernelEvidence: HIBERNATION_KERNEL_EVIDENCE,
+    runtimeDisplay: checkpoint.restoreContract.runtimeDisplay,
+    derivedInitramfsSha256: checkpoint.identity.derivedInitramfsSha256,
+  });
+  return {
+    bytes: producerFile.bytes.byteLength,
+    guestReportProvenance: Object.freeze({
+      origin: "live-hibernation-serial",
+      resume: resumeBinding,
+    }),
+    checkpointGuestReport: null,
+    hibernationResume,
+  };
+}
+
 async function verifiedGuestReportContract({
   manifest,
   releaseBaseUrl,
@@ -272,6 +788,7 @@ async function verifiedGuestReportContract({
       bytes: 0,
       guestReportProvenance: Object.freeze({ origin: "live-guest-serial" }),
       checkpointGuestReport: null,
+      hibernationResume: null,
     };
   }
   const runtimeArtifact = jsonArtifactRecord(
@@ -292,14 +809,48 @@ async function verifiedGuestReportContract({
     fail("Runtime manifest has an unsupported schema.");
   }
   if (!Object.hasOwn(runtimeManifest, "checkpoint")) {
+    const undeclaredResumeRoles = new Set([
+      "preboot-vmstate",
+      "preboot-disk-delta",
+      "preboot-checkpoint-metadata",
+      "hibernation-initramfs",
+      "hibernation-root-delta",
+      "hibernation-swap-image",
+      "hibernation-metadata",
+    ]);
+    if (
+      manifest.artifacts.some((artifact) =>
+        undeclaredResumeRoles.has(artifact?.role),
+      )
+    ) {
+      fail("Cold runtime packages undeclared resume artifacts.");
+    }
     return {
       bytes: runtimeFile.bytes.byteLength,
       guestReportProvenance: Object.freeze({ origin: "live-guest-serial" }),
       checkpointGuestReport: null,
+      hibernationResume: null,
     };
   }
 
   const checkpoint = runtimeManifest.checkpoint;
+  if (
+    isRecord(checkpoint) &&
+    checkpoint.schemaVersion === 1 &&
+    checkpoint.mode === "guest-hibernation-resume"
+  ) {
+    const hibernation = await verifiedHibernationContract({
+      manifest,
+      checkpoint,
+      releaseBaseUrl,
+      fetchImpl,
+      cryptoScope,
+    });
+    return {
+      ...hibernation,
+      bytes: runtimeFile.bytes.byteLength + hibernation.bytes,
+    };
+  }
   if (
     !isRecord(checkpoint) ||
     checkpoint.schemaVersion !== 1 ||
@@ -387,6 +938,7 @@ async function verifiedGuestReportContract({
     bytes: runtimeFile.bytes.byteLength + checkpointFile.bytes.byteLength,
     guestReportProvenance,
     checkpointGuestReport: guestReport,
+    hibernationResume: null,
   };
 }
 
@@ -532,6 +1084,7 @@ export async function fetchVerifiedWorkerBootstrap({
     workerBytes,
     guestReportProvenance: guestReportContract.guestReportProvenance,
     checkpointGuestReport: guestReportContract.checkpointGuestReport,
+    hibernationResume: guestReportContract.hibernationResume,
   });
 }
 
@@ -561,7 +1114,9 @@ export function validateRuntimeRelease(value, expected) {
 export function normalizeRuntimeGuestReport(value, expected) {
   const suppliedProvenance = isRecord(value) && value.origin === "checkpoint-source-evidence"
     ? { origin: value.origin, sourceEvidence: value.sourceEvidence }
-    : { origin: value?.origin };
+    : isRecord(value) && value.origin === "live-hibernation-serial"
+      ? { origin: value.origin, resume: value.resume }
+      : { origin: value?.origin };
   if (
     !isRecord(value) ||
     value.type !== "guestreport" ||
@@ -578,7 +1133,9 @@ export function normalizeRuntimeGuestReport(value, expected) {
   if (!provenance) return null;
   const expectedKeys = provenance.origin === "live-guest-serial"
     ? ["type", "report", "origin"]
-    : ["type", "report", "origin", "sourceEvidence"];
+    : provenance.origin === "checkpoint-source-evidence"
+      ? ["type", "report", "origin", "sourceEvidence"]
+      : ["type", "report", "origin", "resume"];
   if (!hasExactKeys(value, expectedKeys)) return null;
   if (
     provenance.origin === "checkpoint-source-evidence" &&
@@ -592,8 +1149,28 @@ export function normalizeRuntimeGuestReport(value, expected) {
     origin: provenance.origin,
     ...(provenance.origin === "checkpoint-source-evidence"
       ? { sourceEvidence: provenance.sourceEvidence }
-      : {}),
+      : provenance.origin === "live-hibernation-serial"
+        ? { resume: provenance.resume }
+        : {}),
   };
+}
+
+export function normalizeRuntimeHibernationResume(value, expected) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["type", "evidence"]) ||
+    value.type !== "hibernationresume" ||
+    !expected?.hibernationResume
+  ) {
+    return null;
+  }
+  const evidence = normalizeHibernationResumeEvidence(value.evidence);
+  if (!evidence) return null;
+  const staticEvidence = { ...evidence };
+  delete staticEvidence.rendererReportSha256;
+  return sameJsonValue(staticEvidence, expected.hibernationResume)
+    ? evidence
+    : null;
 }
 
 export function normalizeRuntimeDesktopProof(value, expectedReleaseId) {

@@ -4,6 +4,7 @@ import {
   normalizeRuntimeDesktopProof,
   normalizeRuntimeGuestFrame,
   normalizeRuntimeGuestReport,
+  normalizeRuntimeHibernationResume,
   normalizeRuntimeInputAccepted,
   validateRuntimeRelease,
 } from "/vm/host-utils.mjs";
@@ -34,6 +35,7 @@ let runtimeWorkerBlobUrl = null;
 let verifiedBootstrap = null;
 let verifiedRuntimeRelease = null;
 let guestReportSeen = false;
+let hibernationResumeSeen = false;
 let runtimeRunning = false;
 let runtimeTerminal = false;
 let desktopProofSeen = false;
@@ -198,6 +200,13 @@ function bindWorker(worker) {
           rejectWorkerMessage(
             "The Worker emitted guest evidence before its release identity.",
           );
+        } else if (
+          verifiedBootstrap.hibernationResume &&
+          !hibernationResumeSeen
+        ) {
+          rejectWorkerMessage(
+            "The Worker emitted a live hibernation guest report before its authenticated resume evidence.",
+          );
         } else if (guestReportSeen) {
           rejectWorkerMessage("The Worker emitted more than one guest report.");
         } else {
@@ -213,6 +222,35 @@ function bindWorker(worker) {
           }
           guestReportSeen = true;
           post("guestreport", guestReport);
+        }
+        break;
+      }
+      case "hibernationresume": {
+        if (!verifiedRuntimeRelease) {
+          rejectWorkerMessage(
+            "The Worker emitted hibernation resume evidence before its release identity.",
+          );
+        } else if (hibernationResumeSeen) {
+          rejectWorkerMessage(
+            "The Worker emitted hibernation resume evidence more than once.",
+          );
+        } else if (guestReportSeen) {
+          rejectWorkerMessage(
+            "The Worker emitted hibernation resume evidence after its live guest report.",
+          );
+        } else {
+          const evidence = normalizeRuntimeHibernationResume(
+            detail,
+            verifiedBootstrap,
+          );
+          if (!evidence) {
+            rejectWorkerMessage(
+              "The Worker emitted missing, mismatched, or downgraded hibernation resume evidence.",
+            );
+            break;
+          }
+          hibernationResumeSeen = true;
+          post("hibernationresume", { evidence });
         }
         break;
       }

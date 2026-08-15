@@ -14,9 +14,13 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { validateQcow2BackingFile } from "./qcow2-contract.mjs";
+import {
+  validateQcow2BackingFile,
+  validateStandaloneQcow2Image,
+} from "./qcow2-contract.mjs";
 import {
   checkpointArtifactRecords,
+  isGuestHibernationProfile,
   validateCheckpointGuestManifestDocument,
   validateCheckpointProducerDocument,
   validateExactProductionRuntimeProfile,
@@ -227,19 +231,38 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
   await readCheckpointProducer(runtimeManifest, guestDirectory, guestFragment.upstream);
   if (Object.hasOwn(runtimeManifest, "checkpoint")) {
     validateCheckpointGuestManifestDocument(guestFragment, runtimeManifest.checkpoint);
+    const hibernation = isGuestHibernationProfile(runtimeManifest.checkpoint);
     const rootfsRecords = guestFragment.artifacts.filter(
-      ({ path: artifactPath }) => artifactPath === runtimeManifest.guest.rootfs.artifactPath,
+      ({ path: artifactPath }) =>
+        artifactPath === runtimeManifest.guest.rootfs.artifactPath,
     );
     invariant(rootfsRecords.length === 1, "checkpoint backing rootfs must be recorded exactly once");
+    const delta = hibernation
+      ? runtimeManifest.checkpoint.rootDelta
+      : runtimeManifest.checkpoint.bootDelta;
     await validateQcow2BackingFile(
-      path.join(guestDirectory, runtimeManifest.checkpoint.bootDelta.artifactPath),
+      path.join(guestDirectory, delta.artifactPath),
       {
-        expectedFilename: runtimeManifest.checkpoint.bootDelta.backingFilename,
-        expectedFormat: runtimeManifest.checkpoint.bootDelta.backingFormat,
-        expectedBytes: runtimeManifest.checkpoint.bootDelta.bytes,
+        expectedFilename: delta.backingFilename,
+        expectedFormat: delta.backingFormat,
+        expectedBytes: delta.bytes,
         expectedVirtualBytes: rootfsRecords[0].bytes,
       },
     );
+    if (hibernation) {
+      await validateStandaloneQcow2Image(
+        path.join(
+          guestDirectory,
+          runtimeManifest.checkpoint.swapImage.artifactPath,
+        ),
+        {
+          expectedBytes: runtimeManifest.checkpoint.swapImage.bytes,
+          expectedVirtualBytes:
+            runtimeManifest.checkpoint.swapImage.virtualBytes,
+          label: "hibernation swap image",
+        },
+      );
+    }
   }
 
   invariant(runtimeBuild.component?.name === "QEMU-Wasm", "runtime fragment is not QEMU-Wasm");
@@ -278,7 +301,7 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
     );
 
     const extras = [
-      [runtimeManifestPath, "runtime-manifest.json", "emulator-config", "application/json"],
+      [runtimeManifestPath, "runtime-manifest.json", "runtime-config", "application/json"],
       [runtimeBuildPath, "runtime-build.json", "emulator-metadata", "application/json"],
       [guestManifestPath, "guest-manifest.json", "guest-metadata", "application/json"],
       [licenseBundle, safeRelativePath(config.licenseBundleName ?? "THIRD_PARTY_NOTICES.tar.zst"), "license-bundle", "application/zstd"],

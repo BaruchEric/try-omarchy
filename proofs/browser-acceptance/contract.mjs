@@ -12,11 +12,15 @@ import {
   DESKTOP_PROOF_SAMPLE_PIXELS,
   isDesktopProof,
 } from "../../public/vm/desktop-proof.mjs";
-import { normalizeGuestReportProvenance } from "../../public/vm/host-utils.mjs";
+import {
+  guestReportProvenanceMatches,
+  normalizeGuestReportProvenance,
+  normalizeHibernationResumeEvidence,
+} from "../../public/vm/host-utils.mjs";
 
 export { acceptVmHostMessage, createVmHostCommand };
 
-export const ACCEPTANCE_SCHEMA_VERSION = 3;
+export const ACCEPTANCE_SCHEMA_VERSION = 4;
 export const FRAME_SAMPLE_PIXELS = DESKTOP_PROOF_SAMPLE_PIXELS;
 
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -88,6 +92,12 @@ export function failAcceptance(state, reason, now) {
 function nextWaitingStage(state) {
   if (!state.hostReady) return "waiting-host";
   if (!state.release) return "waiting-release";
+  if (
+    state.guestReportProvenance?.origin === "live-hibernation-serial" &&
+    !state.hibernationResume
+  ) {
+    return "waiting-hibernation-resume";
+  }
   if (!state.report) return "waiting-report";
   if (!state.desktopProof) return "waiting-desktop-proof";
   return "waiting-later-frame";
@@ -129,6 +139,7 @@ export function createAcceptanceState({ releaseId, runNonce, now = 0 } = {}) {
     hostReady: null,
     release: null,
     guestReportProvenance: null,
+    hibernationResume: null,
     report: null,
     metrics: null,
     desktopProof: null,
@@ -171,6 +182,7 @@ export function advanceAcceptance(state, message, now) {
         "ready",
         "release",
         "guestreport",
+        "hibernationresume",
         "desktopproof",
       ].includes(message.type)
     ) {
@@ -315,6 +327,69 @@ export function advanceAcceptance(state, message, now) {
       }),
     );
     next.guestReportProvenance = guestReportProvenance;
+    return withStage(
+      next,
+      guestReportProvenance.origin === "live-hibernation-serial"
+        ? "waiting-hibernation-resume"
+        : "waiting-report",
+      now,
+    );
+  }
+
+  if (message.type === "hibernationresume") {
+    if (!state.release) {
+      return failAcceptance(
+        next,
+        "Hibernation resume evidence preceded verified release identity.",
+        now,
+      );
+    }
+    if (state.hibernationResume) {
+      return failAcceptance(
+        next,
+        "Production host emitted hibernation resume evidence more than once.",
+        now,
+      );
+    }
+    if (state.report) {
+      return failAcceptance(
+        next,
+        "Hibernation resume evidence followed the live guest report.",
+        now,
+      );
+    }
+    const evidence = normalizeHibernationResumeEvidence(message.evidence);
+    const resumeProvenance = evidence
+      ? {
+          origin: "live-hibernation-serial",
+          resume: {
+            descriptorSha256: evidence.descriptorSha256,
+            markerSha256: evidence.markerSha256,
+            sourceBootId: evidence.sourceBootId,
+            swapUuid: evidence.swapUuid,
+          },
+        }
+      : null;
+    if (
+      !hasExactKeys(message, ["type", "evidence"]) ||
+      state.guestReportProvenance?.origin !== "live-hibernation-serial" ||
+      !evidence ||
+      !guestReportProvenanceMatches(
+        resumeProvenance,
+        state.guestReportProvenance,
+      )
+    ) {
+      return failAcceptance(
+        next,
+        "Hibernation resume evidence was malformed or did not bind the release descriptor.",
+        now,
+      );
+    }
+    next.hibernationResume = milestone(
+      ordinal,
+      now,
+      evidence,
+    );
     return withStage(next, "waiting-report", now);
   }
 
@@ -330,6 +405,16 @@ export function advanceAcceptance(state, message, now) {
       return failAcceptance(
         next,
         "Production host emitted guest report more than once.",
+        now,
+      );
+    }
+    if (
+      state.guestReportProvenance?.origin === "live-hibernation-serial" &&
+      !state.hibernationResume
+    ) {
+      return failAcceptance(
+        next,
+        "Live hibernation guest report preceded authenticated resume evidence.",
         now,
       );
     }
@@ -356,6 +441,9 @@ export function advanceAcceptance(state, message, now) {
         ...(message.sourceEvidence === undefined
           ? {}
           : { sourceEvidence: Object.freeze({ ...message.sourceEvidence }) }),
+        ...(message.resume === undefined
+          ? {}
+          : { resume: Object.freeze({ ...message.resume }) }),
       }),
     );
     return withStage(next, "waiting-desktop-proof", now);
@@ -469,6 +557,7 @@ export const DEFAULT_TIMEOUTS = Object.freeze({
   hostMs: 30 * 1000,
   releaseMs: 3 * 60 * 1000,
   reportMs: 25 * 60 * 1000,
+  hibernationResumeMs: 3 * 60 * 1000,
   desktopProofMs: 3 * 60 * 1000,
   laterFrameMs: 2 * 60 * 1000,
 });
@@ -478,6 +567,7 @@ export function timeoutForStage(stage, timeouts = DEFAULT_TIMEOUTS) {
     "waiting-host": timeouts.hostMs,
     "waiting-release": timeouts.releaseMs,
     "waiting-report": timeouts.reportMs,
+    "waiting-hibernation-resume": timeouts.hibernationResumeMs,
     "waiting-desktop-proof": timeouts.desktopProofMs,
     "waiting-later-frame": timeouts.laterFrameMs,
   };

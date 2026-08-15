@@ -143,7 +143,30 @@ export function inspectArtifactManifest(body) {
   const rootfs = [...artifacts.values()].filter(({ role }) => role === "guest-rootfs");
   if (workers.length !== 1) throw new Error("Release must contain exactly one canonical production Worker.");
   if (rootfs.length !== 1) throw new Error("Release must contain exactly one guest-rootfs artifact.");
-  return Object.freeze({ manifest, artifacts, worker: workers[0], rootfs: rootfs[0] });
+  const migrationPaged = [...artifacts.values()].filter(({ role }) =>
+    role === "preboot-vmstate" || role === "preboot-disk-delta");
+  const hibernationPaged = [...artifacts.values()].filter(({ role }) =>
+    role === "hibernation-root-delta" || role === "hibernation-swap-image");
+  if (migrationPaged.length !== 0 && migrationPaged.length !== 2) {
+    throw new Error("Release contains a partial migration checkpoint range set.");
+  }
+  if (hibernationPaged.length !== 0 && hibernationPaged.length !== 2) {
+    throw new Error("Release contains a partial hibernation range set.");
+  }
+  if (migrationPaged.length > 0 && hibernationPaged.length > 0) {
+    throw new Error("Release mixes migration and hibernation range sets.");
+  }
+  return Object.freeze({
+    manifest,
+    artifacts,
+    worker: workers[0],
+    rootfs: rootfs[0],
+    strictRangeArtifacts: Object.freeze([
+      rootfs[0],
+      ...migrationPaged,
+      ...hibernationPaged,
+    ]),
+  });
 }
 
 function staticFiles(repositoryRoot) {
@@ -266,7 +289,9 @@ function summarizeRequests(records, release) {
     if (record.aborted || record.error) {
       violations.push(`Artifact request ${record.id} did not complete cleanly.`);
     }
-    const expectedStatus = record.artifactPath === release.rootfs.path && record.method === "GET"
+    const expectedStatus = release.strictRangeArtifacts.some(
+      ({ path }) => path === record.artifactPath,
+    ) && record.method === "GET"
       ? 206
       : 200;
     if (record.status !== expectedStatus) {
@@ -307,6 +332,44 @@ function summarizeRequests(records, release) {
       violations.push(`Rootfs request ${record.id} returned ${record.responseBytes} bytes instead of ${range.bytes}.`);
     }
     if (record.aborted) violations.push(`Rootfs request ${record.id} was aborted.`);
+  }
+  for (const artifact of release.strictRangeArtifacts.slice(1)) {
+    const artifactRecords = complete.filter(
+      ({ artifactPath }) => artifactPath === artifact.path,
+    );
+    const heads = artifactRecords.filter(({ method }) => method === "HEAD");
+    const gets = artifactRecords.filter(({ method }) => method === "GET");
+    const expectedArtifactEtag = `"sha256-${artifact.sha256}"`;
+    if (heads.length === 0) {
+      violations.push(`No ${artifact.role} HEAD preflight was observed.`);
+    }
+    if (gets.length === 0) {
+      violations.push(`No ${artifact.role} byte-range GET was observed.`);
+    }
+    for (const record of heads) {
+      if (
+        record.status !== 200 ||
+        record.declaredContentLength !== artifact.bytes ||
+        record.etag !== expectedArtifactEtag ||
+        record.acceptRanges !== "bytes"
+      ) {
+        violations.push(`${artifact.role} HEAD ${record.id} was not identity-bound.`);
+      }
+    }
+    for (const record of gets) {
+      const range = parseExactRange(record.range, artifact.bytes);
+      if (
+        !range ||
+        record.ifMatch !== expectedArtifactEtag ||
+        record.status !== 206 ||
+        record.etag !== expectedArtifactEtag ||
+        record.contentRange !==
+          `bytes ${range?.start}-${range?.end}/${artifact.bytes}` ||
+        record.responseBytes !== range?.bytes
+      ) {
+        violations.push(`${artifact.role} range ${record.id} was not exact and identity-bound.`);
+      }
+    }
   }
   if (records.some(({ completedAt }) => completedAt === null)) {
     violations.push("Artifact proxy still had incomplete requests at evidence capture.");
@@ -449,9 +512,12 @@ export async function createAcceptanceProxy({ releaseBaseUrl, repositoryRoot = D
       return;
     }
 
-    if (artifactPath === release.rootfs.path && request.method === "GET") {
-      const range = parseExactRange(request.headers.range, release.rootfs.bytes);
-      const expectedIfMatch = `"sha256-${release.rootfs.sha256}"`;
+    const strictRangeArtifact = release.strictRangeArtifacts.find(
+      ({ path }) => path === artifactPath,
+    );
+    if (strictRangeArtifact && request.method === "GET") {
+      const range = parseExactRange(request.headers.range, strictRangeArtifact.bytes);
+      const expectedIfMatch = `"sha256-${strictRangeArtifact.sha256}"`;
       if (!range || request.headers["if-match"] !== expectedIfMatch) {
         record.status = 412;
         response.writeHead(412, {

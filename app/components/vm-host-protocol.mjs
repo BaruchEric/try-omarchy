@@ -2,7 +2,10 @@ import {
   DESKTOP_PROOF_SAMPLE_PIXELS,
   isDesktopProof,
 } from "../../public/vm/desktop-proof.mjs";
-import { normalizeGuestReportProvenance } from "../../public/vm/host-utils.mjs";
+import {
+  normalizeGuestReportProvenance,
+  normalizeHibernationResumeEvidence,
+} from "../../public/vm/host-utils.mjs";
 
 export const VM_HOST_PROTOCOL = Object.freeze({
   channel: "omarchy-vm-host",
@@ -18,6 +21,7 @@ const HOST_EVENT_TYPES = new Set([
   "serial",
   "release",
   "guestreport",
+  "hibernationresume",
   "guestframe",
   "desktopproof",
   "inputaccepted",
@@ -168,7 +172,9 @@ function validateHostPayload(value, expectedNonce) {
     case "guestreport": {
       const provenance = value.origin === "checkpoint-source-evidence"
         ? { origin: value.origin, sourceEvidence: value.sourceEvidence }
-        : { origin: value.origin };
+        : value.origin === "live-hibernation-serial"
+          ? { origin: value.origin, resume: value.resume }
+          : { origin: value.origin };
       const normalizedProvenance = normalizeGuestReportProvenance(provenance);
       const keys = new Set([
         ...common,
@@ -176,11 +182,20 @@ function validateHostPayload(value, expectedNonce) {
         "origin",
         ...(normalizedProvenance?.origin === "checkpoint-source-evidence"
           ? ["sourceEvidence"]
-          : []),
+          : normalizedProvenance?.origin === "live-hibernation-serial"
+            ? ["resume"]
+            : []),
       ]);
       return hasEnvelope(value, expectedNonce, keys) &&
         isRecord(value.report) &&
         normalizedProvenance !== null
+        ? value
+        : null;
+    }
+    case "hibernationresume": {
+      const keys = new Set([...common, "evidence"]);
+      return hasEnvelope(value, expectedNonce, keys) &&
+        normalizeHibernationResumeEvidence(value.evidence) !== null
         ? value
         : null;
     }

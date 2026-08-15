@@ -5,6 +5,7 @@ import {
 import {
   guestReportProvenanceMatches,
   normalizeGuestReportProvenance,
+  normalizeHibernationResumeEvidence,
 } from "../../public/vm/host-utils.mjs";
 
 export const DISPLAY_WIDTH = 1600;
@@ -300,7 +301,9 @@ export function guestReportEvidenceMatchesRelease(
             origin: evidence.origin,
             sourceEvidence: evidence.sourceEvidence,
           }
-        : { origin: evidence.origin },
+        : evidence.origin === "live-hibernation-serial"
+          ? { origin: evidence.origin, resume: evidence.resume }
+          : { origin: evidence.origin },
       expectedProvenance,
     )
   ) {
@@ -308,7 +311,9 @@ export function guestReportEvidenceMatchesRelease(
   }
   const expectedKeys = evidence.origin === "checkpoint-source-evidence"
     ? new Set(["type", "report", "origin", "sourceEvidence"])
-    : new Set(["type", "report", "origin"]);
+    : evidence.origin === "live-hibernation-serial"
+      ? new Set(["type", "report", "origin", "resume"])
+      : new Set(["type", "report", "origin"]);
   return hasOnlyKeys(evidence, expectedKeys);
 }
 
@@ -476,6 +481,8 @@ export function createDesktopEvidence(expectedReleaseId = ACTIVE_RELEASE_ID) {
     release: null,
     releaseOrdinal: null,
     guestReportProvenance: null,
+    hibernationResume: null,
+    hibernationResumeOrdinal: null,
     report: null,
     reportProvenance: null,
     reportOrdinal: null,
@@ -534,6 +541,8 @@ export function advanceDesktopEvidence(evidence, event) {
       release: event.release,
       releaseOrdinal: eventOrdinal,
       guestReportProvenance,
+      hibernationResume: null,
+      hibernationResumeOrdinal: null,
       report: null,
       reportProvenance: null,
       reportOrdinal: null,
@@ -547,10 +556,52 @@ export function advanceDesktopEvidence(evidence, event) {
     };
   }
 
+  if (event?.type === "hibernationresume") {
+    const hibernationResume = normalizeHibernationResumeEvidence(
+      event.evidence,
+    );
+    const eventBinding = hibernationResume
+      ? {
+          origin: "live-hibernation-serial",
+          resume: {
+            descriptorSha256: hibernationResume.descriptorSha256,
+            markerSha256: hibernationResume.markerSha256,
+            sourceBootId: hibernationResume.sourceBootId,
+            swapUuid: hibernationResume.swapUuid,
+          },
+        }
+      : null;
+    if (
+      !hasOnlyKeys(event, new Set(["type", "evidence"])) ||
+      current.release === null ||
+      current.report !== null ||
+      current.hibernationResume !== null ||
+      current.guestReportProvenance?.origin !==
+        "live-hibernation-serial" ||
+      !hibernationResume ||
+      !guestReportProvenanceMatches(
+        eventBinding,
+        current.guestReportProvenance,
+      )
+    ) {
+      return { ...current, eventOrdinal, invalid: true, ready: false };
+    }
+    return {
+      ...current,
+      eventOrdinal,
+      hibernationResume: event.evidence,
+      hibernationResumeOrdinal: eventOrdinal,
+      ready: false,
+    };
+  }
+
   if (event?.type === "guestreport") {
     if (
       current.release === null ||
       current.guestReportProvenance === null ||
+      (current.guestReportProvenance.origin ===
+        "live-hibernation-serial" &&
+        current.hibernationResume === null) ||
       current.report !== null ||
       !guestReportEvidenceMatchesRelease(
         event,

@@ -5,12 +5,18 @@ import {
   CANONICAL_CHECKPOINT_IDENTITY,
   CANONICAL_PRODUCTION_RUNTIME_MANIFEST,
   checkpointArtifactRecords,
+  isGuestHibernationProfile,
   validateCheckpointGuestManifestDocument,
   validateCheckpointProducerDocument,
   validateExactProductionRuntimeProfile,
   validateProductionRuntimeContract,
 } from "../runtime-contract.mjs";
-import { checkpointSourceEvidence } from "./checkpoint-fixture.mjs";
+import {
+  checkpointSourceEvidence,
+  hibernationProducerDocument,
+  hibernationProfile,
+  hibernationRuntimeManifest,
+} from "./checkpoint-fixture.mjs";
 
 const FIXTURE_UPSTREAM = Object.freeze({
   repository: "https://github.com/basecamp/omarchy",
@@ -146,6 +152,59 @@ function checkpointArtifacts(manifest = checkpointManifest()) {
     ...coldArtifacts(),
     ...checkpointArtifactRecords(manifest),
   ];
+}
+
+function hibernationManifest() {
+  const profile = hibernationProfile({ upstream: FIXTURE_UPSTREAM });
+  return hibernationRuntimeManifest(
+    CANONICAL_PRODUCTION_RUNTIME_MANIFEST,
+    profile,
+  );
+}
+
+function hibernationArtifacts(manifest = hibernationManifest()) {
+  const { checkpoint } = manifest;
+  const artifacts = coldArtifacts().map((record) => ({ ...record }));
+  const bind = (path, sha256) => {
+    artifacts.find((record) => record.path === path).sha256 = sha256;
+  };
+  bind("qemu.wasm", checkpoint.identity.browserQemuWasmSha256);
+  bind("rootfs.ext4", checkpoint.identity.rootfsSha256);
+  bind("provenance.json", checkpoint.identity.guestProvenanceSha256);
+  bind("guest-manifest.json", checkpoint.identity.baseGuestManifestSha256);
+  bind("vmlinuz-linux", checkpoint.identity.kernelSha256);
+  bind("initramfs-linux.img", checkpoint.identity.baseInitramfsSha256);
+  artifacts.push(
+    artifact(
+      checkpoint.derivedInitramfs.artifactPath,
+      "hibernation-initramfs",
+      "application/vnd.linux.initramfs",
+      checkpoint.derivedInitramfs.sha256,
+      checkpoint.derivedInitramfs.bytes,
+    ),
+    artifact(
+      checkpoint.rootDelta.artifactPath,
+      "hibernation-root-delta",
+      "application/vnd.qemu.qcow2",
+      checkpoint.rootDelta.sha256,
+      checkpoint.rootDelta.bytes,
+    ),
+    artifact(
+      checkpoint.swapImage.artifactPath,
+      "hibernation-swap-image",
+      "application/vnd.qemu.qcow2",
+      checkpoint.swapImage.sha256,
+      checkpoint.swapImage.bytes,
+    ),
+    artifact(
+      checkpoint.producer.manifestArtifactPath,
+      "hibernation-metadata",
+      "application/json",
+      checkpoint.producer.manifestSha256,
+      checkpoint.producer.manifestBytes,
+    ),
+  );
+  return artifacts;
 }
 
 function guestManifestDocument(checkpoint) {
@@ -322,4 +381,140 @@ test("producer and guest documents cannot contradict the normalized checkpoint b
     () => validateCheckpointGuestManifestDocument(guest, checkpoint),
     /rootfs SHA-256 does not match checkpoint identity/,
   );
+});
+
+test("guest hibernation release binds exact profile, argv, artifacts, and producer", async () => {
+  const manifest = hibernationManifest();
+  assert.equal(isGuestHibernationProfile(manifest.checkpoint), true);
+  assert.equal(validateExactProductionRuntimeProfile(manifest), manifest);
+  validateProductionRuntimeContract(manifest, hibernationArtifacts(manifest));
+  assert.deepEqual(
+    checkpointArtifactRecords(manifest).map(({ path, role, mediaType }) => ({
+      path,
+      role,
+      mediaType,
+    })),
+    [
+      {
+        path: "initramfs-virgl-hibernate.img",
+        role: "hibernation-initramfs",
+        mediaType: "application/vnd.linux.initramfs",
+      },
+      {
+        path: "hibernate-root-overlay.qcow2",
+        role: "hibernation-root-delta",
+        mediaType: "application/vnd.qemu.qcow2",
+      },
+      {
+        path: "omarchy-hibernate.qcow2",
+        role: "hibernation-swap-image",
+        mediaType: "application/vnd.qemu.qcow2",
+      },
+      {
+        path: "hibernate-manifest.json",
+        role: "hibernation-metadata",
+        mediaType: "application/json",
+      },
+    ],
+  );
+  await validateCheckpointProducerDocument(
+    hibernationProducerDocument(manifest.checkpoint, FIXTURE_UPSTREAM),
+    manifest.checkpoint,
+    FIXTURE_UPSTREAM,
+  );
+});
+
+test("hibernation profile rejects omission, mutation, replay, and downgrade", async (t) => {
+  const hostileProfiles = [
+    ["missing derived initramfs", (manifest) => delete manifest.checkpoint.derivedInitramfs],
+    ["cold fallback", (manifest) => { manifest.checkpoint.restoreContract.coldBootFallbackAllowed = true; }],
+    ["migration downgrade", (manifest) => { manifest.checkpoint.mode = "preboot-resume"; }],
+    ["swap UUID", (manifest) => { manifest.checkpoint.swapImage.swapUuid = "11111111-2222-4333-8444-555555555555"; }],
+    ["derived identity", (manifest) => { manifest.checkpoint.identity.derivedInitramfsSha256 = "f".repeat(64); }],
+    ["producer display", (manifest) => {
+      manifest.checkpoint.identity.producerMachine.display = "sdl,gl=es,show-cursor=on";
+    }],
+    ["runtime display", (manifest) => {
+      manifest.checkpoint.identity.runtimeMachine.display = "sdl,gl=on,show-cursor=on";
+    }],
+    ["runtime topology", (manifest) => {
+      manifest.checkpoint.identity.runtimeMachine.smp = "4,sockets=1,cores=4,threads=1";
+    }],
+    ["cold initrd argv", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-initrd") + 1] = "/pack/initramfs-linux.img";
+    }],
+    ["software display argv", (manifest) => {
+      manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-display") + 1] = "sdl,gl=off,show-cursor=on";
+    }],
+    ["migration argv", (manifest) => manifest.qemu.arguments.push("-incoming", "file:/pack/replayed.vmstate")],
+    ["direct root downgrade", (manifest) => manifest.qemu.arguments.push(
+      "-drive",
+      "file=/pack/rootfs.ext4,if=virtio,format=raw,media=disk,cache=unsafe",
+    )],
+  ];
+  for (const [name, mutate] of hostileProfiles) {
+    await t.test(name, () => {
+      const manifest = hibernationManifest();
+      mutate(manifest);
+      assert.throws(
+        () => validateExactProductionRuntimeProfile(manifest),
+        /hibernation|checkpoint|canonical|profile|runtime manifest/i,
+      );
+    });
+  }
+
+  const manifest = hibernationManifest();
+  const hostileArtifacts = [
+    "initramfs-virgl-hibernate.img",
+    "hibernate-root-overlay.qcow2",
+    "omarchy-hibernate.qcow2",
+    "hibernate-manifest.json",
+    "rootfs.ext4",
+    "vmlinuz-linux",
+    "initramfs-linux.img",
+    "guest-manifest.json",
+    "provenance.json",
+    "qemu.wasm",
+  ];
+  for (const path of hostileArtifacts) {
+    await t.test(`artifact mutation ${path}`, () => {
+      const artifacts = hibernationArtifacts(manifest);
+      artifacts.find((record) => record.path === path).sha256 = "f".repeat(64);
+      assert.throws(
+        () => validateProductionRuntimeContract(manifest, artifacts),
+        /hibernation|checkpoint|initramfs|rootfs|kernel|manifest|provenance|QEMU/i,
+      );
+    });
+  }
+
+  await t.test("producer source evidence replay", async () => {
+    const document = hibernationProducerDocument(
+      manifest.checkpoint,
+      FIXTURE_UPSTREAM,
+    );
+    document.sourceEvidence.nonceSha256 = "f".repeat(64);
+    await assert.rejects(
+      validateCheckpointProducerDocument(
+        document,
+        manifest.checkpoint,
+        FIXTURE_UPSTREAM,
+      ),
+      /source|evidence|producer|checkpoint/i,
+    );
+  });
+  await t.test("producer resume evidence mutation", async () => {
+    const document = hibernationProducerDocument(
+      manifest.checkpoint,
+      FIXTURE_UPSTREAM,
+    );
+    document.resumeEvidence.hibernationMarkerSha256 = "f".repeat(64);
+    await assert.rejects(
+      validateCheckpointProducerDocument(
+        document,
+        manifest.checkpoint,
+        FIXTURE_UPSTREAM,
+      ),
+      /hibernation|producer|checkpoint/i,
+    );
+  });
 });
