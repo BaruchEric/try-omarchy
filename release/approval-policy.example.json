@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "keys": [
+    {
+      "gate": "licensing",
+      "keyId": "replace-with-licensing-key-id",
+      "publicKeyPem": "REPLACE WITH REVIEWED ED25519 PUBLIC KEY"
+    },
+    {
+      "gate": "runtime",
+      "keyId": "replace-with-runtime-key-id",
+      "publicKeyPem": "REPLACE WITH REVIEWED ED25519 PUBLIC KEY"
+    },
+    {
+      "gate": "security",
+      "keyId": "replace-with-security-key-id",
+      "publicKeyPem": "REPLACE WITH REVIEWED ED25519 PUBLIC KEY"
+    },
+    {
+      "gate": "product",
+      "keyId": "replace-with-product-key-id",
+      "publicKeyPem": "REPLACE WITH REVIEWED ED25519 PUBLIC KEY"
+    }
+  ]
+}

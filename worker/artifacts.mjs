@@ -1,8 +1,12 @@
 const ROUTE_PREFIX = "/omarchy/versions/";
-const RELEASE_ID = /^[0-9a-f]{8,64}$/;
+const RELEASE_ID = /^[0-9a-f]{64}$/;
 const PATH_SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const DECIMAL_INTEGER = /^(0|[1-9][0-9]*)$/;
+const CLEARANCE_TIMESTAMP = /^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/;
+
+export const CLEARANCE_ARTIFACT_NAME = "clearance.json";
+export const MAX_CLEARANCE_BYTES = 64 * 1024;
 
 export const MAX_ROOTFS_RANGE_BYTES = 8 * 1024 * 1024;
 export const MAX_ARTIFACT_RANGE_BYTES = 64 * 1024 * 1024;
@@ -13,6 +17,12 @@ const ISOLATION_HEADERS = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
 };
+
+// A clearance object is immutable once conditionally created by the release
+// pipeline. Cache only successfully verified attestations. Missing, malformed,
+// or mismatched objects are deliberately retried so a newly cleared release
+// can become visible without recycling the Worker isolate.
+const positiveClearanceByBucket = new WeakMap();
 
 class RouteFailure extends Error {
   constructor(status, code, message, headers = undefined) {
@@ -26,6 +36,12 @@ class RouteFailure extends Error {
 
 function fail(status, code, message, headers) {
   throw new RouteFailure(status, code, message, headers);
+}
+
+function releaseNotCleared() {
+  fail(404, "RELEASE_NOT_CLEARED", "The requested release has not been cleared for publication.", {
+    "X-Omarchy-Artifact-Error": "RELEASE_NOT_CLEARED",
+  });
 }
 
 function problemResponse(request, status, code, message, extraHeaders = undefined) {
@@ -152,6 +168,133 @@ function validateStoredObject(object, expected = undefined) {
     reprDigest: `sha-256=:${sha256Base64(digest)}:`,
     contentType: safeContentType(object),
   });
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasExactKeys(value, expected) {
+  if (!isRecord(value)) return false;
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function hasControlCharacter(value) {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return true;
+  }
+  return false;
+}
+
+function isCanonicalApproval(value) {
+  if (!hasExactKeys(value, ["approved", "approvedAt", "approvedBy"])) return false;
+  if (value.approved !== true) return false;
+  if (
+    typeof value.approvedBy !== "string" ||
+    value.approvedBy.length === 0 ||
+    value.approvedBy.length > 200 ||
+    value.approvedBy !== value.approvedBy.trim() ||
+    hasControlCharacter(value.approvedBy)
+  ) {
+    return false;
+  }
+  if (typeof value.approvedAt !== "string" || !CLEARANCE_TIMESTAMP.test(value.approvedAt)) {
+    return false;
+  }
+  try {
+    return new Date(value.approvedAt).toISOString() === value.approvedAt;
+  } catch {
+    return false;
+  }
+}
+
+function validateClearanceDocument(value, release) {
+  if (!hasExactKeys(value, [
+    "schemaVersion",
+    "releaseId",
+    "artifactManifestSha256",
+    "approvalEvidenceSha256",
+    "approvalPolicySha256",
+    "approvals",
+  ])) {
+    releaseNotCleared();
+  }
+  if (
+    value.schemaVersion !== 1 ||
+    value.releaseId !== release ||
+    value.artifactManifestSha256 !== release ||
+    !SHA256.test(value.approvalEvidenceSha256 ?? "") ||
+    !SHA256.test(value.approvalPolicySha256 ?? "")
+  ) {
+    releaseNotCleared();
+  }
+  if (!hasExactKeys(value.approvals, ["licensing", "runtime", "security", "product"])) {
+    releaseNotCleared();
+  }
+  for (const name of ["licensing", "runtime", "security", "product"]) {
+    if (!isCanonicalApproval(value.approvals[name])) releaseNotCleared();
+  }
+  return Object.freeze(value);
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function loadReleaseClearance(bucket, release) {
+  let byRelease = positiveClearanceByBucket.get(bucket);
+  if (byRelease?.has(release)) return byRelease.get(release);
+
+  const key = `omarchy/versions/${release}/${CLEARANCE_ARTIFACT_NAME}`;
+  const object = await getFromBucket(bucket, key, undefined);
+  if (!object || !("body" in object) || object.body === undefined || object.body === null) {
+    releaseNotCleared();
+  }
+
+  let identity;
+  try {
+    identity = validateStoredObject(object);
+  } catch (error) {
+    if (error instanceof RouteFailure) releaseNotCleared();
+    throw error;
+  }
+  if (
+    identity.size > MAX_CLEARANCE_BYTES ||
+    identity.contentType !== "application/json" ||
+    object.customMetadata?.bytes !== String(identity.size) ||
+    object.range !== undefined
+  ) {
+    releaseNotCleared();
+  }
+
+  let bytes;
+  try {
+    bytes = await new Response(object.body).arrayBuffer();
+  } catch {
+    releaseNotCleared();
+  }
+  if (bytes.byteLength !== identity.size || await sha256Hex(bytes) !== identity.digest) {
+    releaseNotCleared();
+  }
+
+  let document;
+  try {
+    const json = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    document = JSON.parse(json);
+  } catch {
+    releaseNotCleared();
+  }
+  const clearance = validateClearanceDocument(document, release);
+  if (!byRelease) {
+    byRelease = new Map();
+    positiveClearanceByBucket.set(bucket, byRelease);
+  }
+  byRelease.set(release, clearance);
+  return clearance;
 }
 
 function immutableHeaders(identity, contentLength) {
@@ -343,6 +486,12 @@ export async function handleArtifactRequest(request, bucket) {
     if (!bucket || typeof bucket.head !== "function" || typeof bucket.get !== "function") {
       fail(503, "ARTIFACT_STORAGE_UNAVAILABLE", "Artifact storage is not configured.");
     }
+
+    // The clearance body is the sole publication boundary. This check must
+    // complete before even reading target artifact metadata: partially
+    // uploaded canonical objects remain unreachable through GET, HEAD, or
+    // Range until the immutable attestation exists and matches this release.
+    await loadReleaseClearance(bucket, route.release);
 
     let head;
     try {

@@ -8,7 +8,7 @@ interface Env {
   DB: D1Database;
   OMARCHY_ARTIFACTS: {
     head(key: string): Promise<unknown | null>;
-    get(key: string, options: Record<string, unknown>): Promise<unknown | null>;
+    get(key: string, options?: Record<string, unknown>): Promise<unknown | null>;
   };
   IMAGES: {
     input(stream: ReadableStream): {

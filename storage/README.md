@@ -34,12 +34,13 @@ that Worker, then pass the returned hook to the QEMU factory:
 import { preparePagedDisk } from "/storage/paged-disk.mjs";
 import createQemu from "/omarchy/qemu.mjs";
 
-const release = await fetch("/omarchy/versions/f0020448/artifact-manifest.json")
+const releaseId = "<full-64-hex-artifact-manifest-sha256>";
+const release = await fetch(`/omarchy/versions/${releaseId}/artifact-manifest.json`)
   .then((response) => response.json());
 const rootfs = release.artifacts.find((item) => item.role === "guest-rootfs");
 
 const disk = await preparePagedDisk({
-  url: new URL(`/omarchy/versions/f0020448/${rootfs.path}`, self.location.href).href,
+  url: new URL(`/omarchy/versions/${releaseId}/${rootfs.path}`, self.location.href).href,
   path: "/pack/rootfs.ext4",
   byteLength: rootfs.bytes,
   sha256: rootfs.sha256,

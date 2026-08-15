@@ -1,7 +1,7 @@
 {
   "runtimeDirectory": "../runtime/dist",
   "guestDirectory": "../guest/dist",
-  "outputDirectory": "../public/omarchy/versions/f0020448",
+  "outputDirectory": "../artifacts/release-candidate",
   "licenseBundle": "../artifacts/legal/THIRD_PARTY_NOTICES.tar.zst",
   "sbom": "../artifacts/legal/sbom.spdx.json",
   "runtimeSource": "../artifacts/source/qemu-wasm-corresponding-source.tar.zst",

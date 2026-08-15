@@ -920,7 +920,9 @@ test("missing VM artifacts produce a recoverable, specific launcher error", () =
   );
   assert.equal(RELEASE_BASE_URL, `/omarchy/versions/${ACTIVE_RELEASE_ID}/`);
   const missingWorker = normalizeRuntimeError(
-    new Error("Production Worker request failed with HTTP 404: /omarchy/versions/f0020448/production-worker.mjs"),
+    new Error(
+      `Production Worker request failed with HTTP 404: /omarchy/versions/${"f0020448" + "0".repeat(56)}/production-worker.mjs`,
+    ),
   );
   assert.equal(missingWorker.kind, "artifacts-missing");
   assert.match(missingWorker.message, /artifact upload/i);
