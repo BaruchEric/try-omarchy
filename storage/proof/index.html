@@ -27,7 +27,10 @@
         const rangedGets = diskRequests.filter((request) => request.method === "GET" && request.range);
         const fullGets = diskRequests.filter((request) => request.method === "GET" && !request.range);
         const bounded = rangedGets.every((request) => request.responseBytes <= 1024 * 1024);
-        const passed = data.programPassed === true && rangedGets.length >= 3 && fullGets.length === 0 && bounded;
+        const bulkReadPassed = data.runtime?.streamReadBytes >= 1024 * 1024 &&
+          data.runtime?.streamReadChunks === data.runtime?.streamReadCalls;
+        const passed = data.programPassed === true && bulkReadPassed &&
+          rangedGets.length >= 3 && fullGets.length === 0 && bounded;
         status.dataset.state = passed ? "passed" : "failed";
         status.textContent = passed ? "PASS — ranged reads only" : "FAIL";
         result.textContent = JSON.stringify({
@@ -35,6 +38,7 @@
           rangedRootfsGets: rangedGets.length,
           fullRootfsGets: fullGets.length,
           bounded,
+          bulkReadPassed,
           worker: data,
           serverRequests,
         }, null, 2);

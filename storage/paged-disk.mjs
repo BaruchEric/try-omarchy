@@ -3,13 +3,13 @@ const TICKET = Symbol("omarchy.paged-disk.preflight");
 export const PAGED_DISK_SCHEMA_VERSION = 1;
 export const DEFAULT_GUEST_DISK_PATH = "/pack/rootfs.ext4";
 export const DEFAULT_CHUNK_BYTES = 1024 * 1024;
-export const DEFAULT_MAX_CACHED_BYTES = 384 * 1024 * 1024;
+export const DEFAULT_MAX_CACHED_BYTES = 128 * 1024 * 1024;
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const STRONG_ETAG = /^"[^"\r\n]+"$/;
 const MIN_CHUNK_BYTES = 64 * 1024;
 const MAX_CHUNK_BYTES = 8 * 1024 * 1024;
-const MAX_CACHE_BYTES = 1024 * 1024 * 1024;
+const MAX_CACHE_BYTES = DEFAULT_MAX_CACHED_BYTES;
 
 export class PagedDiskError extends Error {
   constructor(code, message, details = undefined) {
@@ -259,7 +259,7 @@ export function validatePagedDiskDescriptor(input, options = {}) {
     maxCachedBytes > MAX_CACHE_BYTES ||
     maxCachedBytes % chunkBytes !== 0
   ) {
-    fail("INVALID_DESCRIPTOR", "maxCachedBytes must be a chunk-aligned value no larger than 1 GiB.");
+    fail("INVALID_DESCRIPTOR", "maxCachedBytes must be a chunk-aligned value no larger than 128 MiB.");
   }
 
   return Object.freeze({
@@ -399,6 +399,10 @@ export function createPagedDiskPreRun(ticket, options = {}) {
     cacheBytes: 0,
     evictions: 0,
     writeAttempts: 0,
+    streamReadCalls: 0,
+    streamReadChunks: 0,
+    streamReadBytes: 0,
+    lruTouches: 0,
     loadedChunks: new Map(),
     node: null,
   };
@@ -476,6 +480,10 @@ export function createPagedDiskPreRun(ticket, options = {}) {
       loadedChunks: [...state.loadedChunks.keys()].sort((left, right) => left - right),
       evictions: state.evictions,
       writeAttempts: state.writeAttempts,
+      streamReadCalls: state.streamReadCalls,
+      streamReadChunks: state.streamReadChunks,
+      streamReadBytes: state.streamReadBytes,
+      lruTouches: state.lruTouches,
     });
   }
 
@@ -494,7 +502,12 @@ export function createPagedDiskPreRun(ticket, options = {}) {
     }
     const node = fs.createLazyFile(parent, name, descriptor.url, true, false);
     const lazy = node?.contents;
-    if (!lazy || !Array.isArray(lazy.chunks) || typeof lazy.setDataGetter !== "function") {
+    if (
+      !lazy ||
+      !Array.isArray(lazy.chunks) ||
+      typeof lazy.setDataGetter !== "function" ||
+      typeof node.stream_ops?.read !== "function"
+    ) {
       fail(
         "INCOMPATIBLE_EMSCRIPTEN",
         "Emscripten FS.createLazyFile internals do not match the pinned 3.1.50 adapter.",
@@ -508,9 +521,16 @@ export function createPagedDiskPreRun(ticket, options = {}) {
     lazy._chunkSize = descriptor.chunkBytes;
     lazy.chunks.length = Math.ceil(descriptor.byteLength / descriptor.chunkBytes);
 
+    let lastTouchedChunk = -1;
     const touch = (chunkNumber, bytes) => {
+      // A byte-oriented LazyUint8Array read calls its getter for every byte.
+      // Consecutive accesses to one chunk cannot change its relative recency,
+      // so mutate the LRU only when the accessed chunk changes.
+      if (lastTouchedChunk === chunkNumber) return;
       if (state.loadedChunks.has(chunkNumber)) state.loadedChunks.delete(chunkNumber);
       state.loadedChunks.set(chunkNumber, bytes);
+      lastTouchedChunk = chunkNumber;
+      state.lruTouches += 1;
     };
     const evict = (protectedChunk) => {
       while (state.loadedChunks.size > descriptor.maxCachedChunks) {
@@ -528,7 +548,7 @@ export function createPagedDiskPreRun(ticket, options = {}) {
         state.evictions += 1;
       }
     };
-    lazy.setDataGetter((chunkNumber) => {
+    const getChunk = (chunkNumber) => {
       let bytes = state.loadedChunks.get(chunkNumber);
       if (bytes) {
         touch(chunkNumber, bytes);
@@ -540,7 +560,48 @@ export function createPagedDiskPreRun(ticket, options = {}) {
       touch(chunkNumber, bytes);
       evict(chunkNumber);
       return bytes;
-    });
+    };
+    lazy.setDataGetter(getChunk);
+
+    // Emscripten 3.1.50's createLazyFile stream reader copies through
+    // LazyUint8Array.get() one byte at a time. Besides the JavaScript call
+    // overhead, a naive cache getter therefore mutates an LRU Map once per
+    // byte. QEMU issues ordinary FS stream reads, so replace that one hot path
+    // with chunk-granular typed-array copies while retaining the lazy getter
+    // for the pinned runtime's mmap and compatibility paths.
+    node.stream_ops.read = (_stream, buffer, offset, length, position) => {
+      state.streamReadCalls += 1;
+      if (length <= 0 || position >= descriptor.byteLength) return 0;
+
+      const readBytes = Math.min(length, descriptor.byteLength - position);
+      let sourcePosition = position;
+      let targetOffset = offset;
+      let remaining = readBytes;
+
+      while (remaining > 0) {
+        const chunkNumber = Math.floor(sourcePosition / descriptor.chunkBytes);
+        const chunkOffset = sourcePosition - chunkNumber * descriptor.chunkBytes;
+        const chunk = getChunk(chunkNumber);
+        const copyBytes = Math.min(remaining, chunk.byteLength - chunkOffset);
+        const source = chunk.subarray(chunkOffset, chunkOffset + copyBytes);
+
+        if (typeof buffer.set === "function") {
+          buffer.set(source, targetOffset);
+        } else {
+          for (let index = 0; index < copyBytes; index += 1) {
+            buffer[targetOffset + index] = source[index];
+          }
+        }
+
+        state.streamReadChunks += 1;
+        sourcePosition += copyBytes;
+        targetOffset += copyBytes;
+        remaining -= copyBytes;
+      }
+
+      state.streamReadBytes += readBytes;
+      return readBytes;
+    };
 
     const rejectWrite = () => {
       state.writeAttempts += 1;

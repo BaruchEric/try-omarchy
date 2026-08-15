@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_MAX_CACHED_BYTES,
   DEFAULT_GUEST_DISK_PATH,
   PagedDiskError,
   createPagedDiskPreRun,
@@ -62,15 +63,15 @@ function descriptor(overrides = {}) {
   };
 }
 
-function successfulFetch(log = []) {
+function successfulFetch(log = [], byteLength = BYTE_LENGTH) {
   return async (url, options) => {
     log.push({ url, ...options, headers: { ...options.headers } });
     if (options.method === "HEAD") {
-      return response({ status: 200, responseHeaders: headers() });
+      return response({ status: 200, responseHeaders: headers({ length: byteLength }) });
     }
     return response({
       status: 206,
-      responseHeaders: headers({ length: 1, range: `bytes 0-0/${BYTE_LENGTH}` }),
+      responseHeaders: headers({ length: 1, range: `bytes 0-0/${byteLength}` }),
       bytes: Uint8Array.of(0),
     });
   };
@@ -109,6 +110,32 @@ test("rejects cross-origin, traversal, weak identity, and unsafe cache metadata"
   assert.throws(
     () => validatePagedDiskDescriptor(descriptor({ maxCachedBytes: 65 * 1024 }), { origin: ORIGIN }),
     (error) => error.code === "INVALID_DESCRIPTOR",
+  );
+  assert.throws(
+    () => validatePagedDiskDescriptor(descriptor({ maxCachedBytes: 129 * 1024 * 1024 }), { origin: ORIGIN }),
+    (error) => error.code === "INVALID_DESCRIPTOR" && /128 MiB/.test(error.message),
+  );
+});
+
+test("defaults and caps the clean cache at 128 MiB for the browser process budget", () => {
+  const mebibyte = 1024 * 1024;
+  const processBudget = 2560 * mebibyte;
+  const productionWasmHeap = 2300 * mebibyte;
+  const input = descriptor();
+  delete input.chunkBytes;
+  delete input.maxCachedBytes;
+  const normalized = validatePagedDiskDescriptor(input, { origin: ORIGIN });
+
+  assert.equal(DEFAULT_MAX_CACHED_BYTES, 128 * mebibyte);
+  assert.equal(processBudget - productionWasmHeap - DEFAULT_MAX_CACHED_BYTES, 132 * mebibyte);
+  assert.equal(normalized.maxCachedBytes, DEFAULT_MAX_CACHED_BYTES);
+  assert.equal(normalized.maxCachedChunks, 128);
+  assert.equal(
+    validatePagedDiskDescriptor(
+      descriptor({ maxCachedBytes: DEFAULT_MAX_CACHED_BYTES }),
+      { origin: ORIGIN },
+    ).maxCachedBytes,
+    DEFAULT_MAX_CACHED_BYTES,
   );
 });
 
@@ -273,8 +300,19 @@ function fakeFs() {
         canWrite,
         contents: lazy,
         mode: 0o100666,
-        stream_ops: { write() { throw new Error("permissive writer was not replaced"); } },
+        stream_ops: {
+          read(_stream, buffer, offset, length, position) {
+            if (position >= lazy.length) return 0;
+            const size = Math.min(lazy.length - position, length);
+            for (let index = 0; index < size; index += 1) {
+              buffer[offset + index] = lazy.get(position + index);
+            }
+            return size;
+          },
+          write() { throw new Error("permissive writer was not replaced"); },
+        },
       };
+      node.pinnedLazyRead = node.stream_ops.read;
       nodes.set(`${parent === "/" ? "" : parent}/${name}`, node);
       fs.node = node;
       return node;
@@ -356,12 +394,17 @@ function fakeXhrScope(disk, log, { ignoreRange = false, etag = ETAG, reprDigest 
   return { XMLHttpRequest: FakeXMLHttpRequest };
 }
 
-async function mountedFixture({ maxCachedBytes = 2 * 64 * 1024, xhrOptions } = {}) {
-  const disk = Uint8Array.from({ length: BYTE_LENGTH }, (_, index) => index % 251);
+async function mountedFixture({
+  byteLength = BYTE_LENGTH,
+  chunkBytes = 64 * 1024,
+  maxCachedBytes = 2 * 64 * 1024,
+  xhrOptions,
+} = {}) {
+  const disk = Uint8Array.from({ length: byteLength }, (_, index) => index % 251);
   const preflightRequests = [];
-  const ticket = await preflightPagedDisk(descriptor({ maxCachedBytes }), {
+  const ticket = await preflightPagedDisk(descriptor({ byteLength, chunkBytes, maxCachedBytes }), {
     origin: ORIGIN,
-    fetch: successfulFetch(preflightRequests),
+    fetch: successfulFetch(preflightRequests, byteLength),
     scope: {},
   });
   const requests = [];
@@ -397,6 +440,55 @@ test("synchronous preRun mounts a read-only range file and bounds its clean chun
   assert.equal(fs.node.mode & 0o222, 0);
   assert.throws(() => fs.node.stream_ops.write(), (error) => error.errno === 30);
   assert.equal(hook.snapshot().writeAttempts, 1);
+});
+
+test("a realistic 1 MiB stream read copies by chunk without byte-wise lazy getter churn", async () => {
+  const mebibyte = 1024 * 1024;
+  const chunkBytes = 64 * 1024;
+  const { disk, fs, hook, requests } = await mountedFixture({
+    byteLength: 2 * mebibyte,
+    chunkBytes,
+    maxCachedBytes: mebibyte,
+  });
+  const lazy = fs.node.contents;
+  let lazyGetterCalls = 0;
+  const originalGetter = lazy.getter;
+  lazy.setDataGetter((chunkNumber) => {
+    lazyGetterCalls += 1;
+    return originalGetter(chunkNumber);
+  });
+
+  const destination = new Uint8Array(mebibyte + 32);
+  const copied = fs.node.stream_ops.read({}, destination, 17, mebibyte, 0);
+
+  assert.equal(copied, mebibyte);
+  assert.deepEqual(destination.subarray(17, 17 + mebibyte), disk.subarray(0, mebibyte));
+  assert.equal(lazyGetterCalls, 0);
+  assert.equal(requests.length, 16);
+  assert.ok(requests.every((request) => request.range?.startsWith("bytes=")));
+  assert.deepEqual(hook.snapshot(), {
+    mounted: true,
+    path: DEFAULT_GUEST_DISK_PATH,
+    byteLength: 2 * mebibyte,
+    chunkBytes,
+    maxCachedBytes: mebibyte,
+    rangeRequests: 16,
+    unRangedGetCount: 0,
+    requestedBytes: mebibyte,
+    cacheBytes: mebibyte,
+    loadedChunks: Array.from({ length: 16 }, (_, index) => index),
+    evictions: 0,
+    writeAttempts: 0,
+    streamReadCalls: 1,
+    streamReadChunks: 16,
+    streamReadBytes: mebibyte,
+    lruTouches: 16,
+  });
+
+  // Pinned Emscripten's original reader would invoke LazyUint8Array.get once
+  // per byte for the same operation; the installed reader is not that path.
+  assert.notEqual(fs.node.stream_ops.read, fs.node.pinnedLazyRead);
+  assert.equal(mebibyte / hook.snapshot().streamReadChunks, chunkBytes);
 });
 
 test("synchronous loader aborts an ignored Range response at headers before reading a body", async () => {

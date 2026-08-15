@@ -14,7 +14,9 @@ The adapter has two deliberately separate phases:
    read fetches only the required aligned range with a strict `If-Match`
    validator. A server that ignores a range is aborted as soon as response
    headers arrive. The immutable clean-chunk cache is LRU-bounded and may evict
-   and re-fetch data.
+   and re-fetch data. The adapter replaces Emscripten 3.1.50's byte-at-a-time
+   lazy `stream_ops.read` with chunk-granular typed-array copies, so a bulk QEMU
+   disk read performs cache work once per chunk rather than once per byte.
 
 The base node has no write permission, and its write/allocate stream operations
 throw `EROFS`. QEMU must use `-snapshot`; QEMU's temporary overlay provides
@@ -106,10 +108,18 @@ used by the app; rejecting it at the rootfs route is a useful deployment guard.
 - The adapter intentionally relies on the `LazyUint8Array` shape emitted by
   pinned Emscripten 3.1.50. Its tests must run again before any Emscripten
   upgrade.
+- In the deterministic 1 MiB bulk-read regression (64 KiB test chunks), the
+  pinned reader's 1,048,576 lazy getter calls are replaced by 16 chunk copies
+  and 16 LRU touches. There are zero byte-wise lazy getter calls on the stream
+  read path. Production's default 1 MiB chunks reduce an aligned 1 MiB read to
+  one chunk copy and one LRU touch.
 - Synchronous XHR is valid in a dedicated Worker but unavailable in service
   workers and rejected here on `Window`.
-- The clean cache defaults to 384 MiB. Lower values reduce memory but can
-  increase repeated range traffic. It never grows to the full image merely
+- The clean cache defaults to and is capped at 128 MiB. The production QEMU
+  build reserves a fixed 2,300 MiB Wasm heap, so heap plus the maximum clean
+  cache is 2,428 MiB and leaves 132 MiB inside the 2,560 MiB process budget for
+  Worker, graphics, and browser overhead. Lower cache values can increase
+  repeated range traffic. The cache never grows to the full image merely
   because the image is large.
 - The browser proof uses a small real Emscripten binary. A release acceptance
   run must additionally inspect production request logs while the authentic
@@ -131,5 +141,6 @@ node storage/proof/server.mjs --port 8091
 ```
 
 Open the printed URL. The page reports PASS only after the real Emscripten
-program reads separated disk regions, the server request log contains bounded
-range requests, and the rootfs request log contains zero full-file GETs.
+program completes a 1 MiB `pread` plus separated disk reads through the bulk
+stream path, the server request log contains bounded range requests, and the
+rootfs request log contains zero full-file GETs.
