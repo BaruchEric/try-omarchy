@@ -170,6 +170,7 @@ export async function startProofServer({ port = 0, host = "127.0.0.1" } = {}) {
       ["/", [path.join(HERE, "index.html"), "text/html; charset=utf-8"]],
       ["/worker.mjs", [path.join(HERE, "worker.mjs"), "text/javascript; charset=utf-8"]],
       ["/paged-disk.mjs", [path.join(STORAGE, "paged-disk.mjs"), "text/javascript; charset=utf-8"]],
+      ["/bounded-overlay.mjs", [path.join(STORAGE, "bounded-overlay.mjs"), "text/javascript; charset=utf-8"]],
       ["/dist/proof.mjs", [path.join(HERE, "dist/proof.mjs"), "text/javascript; charset=utf-8"]],
       ["/dist/proof.wasm", [path.join(HERE, "dist/proof.wasm"), "application/wasm"]],
     ]);

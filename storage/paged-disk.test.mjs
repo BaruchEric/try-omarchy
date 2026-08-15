@@ -11,6 +11,7 @@ import {
   qemuPagedDiskArguments,
   validatePagedDiskDescriptor,
 } from "./paged-disk.mjs";
+import { DEFAULT_MAX_OVERLAY_BYTES } from "./bounded-overlay.mjs";
 
 const ORIGIN = "https://demo.example";
 const URL = `${ORIGIN}/omarchy/releases/f0020448/rootfs.ext4`;
@@ -532,5 +533,29 @@ test("preparePagedDisk returns the exact disposable QEMU integration", async () 
   ]);
   assert.deepEqual(qemuPagedDiskArguments(), prepared.qemuArguments);
   assert.equal(typeof prepared.preRun, "function");
+  assert.equal(typeof prepared.overlayPreRun, "function");
+  assert.equal(prepared.overlayPreRun.maxBytes, DEFAULT_MAX_OVERLAY_BYTES);
+  assert.equal(prepared.overlaySnapshot().installed, false);
   assert.equal(prepared.preflight.unRangedGetCount, 0);
+});
+
+test("preparePagedDisk accepts only a hard-capped overlay configuration", async () => {
+  const prepared = await preparePagedDisk(descriptor(), {
+    origin: ORIGIN,
+    fetch: successfulFetch(),
+    scope: fakeXhrScope(new Uint8Array(BYTE_LENGTH), []),
+    maxOverlayBytes: 8 * 1024 * 1024,
+  });
+  assert.equal(prepared.overlayPreRun.maxBytes, 8 * 1024 * 1024);
+  const requests = [];
+  await assert.rejects(
+    preparePagedDisk(descriptor(), {
+      origin: ORIGIN,
+      fetch: successfulFetch(requests),
+      scope: fakeXhrScope(new Uint8Array(BYTE_LENGTH), []),
+      maxOverlayBytes: 129 * 1024 * 1024,
+    }),
+    /maxBytes must be a positive integer/,
+  );
+  assert.deepEqual(requests, [], "invalid overlay limits fail before rootfs network access");
 });

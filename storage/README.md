@@ -19,8 +19,12 @@ The adapter has two deliberately separate phases:
    disk read performs cache work once per chunk rather than once per byte.
 
 The base node has no write permission, and its write/allocate stream operations
-throw `EROFS`. QEMU must use `-snapshot`; QEMU's temporary overlay provides
-guest-visible writes while the HTTP base remains immutable.
+throw `EROFS`. QEMU uses `-snapshot`; `bounded-overlay.mjs` guards the temporary
+qcow2 overlay that QEMU creates in Emscripten MEMFS. The guard defaults to a
+64 MiB backing-capacity quota, is hard-capped at 128 MiB, and returns `ENOSPC`
+before any write, allocation, truncate, or `msync` can grow MEMFS beyond that
+quota. Guest-visible writes remain disposable while the HTTP base remains
+immutable.
 
 ## Exact runtime integration
 
@@ -48,18 +52,28 @@ const disk = await preparePagedDisk({
   scope: self,
   origin: self.location.origin,
   onRequest: (request) => postMessage({ type: "disk-request", request }),
+  onOverlayLimit: (event) => postMessage({ type: "overlay-limit", event }),
 });
 
 const moduleOptions = {
   // The HTML canvas is transferred exactly once to this outer Worker.
   canvas: offscreenCanvasFromWindow,
   arguments: [...baseQemuArguments, ...disk.qemuArguments],
-  preRun: [disk.preRun],
+  // Mount bounded assets first, then guard the empty temp directories, then
+  // mount the immutable paged base. All hooks run before QEMU main.
+  preRun: [mountBoundedAssetsPreRun, disk.overlayPreRun, disk.preRun],
   // locateFile/print/printErr/onGuestFrame are omitted here for brevity.
 };
 
 await createQemu(moduleOptions);
 ```
+
+`disk.overlaySnapshot()` exposes additive `allocatedBytes`, `usedBytes`,
+`peakAllocatedBytes`, file counts, and rejected-operation counters. The first
+overflow also invokes `onOverlayLimit` with deterministic
+`OVERLAY_QUOTA_EXCEEDED` details. The handler should make the browser session
+fail visibly; the filesystem operation independently returns `ENOSPC`, so a
+missing UI handler cannot bypass the memory cap.
 
 `disk.qemuArguments` is exactly:
 
@@ -109,6 +123,13 @@ used by the app; rejecting it at the rootfs route is a useful deployment guard.
 - The adapter intentionally relies on the `LazyUint8Array` shape emitted by
   pinned Emscripten 3.1.50. Its tests must run again before any Emscripten
   upgrade.
+- The overlay guard likewise pins Emscripten 3.1.50 MEMFS internals: direct
+  temp-directory `mknod`, per-node `stream_ops` (`write`, `allocate`, `msync`),
+  `node_ops.setattr`, `usedBytes`, typed-array `contents`, and the exact
+  `expandFileStorage` growth rule. It guards both `/tmp` and `/var/tmp`, starts
+  only when both are empty, rejects moving a guarded file elsewhere, and keeps
+  an unlinked-but-open qcow2 file charged until close. An incompatible shape
+  aborts before QEMU main rather than running without a cap.
 - In the deterministic 1 MiB bulk-read regression (64 KiB test chunks), the
   pinned reader's 1,048,576 lazy getter calls are replaced by 16 chunk copies
   and 16 LRU touches. There are zero byte-wise lazy getter calls on the stream
@@ -116,12 +137,14 @@ used by the app; rejecting it at the rootfs route is a useful deployment guard.
   one chunk copy and one LRU touch.
 - Synchronous XHR is valid in a dedicated Worker but unavailable in service
   workers and rejected here on `Window`.
-- The clean cache defaults to and is capped at 128 MiB. The production QEMU
-  build reserves a fixed 2,300 MiB Wasm heap, so heap plus the maximum clean
-  cache is 2,428 MiB and leaves 132 MiB inside the 2,560 MiB process budget for
-  Worker, graphics, and browser overhead. Lower cache values can increase
-  repeated range traffic. The cache never grows to the full image merely
-  because the image is large.
+- The clean cache defaults to and is capped at 128 MiB. The overlay defaults to
+  64 MiB and cannot be configured above 128 MiB. With the current fixed
+  2,300 MiB Wasm heap, the two defaults total 2,492 MiB and leave 68 MiB inside
+  the 2,560 MiB process budget for Worker, graphics, and browser overhead. Any
+  overlay A/B above 64 MiB therefore requires reducing the Wasm heap and/or
+  clean cache first. Lower clean-cache values can increase repeated range
+  traffic. Neither cache nor overlay can grow to the full base image merely
+  because that image is large.
 - The browser proof uses a small real Emscripten binary. A release acceptance
   run must additionally inspect production request logs while the authentic
   guest boots and confirm zero un-ranged `rootfs.ext4` GETs.

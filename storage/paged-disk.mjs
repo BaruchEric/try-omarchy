@@ -1,3 +1,8 @@
+import {
+  createBoundedOverlayPreRun,
+  DEFAULT_MAX_OVERLAY_BYTES,
+} from "./bounded-overlay.mjs";
+
 const TICKET = Symbol("omarchy.paged-disk.preflight");
 
 export const PAGED_DISK_SCHEMA_VERSION = 1;
@@ -635,13 +640,19 @@ export function qemuPagedDiskArguments(path = DEFAULT_GUEST_DISK_PATH) {
 
 /** Prepare the descriptor and return the exact hook/argument integration. */
 export async function preparePagedDisk(input, options = {}) {
+  const overlayPreRun = createBoundedOverlayPreRun({
+    maxBytes: options.maxOverlayBytes ?? DEFAULT_MAX_OVERLAY_BYTES,
+    onLimit: options.onOverlayLimit,
+  });
   const ticket = await preflightPagedDisk(input, options);
   const preRun = createPagedDiskPreRun(ticket, options);
   return Object.freeze({
     descriptor: ticket.descriptor,
     preflight: ticket.audit,
     preRun,
+    overlayPreRun,
     qemuArguments: qemuPagedDiskArguments(ticket.descriptor.path),
     snapshot: preRun.snapshot,
+    overlaySnapshot: overlayPreRun.snapshot,
   });
 }

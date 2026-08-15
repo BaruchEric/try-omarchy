@@ -12,6 +12,10 @@ test("proof server logs bounded ranges and rejects a whole-rootfs GET", async (t
   assert.equal(head.headers.get("accept-ranges"), "bytes");
   assert.equal(head.headers.get("etag"), proof.metadata.etag);
 
+  const overlayModule = await fetch(`${proof.url}bounded-overlay.mjs`);
+  assert.equal(overlayModule.status, 200);
+  assert.match(await overlayModule.text(), /createBoundedOverlayPreRun/);
+
   const range = await fetch(`${proof.url}rootfs.ext4`, {
     headers: { Range: "bytes=1048576-2097151", "If-Match": proof.metadata.etag },
   });
