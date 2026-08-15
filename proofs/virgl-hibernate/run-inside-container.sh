@@ -359,7 +359,7 @@ Xvfb ":$display_number" -screen 0 1600x900x24 -fbdir "$xvfb_fbdir" \
   >"$evidence_dir/xvfb.log" 2>&1 &
 xvfb_pid=$!
 export DISPLAY=":$display_number"
-qemu_launch=(env SDL_VIDEO_X11_WINDOW_VISUALID=0x21 "$qemu_bin")
+qemu_launch=(env SDL_VIDEO_X11_WINDOW_VISUALID=0x3b7 "$qemu_bin")
 for _attempt in $(seq 1 120); do
   [[ -S "/tmp/.X11-unix/X$display_number" && -f $xvfb_framebuffer ]] && break
   kill -0 "$xvfb_pid" 2>/dev/null || fail "Xvfb exited before its display was ready"

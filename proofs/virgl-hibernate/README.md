@@ -26,9 +26,9 @@ The native producer uses `sdl,gl=on,show-cursor=on,full-screen=on`; the browser 
 `sdl,gl=es,show-cursor=on`. The manifest binds these separately as
 `producerMachine` and `runtimeMachine`. Every other machine field and both
 ordered block records must match. Native evidence additionally pins
-`SDL_VIDEO_X11_WINDOW_VISUALID=0x21`, the image's 24-bit TrueColor GLX visual,
-so Xvfb's frozen framebuffer remains a self-contained RGB capture instead of
-a mutable DirectColor colormap reference.
+`SDL_VIDEO_X11_WINDOW_VISUALID=0x3b7`, the image's 24-bit double-buffered
+TrueColor GLX visual that supports QEMU's shared OpenGL 4.5 core context. This
+keeps fullscreen Xvfb capture self-contained without DirectColor colormaps.
 
 The derived initramfs omits `kms`, removes `virtio_gpu` from early modules,
 and blacklists it during the new-kernel resume phase. A pre-desktop oneshot

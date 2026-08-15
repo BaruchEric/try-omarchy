@@ -323,7 +323,6 @@ test("source and fresh target use exact ordered device topology without migratio
   for (const token of [
     "pc-q35-8.2", "qemu64", "1024M", "tcg,tb-size=128,thread=multi",
     "2,sockets=1,cores=2,threads=1", "sdl,gl=on,show-cursor=on,full-screen=on",
-    "SDL_VIDEO_X11_WINDOW_VISUALID=0x21",
     "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
     "ignore_loglevel hibernate.compressor=lzo",
     "resume=UUID=$swap_uuid", "omarchy.hibernate_swap_uuid=$swap_uuid",
@@ -395,8 +394,8 @@ test("VirGL frames use frozen stable Xvfb XWD captures and keep QMP only for con
   ]) assert.ok(runner.includes(token) || validator.includes(token), `Xvfb capture is missing ${token}`);
   assert.match(
     runner,
-    /qemu_launch=\(env SDL_VIDEO_X11_WINDOW_VISUALID=0x21 "\$qemu_bin"\)/,
-    "native QEMU must pin Xvfb's exact TrueColor GLX visual",
+    /qemu_launch=\(env SDL_VIDEO_X11_WINDOW_VISUALID=0x3b7 "\$qemu_bin"\)/,
+    "native QEMU must pin the proven TrueColor shared-core GLX visual",
   );
   assert.equal(occurrences(runner, '"${qemu_launch[@]}"'), 4,
     "the recorded and executed source/target commands must share the pinned visual environment");
