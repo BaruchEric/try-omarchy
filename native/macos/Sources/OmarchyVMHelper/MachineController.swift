@@ -120,7 +120,10 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
         serialPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            Task { @MainActor in self?.consumeSerial(data) }
+            // FileHandle can split one large guest report across many reads.
+            // DispatchQueue.main preserves callback submission order, whereas
+            // independent unstructured Tasks are not an ordering contract.
+            DispatchQueue.main.async { self?.consumeSerial(data) }
             BestEffortOutput.write(data, to: STDOUT_FILENO)
         }
     }
@@ -130,8 +133,12 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
         while let newline = serialBuffer.firstIndex(of: "\n") {
             let line = String(serialBuffer[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
             serialBuffer.removeSubrange(...newline)
-            if GuestReport.authentic(line: line, spec: bundle.spec) {
-                scheduleResumeCapture()
+            if line.hasPrefix(GuestReport.prefix) {
+                if GuestReport.authentic(line: line, spec: bundle.spec) {
+                    scheduleResumeCapture()
+                } else {
+                    fputs("[native] Rejected malformed ARM desktop report\n", stderr)
+                }
             }
         }
         if serialBuffer.utf8.count > 512 * 1024 {
