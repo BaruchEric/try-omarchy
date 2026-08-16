@@ -124,7 +124,6 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
             // DispatchQueue.main preserves callback submission order, whereas
             // independent unstructured Tasks are not an ordering contract.
             DispatchQueue.main.async { self?.consumeSerial(data) }
-            BestEffortOutput.write(data, to: STDOUT_FILENO)
         }
     }
 
@@ -134,11 +133,14 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
             let line = String(serialBuffer[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
             serialBuffer.removeSubrange(...newline)
             if line.hasPrefix(GuestReport.prefix) {
-                if GuestReport.authentic(line: line, spec: bundle.spec) {
-                    scheduleResumeCapture()
+                if let reason = GuestReport.rejectionReason(line: line, spec: bundle.spec) {
+                    fputs("[native] Rejected malformed ARM desktop report (\(reason))\n", stderr)
                 } else {
-                    fputs("[native] Rejected malformed ARM desktop report\n", stderr)
+                    scheduleResumeCapture()
                 }
+            } else if !line.isEmpty {
+                let bounded = String(line.prefix(8 * 1024)) + "\n"
+                BestEffortOutput.write(Data(bounded.utf8), to: STDOUT_FILENO)
             }
         }
         if serialBuffer.utf8.count > 512 * 1024 {

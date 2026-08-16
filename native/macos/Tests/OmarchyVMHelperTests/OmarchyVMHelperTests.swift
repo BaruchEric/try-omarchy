@@ -213,6 +213,7 @@ struct GuestReportTests {
         let data = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
         let line = GuestReport.prefix + String(decoding: data, as: UTF8.self)
         #expect(GuestReport.authentic(line: line, spec: spec))
+        #expect(GuestReport.rejectionReason(line: line, spec: spec) == nil)
 
         var wrong = report
         var system = wrong["system"] as! [String: Any]
@@ -223,6 +224,10 @@ struct GuestReportTests {
             line: GuestReport.prefix + String(decoding: wrongData, as: UTF8.self),
             spec: spec
         ))
+        #expect(GuestReport.rejectionReason(
+            line: GuestReport.prefix + String(decoding: wrongData, as: UTF8.self),
+            spec: spec
+        ) == "system")
 
         var replay = report
         replay["components"] = [
