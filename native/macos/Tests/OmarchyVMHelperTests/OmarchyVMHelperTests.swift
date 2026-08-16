@@ -252,3 +252,163 @@ func capabilityReport() {
     #expect(report.virtualizationAvailable == report.supportsHostBoundResume)
     #expect(report.guestArchitectures == (report.virtualizationAvailable ? ["aarch64"] : []))
 }
+
+@Suite("Loopback helper API")
+struct LocalAPITests {
+    private let origin = "http://localhost:3000"
+    private let challenge = String(repeating: "e", count: 64)
+
+    @Test("parses one bounded HTTP request and rejects duplicate headers")
+    func parsesBoundedRequest() throws {
+        let request = try LocalHTTPRequest.parse(Data(
+            "GET /v1/capabilities?challenge=\(challenge) HTTP/1.1\r\nOrigin: \(origin)\r\n\r\n".utf8
+        ))
+        #expect(request.method == "GET")
+        #expect(request.headers["origin"] == origin)
+        #expect(throws: HelperError.self) {
+            try LocalHTTPRequest.parse(Data(
+                "GET / HTTP/1.1\r\nOrigin: a\r\norigin: b\r\n\r\n".utf8
+            ))
+        }
+        #expect(throws: HelperError.self) {
+            try LocalHTTPRequest.parse(Data(
+                "POST /v1/launch HTTP/1.1\r\nOrigin: \(origin)\r\n\r\n{}".utf8
+            ))
+        }
+    }
+
+    @Test("capability response binds origin, challenge, and exact guest")
+    func capabilityBinding() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let bundle = try GuestBundle.load(directory: fixture.root)
+        let capabilities = HelperCapabilities(
+            schemaVersion: 1,
+            kind: "omarchy-native-helper",
+            helperVersion: "0.1.0",
+            hostArchitecture: "arm64",
+            virtualizationAvailable: true,
+            guestArchitectures: ["aarch64"],
+            runtime: "apple-virtualization-framework",
+            display: "native-window",
+            supportsHostBoundResume: true
+        )
+        let response = LocalAPI.handle(
+            request(method: "GET", target: "/v1/capabilities?challenge=\(challenge)"),
+            allowedOrigin: origin,
+            bundle: bundle,
+            capabilities: capabilities,
+            launch: { Issue.record("GET must not launch"); return false }
+        )
+        #expect(response.status == 200)
+        #expect(response.headers["Access-Control-Allow-Origin"] == origin)
+        let envelope = try JSONDecoder().decode(NativeCapabilityEnvelope.self, from: response.body)
+        #expect(envelope.challenge == challenge)
+        #expect(envelope.virtualizationAvailable)
+        #expect(envelope.guest.bundleIdentity == bundle.identity)
+        #expect(envelope.guest.channel == "quattro")
+
+        let rejectedOrigin = LocalAPI.handle(
+            request(method: "GET", target: "/v1/capabilities?challenge=\(challenge)", origin: "https://evil.example"),
+            allowedOrigin: origin,
+            bundle: bundle,
+            capabilities: capabilities,
+            launch: { false }
+        )
+        #expect(rejectedOrigin.status == 403)
+        #expect(rejectedOrigin.headers["Access-Control-Allow-Origin"] == nil)
+
+        let stale = LocalAPI.handle(
+            request(method: "GET", target: "/v1/capabilities?challenge=short"),
+            allowedOrigin: origin,
+            bundle: bundle,
+            capabilities: capabilities,
+            launch: { false }
+        )
+        #expect(stale.status == 400)
+    }
+
+    @Test("launch requires exact JSON and reports one accepted native window")
+    func launchContract() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let bundle = try GuestBundle.load(directory: fixture.root)
+        var launches = 0
+        let body = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "challenge": challenge,
+        ], options: [.sortedKeys])
+        let accepted = LocalAPI.handle(
+            request(method: "POST", target: "/v1/launch", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { launches += 1; return true }
+        )
+        #expect(accepted.status == 202)
+        #expect(launches == 1)
+        let envelope = try JSONDecoder().decode(NativeLaunchEnvelope.self, from: accepted.body)
+        #expect(envelope.accepted)
+        #expect(envelope.challenge == challenge)
+        #expect(envelope.bundleIdentity == bundle.identity)
+
+        let hostileBody = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "challenge": challenge,
+            "command": "arbitrary",
+        ], options: [.sortedKeys])
+        let hostile = LocalAPI.handle(
+            request(method: "POST", target: "/v1/launch", body: hostileBody),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { Issue.record("hostile POST must not launch"); return true }
+        )
+        #expect(hostile.status == 400)
+
+        let conflict = LocalAPI.handle(
+            request(method: "POST", target: "/v1/launch", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { false }
+        )
+        #expect(conflict.status == 409)
+    }
+
+    @Test("preflight is exact and credential-free")
+    func preflight() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let bundle = try GuestBundle.load(directory: fixture.root)
+        let response = LocalAPI.handle(
+            LocalHTTPRequest(
+                method: "OPTIONS",
+                target: "/v1/launch",
+                headers: [
+                    "origin": origin,
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "content-type",
+                ],
+                body: Data()
+            ),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { false }
+        )
+        #expect(response.status == 204)
+        #expect(response.headers["Access-Control-Allow-Origin"] == origin)
+        #expect(response.headers["Access-Control-Allow-Credentials"] == nil)
+    }
+
+    private func request(
+        method: String,
+        target: String,
+        origin: String? = nil,
+        body: Data = Data()
+    ) -> LocalHTTPRequest {
+        var headers = ["origin": origin ?? self.origin]
+        if method == "POST" { headers["content-type"] = "application/json" }
+        return LocalHTTPRequest(method: method, target: target, headers: headers, body: body)
+    }
+}

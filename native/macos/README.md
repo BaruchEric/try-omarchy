@@ -31,6 +31,16 @@ Inspect capabilities and verify the complete guest bundle before launching:
 .build/release/omarchy-vm-helper --run ../../guest/dist-aarch64
 ```
 
+To let the local demo page select the native runtime automatically, keep the
+signed helper running with the exact page origin. The service binds only IPv4
+loopback, rejects every other `Origin`, echoes a fresh 256-bit browser
+challenge, and launches at most one native VM child at a time:
+
+```bash
+.build/release/omarchy-vm-helper --serve ../../guest/dist-aarch64 \
+  --allowed-origin http://localhost:3000
+```
+
 Use `--no-resume` only for a deliberate cold-boot proof. Save states are tied by
 Virtualization.framework to the Mac that created them and are never distributable
 release artifacts.

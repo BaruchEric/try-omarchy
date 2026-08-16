@@ -98,3 +98,36 @@ struct HelperCapabilities: Codable, Equatable {
     let display: String
     let supportsHostBoundResume: Bool
 }
+
+struct NativeGuestIdentity: Codable, Equatable {
+    let architecture: String
+    let channel: String
+    let repository: String
+    let commit: String
+    let version: String
+    let treeSha256: String
+    let bundleIdentity: String
+}
+
+struct NativeCapabilityEnvelope: Codable, Equatable {
+    let schemaVersion: Int
+    let kind: String
+    let helperVersion: String
+    let challenge: String
+    let hostArchitecture: String
+    let virtualizationAvailable: Bool
+    let guestArchitectures: [String]
+    let runtime: String
+    let display: String
+    let supportsHostBoundResume: Bool
+    let guest: NativeGuestIdentity
+}
+
+struct NativeLaunchEnvelope: Codable, Equatable {
+    let schemaVersion: Int
+    let accepted: Bool
+    let challenge: String
+    let bundleIdentity: String
+    let architecture: String
+    let display: String
+}
