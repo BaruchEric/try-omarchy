@@ -389,6 +389,7 @@ struct LocalAPITests {
                     "origin": origin,
                     "access-control-request-method": "POST",
                     "access-control-request-headers": "content-type",
+                    "access-control-request-private-network": "true",
                 ],
                 body: Data()
             ),
@@ -398,7 +399,26 @@ struct LocalAPITests {
         )
         #expect(response.status == 204)
         #expect(response.headers["Access-Control-Allow-Origin"] == origin)
+        #expect(response.headers["Access-Control-Allow-Private-Network"] == "true")
         #expect(response.headers["Access-Control-Allow-Credentials"] == nil)
+
+        let getResponse = LocalAPI.handle(
+            LocalHTTPRequest(
+                method: "OPTIONS",
+                target: "/v1/capabilities?challenge=\(challenge)",
+                headers: [
+                    "origin": origin,
+                    "access-control-request-method": "GET",
+                    "access-control-request-private-network": "true",
+                ],
+                body: Data()
+            ),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { false }
+        )
+        #expect(getResponse.status == 204)
+        #expect(getResponse.headers["Access-Control-Allow-Private-Network"] == "true")
     }
 
     private func request(

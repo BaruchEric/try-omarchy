@@ -89,7 +89,7 @@ enum LocalAPI {
         guard request.headers["origin"] == allowedOrigin else {
             return response(status: 403, reason: "Forbidden", body: ["error": "origin rejected"])
         }
-        let cors = [
+        var cors = [
             "Access-Control-Allow-Origin": allowedOrigin,
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type",
@@ -97,11 +97,19 @@ enum LocalAPI {
             "Content-Type": "application/json",
             "Vary": "Origin",
         ]
+        if request.headers["access-control-request-private-network"] == "true" {
+            cors["Access-Control-Allow-Private-Network"] = "true"
+        }
 
         if request.method == "OPTIONS" {
-            guard request.target == launchPath,
-                  request.headers["access-control-request-method"] == "POST",
-                  request.headers["access-control-request-headers"]?.lowercased() == "content-type" else {
+            let requestedMethod = request.headers["access-control-request-method"]
+            let capabilityPreflight = requestedMethod == "GET"
+                && URLComponents(string: "http://loopback\(request.target)")?.path == capabilityPath
+                && request.headers["access-control-request-headers"] == nil
+            let launchPreflight = requestedMethod == "POST"
+                && request.target == launchPath
+                && request.headers["access-control-request-headers"]?.lowercased() == "content-type"
+            guard capabilityPreflight || launchPreflight else {
                 return response(status: 403, reason: "Forbidden", headers: cors, body: ["error": "preflight rejected"])
             }
             return LocalHTTPResponse(status: 204, reason: "No Content", headers: cors, body: Data())
