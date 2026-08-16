@@ -18,10 +18,13 @@ import {
   createBrowserDesktopState,
   KEYBINDINGS,
   ROOT_MENU,
-  runBrowserEditionCommand,
   summarizeFrameCadence,
   THEMES,
 } from "./browser-state.mjs";
+import {
+  loadQuattroUserspace,
+  QUATTRO_USERSPACE_SHA256,
+} from "./quattro-userspace.mjs";
 import styles from "./QuattroBrowser.module.css";
 
 type AppId = keyof typeof APP_DEFINITIONS;
@@ -520,14 +523,49 @@ function Terminal({ theme, onEffect }: { theme: ThemeId; onEffect: (effect: stri
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<string[]>([
     "Omarchy Quattro Browser Edition",
-    "Type 'help' for available commands. This is the client-side userspace preview.",
+    "Loading the hash-verified Quattro Wasm userspace…",
     "",
   ]);
+  const [userspace, setUserspace] = useState<Awaited<ReturnType<typeof loadQuattroUserspace>> | null>(null);
+  const [userspaceError, setUserspaceError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadQuattroUserspace()
+      .then((loaded) => {
+        if (cancelled) return;
+        setUserspace(loaded);
+        setHistory([
+          "Omarchy Quattro Browser Edition",
+          `Verified Wasm userspace ${loaded.digest.slice(0, 12)}… (${QUATTRO_USERSPACE_SHA256.slice(0, 8)})`,
+          "Type 'help' for available commands.",
+          "",
+        ]);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const message = error instanceof Error ? error.message : "userspace failed to load";
+        setUserspaceError(message);
+        setHistory((lines) => [...lines, `[userspace error] ${message}`]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const result = runBrowserEditionCommand(input, { theme });
+    if (!userspace) {
+      setHistory((lines) => [
+        ...lines,
+        `omarchy@browser ~ $ ${input}`,
+        userspaceError || "userspace is still loading",
+      ]);
+      setInput("");
+      return;
+    }
+    const result = userspace.execute(input, { theme });
     if (result.effect === "clear") setHistory([]);
     else setHistory((lines) => [...lines, `omarchy@browser ~ $ ${input}`, ...result.output]);
     setInput("");
@@ -549,6 +587,7 @@ function Terminal({ theme, onEffect }: { theme: ThemeId; onEffect: (effect: stri
           value={input}
           onChange={(event) => setInput(event.target.value)}
           aria-label="Terminal command"
+          disabled={Boolean(userspaceError)}
         />
         <button type="submit" aria-label="Run terminal command">↵</button>
       </form>

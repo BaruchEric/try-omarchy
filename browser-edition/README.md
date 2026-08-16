@@ -44,3 +44,23 @@ node browser-edition/generate-source-pack.mjs --check
 The generated module is committed so production builds do not need a Git
 checkout or network access. Regeneration fails unless the source checkout is
 at the exact pinned commit.
+
+## Client-side userspace
+
+The terminal does not proxy commands to a server and does not use the legacy
+QEMU guest. `userspace/` compiles a small Rust command environment directly to
+`wasm32-unknown-unknown`. The 39 KB module is served as a static asset and its
+hard-coded SHA-256 is verified with Web Crypto before WebAssembly compilation.
+It owns the Browser Edition command dispatch and can request only allowlisted
+desktop effects such as opening an app, showing the menu, or applying one of
+the source-derived themes.
+
+```bash
+browser-edition/build-userspace.sh
+node --test tests/browser-edition-userspace.test.mjs
+```
+
+This userspace is deliberately not described as an Arch kernel or a Hyprland
+process. It is the portable execution layer of the Quattro-derived browser
+distribution; additional commands and persistent files will be added here
+without reintroducing full-machine emulation.
