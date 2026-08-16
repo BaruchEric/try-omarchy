@@ -109,6 +109,11 @@ if [[ -n "$webgl_build" ]]; then
 fi
 
 extra_ldflags="-sEXPORTED_RUNTIME_METHODS=FS,getTempRet0,setTempRet0,addFunction,removeFunction --js-library=$runtime_dir/toolchain/worker-screen-library.js"
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  # QEMU's Meson graph supplies its own default pool at the final link. Repeat
+  # the ARM-specific value as a linker setting so it wins deterministically.
+  extra_ldflags+=" -sPTHREAD_POOL_SIZE=8"
+fi
 if [[ -n "$webgl_build" ]]; then
   : # Final-emulator-only undefined handling is pinned in QEMU's Meson graph.
 fi

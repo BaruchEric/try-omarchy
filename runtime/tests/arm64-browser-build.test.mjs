@@ -29,6 +29,7 @@ test("ARM64 browser experiment is isolated and uses the QEMU virt machine", asyn
   assert.match(containerSource, /qemu_target=aarch64-softmmu/);
   assert.match(containerSource, /qemu_executable=qemu-system-aarch64/);
   assert.match(containerSource, /-sPTHREAD_POOL_SIZE=8/);
+  assert.match(containerSource, /extra_ldflags\+=" -sPTHREAD_POOL_SIZE=8"/);
   assert.ok(
     patcherSource.includes('/wasmBinaryFile="(qemu-system-[a-z0-9_]+\\.wasm)"/'),
   );
