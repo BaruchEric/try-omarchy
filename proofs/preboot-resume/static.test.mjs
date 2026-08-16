@@ -63,8 +63,8 @@ test("checkpoint binds exact canonical guest hashes and relative raw backing", a
     readFile(new URL("validate.mjs", proof), "utf8"),
   ]);
   for (const digest of [
-    "d5f6e2eebd8ce80abf355d8d6f67d52c978c603cc253466e29fb064eab792c28",
-    "ff89f566d58841bcb8fdb9c8b486d162dbafa2223a38a150c11337f52de52d33",
+    "3acfd08df3e4f4e8338788c304822b1f255b62a81893ab0381e0e15636e826f0",
+    "e1733e3f4f5120cd8a5ce792d115ffbe371468d79712c729efaec81266f793cc",
     "771a12039baff3cf5034442496d0f47e345c2e3e394b49f6c30ed8d9753d6b38",
   ]) assert.ok(script.includes(digest) && validator.includes(digest));
   assert.match(script, /qemu_img" create -q -f qcow2 -F raw -b rootfs\.ext4 source-overlay\.qcow2/);
