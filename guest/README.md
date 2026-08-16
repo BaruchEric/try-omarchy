@@ -6,16 +6,15 @@ It is not an HTML recreation of Omarchy. The installed compositor,
 desktop shell, commands, configuration, themes, and applications come from the
 pinned Basecamp Omarchy source and Arch/Omarchy packages.
 
-The proven x86 pin is Omarchy `4.0.0.alpha` at commit
-`f0020448ca87329199de7cb12f2015ebc4a3e5e7`. `spec.json` also pins its git tree,
-the normalized 1,615-file SHA-256, the complete 579-package transaction, the
-virtual hardware contract, and the selected authentic themes.
+Both products pin Omarchy Quattro `4.0.0.alpha` at commit
+`7488eaded43de68ff9d2d7e4bf50cd48e112eb0f`, the same git tree, and the same
+normalized source digest. Each architecture keeps its own complete package
+transaction, virtual hardware contract, filesystem identity, and artifact set.
 
-`spec.aarch64.json` is the separate native-virtualization product. It pins the
-Quattro branch at `7488eaded43de68ff9d2d7e4bf50cd48e112eb0f`, its normalized
-1,622-file SHA-256, the official Omarchy ARM package-builder commit, the Arch
-Linux ARM packaging commit, and a 573-package ARM transaction. Updating ARM
-never silently changes the already-attested x86 fallback.
+`spec.aarch64.json` is the separate native-virtualization product. It also pins
+the official Omarchy ARM package-builder commit, the Arch Linux ARM packaging
+commit, and a 573-package ARM transaction. Updating one architecture never
+silently changes the other architecture's already-attested artifact bundle.
 
 ## What changes for the web demo
 

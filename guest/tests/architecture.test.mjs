@@ -32,7 +32,9 @@ test("x86 and ARM specs are immutable, distinct Quattro products", () => {
 
   assert.equal(x86.image.architecture, "x86_64");
   assert.equal(arm.image.architecture, "aarch64");
+  assert.equal(x86.upstream.channel, "quattro");
   assert.equal(arm.upstream.channel, "quattro");
+  assert.deepEqual(x86.upstream, arm.upstream);
   assert.equal(arm.upstream.version, "4.0.0.alpha");
   assert.match(arm.upstream.commit, /^[0-9a-f]{40}$/);
   assert.match(arm.upstream.tree, /^[0-9a-f]{40}$/);
