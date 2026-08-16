@@ -12,7 +12,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     private let workingDirectory: URL
     private let workingDiskURL: URL
     private let serialPipe = Pipe()
-    private var serialBuffer = ""
+    private let serialMonitor: GuestSerialMonitor
     private var saveScheduled = false
     private var virtualMachine: VZVirtualMachine?
     private var window: NSWindow?
@@ -31,6 +31,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
             displayWidth: plan.width,
             displayHeight: plan.height
         )
+        self.serialMonitor = GuestSerialMonitor(spec: bundle.spec)
         self.workingDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("omarchy-native-\(UUID().uuidString)", isDirectory: true)
         self.workingDiskURL = workingDirectory.appendingPathComponent("rootfs.ext4")
@@ -117,34 +118,27 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     }
 
     private func configureSerialReader() {
-        serialPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        let monitor = serialMonitor
+        serialPipe.fileHandleForReading.readabilityHandler = { [weak self, monitor] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            // FileHandle can split one large guest report across many reads.
-            // DispatchQueue.main preserves callback submission order, whereas
-            // independent unstructured Tasks are not an ordering contract.
-            DispatchQueue.main.async { self?.consumeSerial(data) }
-        }
-    }
-
-    private func consumeSerial(_ data: Data) {
-        serialBuffer += String(decoding: data, as: UTF8.self)
-        while let newline = serialBuffer.firstIndex(of: "\n") {
-            let line = String(serialBuffer[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
-            serialBuffer.removeSubrange(...newline)
-            if line.hasPrefix(GuestReport.prefix) {
-                if let reason = GuestReport.rejectionReason(line: line, spec: bundle.spec) {
+            for event in monitor.consume(data) {
+                switch event {
+                case .diagnostic(let line):
+                    BestEffortOutput.write(Data((line + "\n").utf8), to: STDOUT_FILENO)
+                case .rejectedReport(let reason):
                     fputs("[native] Rejected malformed ARM desktop report (\(reason))\n", stderr)
-                } else {
-                    scheduleResumeCapture()
+                case .authenticReport:
+                    // NSApplication.run owns the main actor for the lifetime
+                    // of the window. A run-loop block reaches the VM's main
+                    // queue without depending on unstructured Task progress.
+                    RunLoop.main.perform(inModes: [.common]) {
+                        MainActor.assumeIsolated {
+                            self?.scheduleResumeCapture()
+                        }
+                    }
                 }
-            } else if !line.isEmpty {
-                let bounded = String(line.prefix(8 * 1024)) + "\n"
-                BestEffortOutput.write(Data(bounded.utf8), to: STDOUT_FILENO)
             }
-        }
-        if serialBuffer.utf8.count > 512 * 1024 {
-            serialBuffer = String(serialBuffer.suffix(64 * 1024))
         }
     }
 

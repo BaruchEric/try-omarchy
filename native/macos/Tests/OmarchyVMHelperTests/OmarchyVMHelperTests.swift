@@ -243,6 +243,62 @@ struct GuestReportTests {
     }
 }
 
+@Suite("Ordered guest serial monitor")
+struct GuestSerialMonitorTests {
+    @Test("authenticates one report split across arbitrary pipe reads")
+    func authenticatesSplitReport() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let spec = try fixture.decodeSpec()
+        let report: [String: Any] = [
+            "schemaVersion": 1,
+            "provenance": [
+                "repository": spec.upstream.repository,
+                "commit": spec.upstream.commit,
+                "version": spec.upstream.version,
+                "treeSha256": spec.upstream.treeSha256,
+            ],
+            "system": [
+                "architecture": "aarch64",
+                "distribution": "Arch Linux",
+                "sessionType": "wayland",
+            ],
+            "components": [
+                ["role": "compositor", "name": "Hyprland"],
+                ["role": "shell", "name": "quickshell"],
+            ],
+        ]
+        let payload = try JSONSerialization.data(withJSONObject: report, options: [.sortedKeys])
+        let framed = Data(("booted\n" + GuestReport.prefix).utf8) + payload + Data("\r\n".utf8)
+        let monitor = GuestSerialMonitor(spec: spec)
+        var events: [GuestSerialMonitor.Event] = []
+        var offset = 0
+        let sizes = [1, 2, 7, 3, 19, 5, 64, 11]
+        var chunk = 0
+        while offset < framed.count {
+            let size = sizes[chunk % sizes.count]
+            let end = min(offset + size, framed.count)
+            events += monitor.consume(framed.subdata(in: offset..<end))
+            offset = end
+            chunk += 1
+        }
+        #expect(offset == framed.count)
+        #expect(framed.last == 10)
+        #expect(events == [.diagnostic("booted"), .authenticReport])
+    }
+
+    @Test("rejects malformed report without retaining raw payload")
+    func rejectsMalformedReport() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let monitor = GuestSerialMonitor(spec: try fixture.decodeSpec())
+        let events = monitor.consume(Data((GuestReport.prefix + "not-json\n").utf8))
+        #expect(events == [.rejectedReport("json")])
+    }
+}
+
 @Suite("Host-bound resume state")
 struct ResumeStoreTests {
     @Test("requires exact metadata, disk, and machine state")
