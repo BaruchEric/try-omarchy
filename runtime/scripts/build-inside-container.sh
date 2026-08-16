@@ -152,6 +152,13 @@ if [[ -n "$webgl_build" ]]; then
   }
 fi
 
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  # The pinned Emscripten GLib/PCRE pkg-config metadata appends its four-worker
+  # setting after QEMU's linker flags. Normalize the generated graph so the
+  # final option remains the exact eight-worker ARM contract.
+  node "$runtime_dir/scripts/patch-arm64-pthread-pool.mjs" build.ninja
+fi
+
 emmake make -j "$jobs" "$qemu_executable"
 node "$runtime_dir/scripts/patch-generated-qemu.mjs" "$qemu_executable"
 

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+import { normalizeArm64PthreadPool } from "../scripts/patch-arm64-pthread-pool.mjs";
+
 const root = new URL("../", import.meta.url);
 
 test("ARM64 browser experiment is isolated and uses the QEMU virt machine", async () => {
@@ -30,9 +32,21 @@ test("ARM64 browser experiment is isolated and uses the QEMU virt machine", asyn
   assert.match(containerSource, /qemu_executable=qemu-system-aarch64/);
   assert.match(containerSource, /-sPTHREAD_POOL_SIZE=8/);
   assert.match(containerSource, /extra_ldflags\+=" -sPTHREAD_POOL_SIZE=8"/);
+  assert.match(containerSource, /patch-arm64-pthread-pool\.mjs/);
   assert.ok(
     patcherSource.includes('/wasmBinaryFile="(qemu-system-[a-z0-9_]+\\.wasm)"/'),
   );
+});
+
+test("ARM64 build graph cannot be downgraded by dependency link flags", () => {
+  const graph = [
+    "LINK_ARGS = -sPTHREAD_POOL_SIZE=8 libqemu.a -sPTHREAD_POOL_SIZE=4 libglib.a",
+    "LINK_ARGS = -sPTHREAD_POOL_SIZE=4 libpcre2.a",
+  ].join("\n");
+  const normalized = normalizeArm64PthreadPool(graph);
+  assert.doesNotMatch(normalized, /PTHREAD_POOL_SIZE=4/);
+  assert.equal((normalized.match(/PTHREAD_POOL_SIZE=8/g) ?? []).length, 3);
+  assert.throws(() => normalizeArm64PthreadPool("LINK_ARGS = -pthread"), /no pinned four-worker/);
 });
 
 test("x86_64 remains the default QEMU-Wasm build architecture", async () => {
