@@ -545,7 +545,7 @@ export function DemoLauncher() {
         ? "Open native Omarchy"
         : unsupported
           ? "Browser unsupported"
-          : "Start Omarchy";
+          : "Try full VM";
   const identity = nativeSelected
     ? `Omarchy ${nativeRuntime.upstream.version} · Quattro · ARM64`
     : guestReport
@@ -593,9 +593,7 @@ export function DemoLauncher() {
       <section className="hero" id="top" data-session-active={sessionStarted}>
         <div className="hero-copy">
           <p className="eyebrow">
-            {nativeSelected
-              ? "Run the real system · Apple Silicon native speed"
-              : "Run the real system · No installation"}
+            Experience Quattro · No installation
           </p>
           <h1>
             Try Omarchy
@@ -604,13 +602,17 @@ export function DemoLauncher() {
           </h1>
           <p className="lede">
             {nativeSelected
-              ? "A disposable ARM64 Quattro machine, accelerated by Apple Virtualization.framework. It opens in a native window so the desktop can run at host-class speed."
-              : "A disposable, client-side Omarchy machine. Explore the real Hyprland desktop, themes, terminal, and keyboard-driven workflow, then close the tab when you’re done."}
+              ? "Start the fast Quattro Browser Edition in this tab, or open the complete ARM64 system through the verified native helper at host-class speed."
+              : "Start with the fast, client-side Quattro Browser Edition. Explore Omarchy's menu, tiling, workspaces, themes, terminal, and keyboard-driven workflow instantly."}
           </p>
 
           <div className="actions">
+            <a className="launch-button" href="/browser">
+              <span>Start Omarchy instantly</span>
+              <span aria-hidden="true">→</span>
+            </a>
             <button
-              className="launch-button"
+              className="launch-button launch-button--secondary"
               type="button"
               onClick={handleLaunch}
               disabled={
@@ -626,8 +628,8 @@ export function DemoLauncher() {
             </button>
             <p id="launch-note">
               {nativeSelected
-                ? "Uses the verified local helper already running on this Mac."
-                : "Nothing is installed on your computer."}
+                ? "Browser Edition needs no helper. Native opens the complete system."
+                : "Browser Edition is recommended. The complete VM remains experimental."}
             </p>
           </div>
           <p className="compatibility-note" id="compatibility-note" role="status">
@@ -636,7 +638,7 @@ export function DemoLauncher() {
               : unsupported
               ? `Missing: ${describeCapabilityIssue(capabilities)}. Use a current Chromium-based browser with page isolation enabled.`
               : nativeProbeComplete
-                ? "Native helper not detected; using the x86_64 WebAssembly fallback."
+                ? "Browser Edition runs instantly on ARM and x86. The optional full x86_64 VM uses the slower WebAssembly emulator."
                 : "Checking for the Apple Silicon helper before selecting a runtime."}
           </p>
         </div>

@@ -182,6 +182,8 @@ test("server-renders the Omarchy demo launcher", async () => {
   assert.match(html, /<title>Try Omarchy — Live in your browser<\/title>/i);
   assert.match(html, /Try Omarchy/);
   assert.match(html, /Start Omarchy/);
+  assert.match(html, /href="\/browser"/);
+  assert.match(html, /Browser Edition is recommended/);
   assert.match(html, /Real x86_64 virtual machine/);
   assert.match(html, /Arch · Hyprland · Quickshell/);
   assert.match(html, /Shared memory/);

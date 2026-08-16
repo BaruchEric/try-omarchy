@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 const title = "Try Omarchy — Live in your browser";
 const description =
-  "Explore the real Omarchy desktop in a disposable, client-side virtual machine before installing it.";
+  "Experience Omarchy Quattro instantly in a fast, client-side Browser Edition, with optional native and full-VM runtimes.";
 
 function requestOrigin(requestHeaders: Headers) {
   const forwardedHost = requestHeaders.get("x-forwarded-host")?.split(",")[0];
