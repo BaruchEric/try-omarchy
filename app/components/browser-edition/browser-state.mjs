@@ -285,3 +285,23 @@ export function runBrowserEditionCommand(command, context = {}) {
   }
   return { output: [`bash: ${program}: command not available in Browser Edition`], effect: null };
 }
+
+export function summarizeFrameCadence(frameDurations, elapsedMs) {
+  const durations = frameDurations
+    .filter((duration) => Number.isFinite(duration) && duration >= 0)
+    .sort((left, right) => left - right);
+  const frames = durations.length;
+  const fps = elapsedMs > 0 ? (frames * 1000) / elapsedMs : 0;
+  const percentile = (fraction) =>
+    durations[Math.min(durations.length - 1, Math.floor(durations.length * fraction))] ?? 0;
+
+  return Object.freeze({
+    frames,
+    elapsedMs,
+    fps,
+    p50FrameMs: percentile(0.5),
+    p95FrameMs: percentile(0.95),
+    passesMinimum: fps >= 24,
+    reachesIdeal: fps >= 55,
+  });
+}

@@ -5,6 +5,7 @@ import {
   browserDesktopReducer,
   createBrowserDesktopState,
   runBrowserEditionCommand,
+  summarizeFrameCadence,
   THEMES,
 } from "../app/components/browser-edition/browser-state.mjs";
 
@@ -27,6 +28,18 @@ test("opens, focuses, moves, and closes tiled apps across workspaces", () => {
   assert.equal(state.focusedWindowId, "terminal-2");
   state = browserDesktopReducer(state, { type: "close-window" });
   assert.equal(state.windows.some((window) => window.id === "terminal-2"), false);
+});
+
+test("enforces the 24 FPS floor and recognizes the 60 FPS target band", () => {
+  const smooth = summarizeFrameCadence(Array.from({ length: 120 }, () => 16.67), 2_000);
+  assert.equal(smooth.fps, 60);
+  assert.equal(smooth.passesMinimum, true);
+  assert.equal(smooth.reachesIdeal, true);
+
+  const unacceptable = summarizeFrameCadence(Array.from({ length: 40 }, () => 50), 2_000);
+  assert.equal(unacceptable.fps, 20);
+  assert.equal(unacceptable.passesMinimum, false);
+  assert.equal(unacceptable.reachesIdeal, false);
 });
 
 test("keeps one app instance per workspace and rejects invalid actions", () => {
