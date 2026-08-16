@@ -28,3 +28,19 @@ installation is running.
 The binding and substitution rules are machine-readable in
 `source-contract.mjs`. Omarchy's copyright and MIT grant are preserved in
 `LICENSE.omarchy`.
+
+## Generated source pack
+
+The Browser Edition does not maintain a separate hand-written menu or theme
+catalog. `generate-source-pack.mjs` reads the exact pinned checkout and emits
+`generated/quattro-source-pack.mjs`, containing the official root menu, six
+shipped demo themes, source keybindings, and SHA-256 bindings for every
+authority file used by the browser shell.
+
+```bash
+node browser-edition/generate-source-pack.mjs --check
+```
+
+The generated module is committed so production builds do not need a Git
+checkout or network access. Regeneration fails unless the source checkout is
+at the exact pinned commit.

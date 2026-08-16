@@ -57,6 +57,14 @@ test("keeps one app instance per workspace and rejects invalid actions", () => {
 });
 
 test("ships exact official Quattro theme tokens", () => {
+  assert.deepEqual(Object.keys(THEMES), [
+    "catppuccin",
+    "gruvbox",
+    "matte-black",
+    "rose-pine",
+    "tokyo-night",
+    "white",
+  ]);
   assert.equal(THEMES["tokyo-night"].background, "#1a1b26");
   assert.equal(THEMES["tokyo-night"].accent, "#7aa2f7");
   assert.equal(THEMES["matte-black"].accent, "#e68e0d");

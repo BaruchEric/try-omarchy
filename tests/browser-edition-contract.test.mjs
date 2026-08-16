@@ -6,6 +6,7 @@ import {
   QUATTRO_BROWSER_IDENTITY,
   validateQuattroBrowserContract,
 } from "../browser-edition/source-contract.mjs";
+import { QUATTRO_SOURCE_PACK } from "../browser-edition/generated/quattro-source-pack.mjs";
 
 test("accepts the exact pinned Quattro Browser Edition contract", () => {
   assert.deepEqual(
@@ -52,4 +53,16 @@ test("records the official source files that define the browser experience", () 
   ]);
   assert.equal(QUATTRO_BROWSER_EXPERIENCE.authority.menu, "default/omarchy/omarchy-menu.jsonc");
   assert.equal(QUATTRO_BROWSER_EXPERIENCE.authority.theme, "themes/tokyo-night/colors.toml");
+  assert.deepEqual(QUATTRO_SOURCE_PACK.identity, {
+    repository: QUATTRO_BROWSER_IDENTITY.repository,
+    channel: QUATTRO_BROWSER_IDENTITY.channel,
+    version: QUATTRO_BROWSER_IDENTITY.version,
+    commit: QUATTRO_BROWSER_IDENTITY.commit,
+    tree: QUATTRO_BROWSER_IDENTITY.tree,
+    normalizedTreeSha256: QUATTRO_BROWSER_IDENTITY.normalizedTreeSha256,
+  });
+  assert.equal(
+    QUATTRO_SOURCE_PACK.sources[QUATTRO_BROWSER_EXPERIENCE.authority.menu],
+    "53b4599eb1f28fc115ec17a4f7ef59f727d84f2a81c0a0f45960e4b5182a2809",
+  );
 });

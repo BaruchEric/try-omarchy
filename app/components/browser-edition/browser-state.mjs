@@ -1,64 +1,15 @@
+import { QUATTRO_SOURCE_PACK } from "../../../browser-edition/generated/quattro-source-pack.mjs";
+
 export const BROWSER_EDITION_VERSION = "4.0.0.alpha-browser.1";
 
-export const THEMES = Object.freeze({
-  "tokyo-night": Object.freeze({
-    label: "Tokyo Night",
-    accent: "#7aa2f7",
-    selection: "#292e42",
-    muted: "#414868",
-    background: "#1a1b26",
-    darkBackground: "#13141c",
-    darkerBackground: "#0e0e14",
-    lighterBackground: "#24283b",
-    foreground: "#a9b1d6",
-    darkForeground: "#565f89",
-    brightForeground: "#c0caf5",
-    red: "#f7768e",
-    yellow: "#e0af68",
-    green: "#9ece6a",
-    cyan: "#449dab",
-    blue: "#7aa2f7",
-    magenta: "#ad8ee6",
-  }),
-  "matte-black": Object.freeze({
-    label: "Matte Black",
-    accent: "#e68e0d",
-    selection: "#2a2a2a",
-    muted: "#333333",
-    background: "#121212",
-    darkBackground: "#0d0d0d",
-    darkerBackground: "#090909",
-    lighterBackground: "#1e1e1e",
-    foreground: "#bebebe",
-    darkForeground: "#555555",
-    brightForeground: "#eaeaea",
-    red: "#d35f5f",
-    yellow: "#b91c1c",
-    green: "#ffc107",
-    cyan: "#bebebe",
-    blue: "#e68e0d",
-    magenta: "#d35f5f",
-  }),
-  gruvbox: Object.freeze({
-    label: "Gruvbox",
-    accent: "#7daea3",
-    selection: "#504945",
-    muted: "#665c54",
-    background: "#282828",
-    darkBackground: "#1e1e1e",
-    darkerBackground: "#161616",
-    lighterBackground: "#3c3836",
-    foreground: "#d4be98",
-    darkForeground: "#7c6f64",
-    brightForeground: "#d4be98",
-    red: "#ea6962",
-    yellow: "#d8a657",
-    green: "#a9b665",
-    cyan: "#89b482",
-    blue: "#7daea3",
-    magenta: "#d3869b",
-  }),
-});
+export const THEMES = Object.freeze(
+  Object.fromEntries(
+    Object.entries(QUATTRO_SOURCE_PACK.themes).map(([id, theme]) => [
+      id,
+      Object.freeze(theme),
+    ]),
+  ),
+);
 
 export const APP_DEFINITIONS = Object.freeze({
   welcome: Object.freeze({ title: "Welcome", icon: "OMA", kind: "welcome" }),
@@ -71,30 +22,36 @@ export const APP_DEFINITIONS = Object.freeze({
   about: Object.freeze({ title: "About Omarchy", icon: "i", kind: "about" }),
 });
 
-export const ROOT_MENU = Object.freeze([
-  Object.freeze({ id: "apps", icon: "APP", label: "Apps" }),
-  Object.freeze({ id: "learn", icon: "LRN", label: "Learn" }),
-  Object.freeze({ id: "trigger", icon: "TRG", label: "Trigger" }),
-  Object.freeze({ id: "style", icon: "STY", label: "Style" }),
-  Object.freeze({ id: "setup", icon: "SET", label: "Setup" }),
-  Object.freeze({ id: "install", icon: "PKG", label: "Install" }),
-  Object.freeze({ id: "remove", icon: "RM", label: "Remove" }),
-  Object.freeze({ id: "update", icon: "UP", label: "Update" }),
-  Object.freeze({ id: "about", icon: "i", label: "About", app: "about" }),
-  Object.freeze({ id: "system", icon: "PWR", label: "System" }),
-]);
+export const ROOT_MENU = Object.freeze(
+  QUATTRO_SOURCE_PACK.rootMenu.map((item) =>
+    Object.freeze({
+      ...item,
+      upstreamIcon: item.icon,
+      icon: item.id === "about" ? "i" : item.id.slice(0, 3).toUpperCase(),
+      ...(item.id === "about" ? { app: "about" } : {}),
+    }),
+  ),
+);
+
+const showcasedBindings = [
+  "SUPER + SPACE",
+  "SUPER + RETURN",
+  "SUPER + SHIFT + RETURN",
+  "SUPER + SHIFT + F",
+  "SUPER + SHIFT + N",
+  "SUPER + W",
+  "SUPER + LEFT",
+  "SUPER + SHIFT + CTRL + SPACE",
+];
 
 export const KEYBINDINGS = Object.freeze([
-  Object.freeze(["SUPER + SPACE", "Omarchy menu"]),
-  Object.freeze(["SUPER + RETURN", "Terminal"]),
-  Object.freeze(["SUPER + SHIFT + RETURN", "Browser"]),
-  Object.freeze(["SUPER + SHIFT + F", "File manager"]),
-  Object.freeze(["SUPER + SHIFT + N", "Editor"]),
-  Object.freeze(["SUPER + W", "Close window"]),
+  ...showcasedBindings.map((keys) => {
+    const binding = QUATTRO_SOURCE_PACK.bindings.find((candidate) => candidate.keys === keys);
+    if (!binding) throw new Error(`pinned Quattro source pack is missing ${keys}`);
+    return Object.freeze([binding.keys, binding.label]);
+  }),
   Object.freeze(["SUPER + 1–4", "Switch workspace"]),
   Object.freeze(["SUPER + SHIFT + 1–4", "Move window to workspace"]),
-  Object.freeze(["SUPER + LEFT / RIGHT", "Focus window"]),
-  Object.freeze(["SUPER + SHIFT + CTRL + SPACE", "Theme menu"]),
 ]);
 
 export function createBrowserDesktopState() {
