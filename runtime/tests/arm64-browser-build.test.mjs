@@ -20,7 +20,9 @@ test("ARM64 browser experiment is isolated and uses the QEMU virt machine", asyn
   assert.equal(manifest.qemu.architecture, "aarch64");
   assert.equal(manifest.qemu.memoryMiB, 1024);
   assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-m") + 1], "1024M");
-  assert.equal(manifest.qemu.cores, 4);
+  assert.equal(manifest.qemu.cores, 1);
+  assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1],
+    "1,sockets=1,cores=1,threads=1");
   assert.deepEqual(manifest.qemu.arguments.slice(0, 4), [
     "-machine", "virt,gic-version=3", "-cpu", "cortex-a72",
   ]);

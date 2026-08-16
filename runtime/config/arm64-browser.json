@@ -36,7 +36,7 @@
   "qemu": {
     "architecture": "aarch64",
     "memoryMiB": 1024,
-    "cores": 4,
+    "cores": 1,
     "arguments": [
       "-machine",
       "virt,gic-version=3",
@@ -47,7 +47,7 @@
       "-accel",
       "tcg,tb-size=128,thread=multi",
       "-smp",
-      "4,sockets=1,cores=4,threads=1",
+      "1,sockets=1,cores=1,threads=1",
       "-display",
       "sdl,gl=off,show-cursor=on",
       "-device",

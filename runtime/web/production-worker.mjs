@@ -169,13 +169,13 @@ export const CANONICAL_ARM64_PRODUCTION_MANIFEST = deepFreeze({
   qemu: {
     architecture: "aarch64",
     memoryMiB: 1024,
-    cores: 4,
+    cores: 1,
     arguments: [
       "-machine", "virt,gic-version=3",
       "-cpu", "cortex-a72",
       "-m", "1024M",
       "-accel", "tcg,tb-size=128,thread=multi",
-      "-smp", "4,sockets=1,cores=4,threads=1",
+      "-smp", "1,sockets=1,cores=1,threads=1",
       "-display", "sdl,gl=off,show-cursor=on",
       "-device", "virtio-gpu-pci,max_outputs=1,xres=1600,yres=900",
       "-device", "virtio-keyboard-pci",

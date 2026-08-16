@@ -860,9 +860,9 @@ test("ARM64 browser manifest is exact, isolated, and cannot be mixed with x86 as
   ]);
   assert.equal(manifest.qemu.memoryMiB, 1024);
   assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-m") + 1], "1024M");
-  assert.equal(manifest.qemu.cores, 4);
+  assert.equal(manifest.qemu.cores, 1);
   assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1],
-    "4,sockets=1,cores=4,threads=1");
+    "1,sockets=1,cores=1,threads=1");
 
   const mixed = structuredClone(manifest);
   mixed.assets.locate = {

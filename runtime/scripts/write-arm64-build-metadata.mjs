@@ -61,7 +61,7 @@ const metadata = {
     machine: "virt,gic-version=3",
     cpu: "cortex-a72",
     memoryMiB: 1024,
-    vcpus: 4,
+    vcpus: 1,
     pthreadPoolSize: 8,
   },
   toolchain: lock.toolchain,
