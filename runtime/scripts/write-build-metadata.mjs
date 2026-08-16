@@ -191,6 +191,7 @@ if (graphicsExperiment === "virgl-webgl2" || graphicsExperiment === "webgl2-pres
     "patches/qemu-wasm-virgl-webgl-link.patch",
     "patches/qemu-wasm-sdl-webgl-context.patch",
     "patches/qemu-wasm-sdl-webgl-frame-proof.patch",
+    "patches/qemu-wasm-browser-performance-hooks.patch",
     "patches/virglrenderer-webgl-platform.patch",
     "patches/virglrenderer-webgl-winsys.patch",
     "patches/virglrenderer-webgl-no-vtest.patch",

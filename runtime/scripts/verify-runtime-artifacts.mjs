@@ -488,7 +488,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       productionWorker.includes("function createBoundedOverlayPreRun") &&
       productionWorker.includes("Generated self-contained production Worker");
     sourceChecks.inputSanitizer = inputBridge.includes("sanitizeWorkerInput") &&
-      inputBridge.includes("KEY_CODE_TO_SDL_SCANCODE");
+      inputBridge.includes("KEY_CODE_TO_SDL_SCANCODE") &&
+      inputBridge.includes("dispatchSanitizedWorkerInputWithReceipt") &&
+      inputBridge.includes("receiptHandle");
     sourceChecks.nativeInputExports = [
       "_omarchy_input_key",
       "_omarchy_input_pointer",
@@ -533,6 +535,26 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       sourceChecks.webgl2Loader = Object.values(
         inspectWebgl2ArtifactPlumbing(moduleSource, wasm),
       ).every(Boolean);
+      sourceChecks.nativeBrowserPerformanceHooks = [
+        "_omarchy_performance_capture_begin",
+        "_omarchy_performance_capture_end",
+        "_omarchy_performance_scanout_events",
+        "_omarchy_performance_input_events",
+        "_omarchy_performance_dropped_events",
+        "onBrowserPerformanceScanoutCandidate",
+        "onBrowserPerformanceScanoutPresent",
+        "onBrowserPerformanceInputDelivered",
+      ].every((name) => moduleSource.includes(name));
+      sourceChecks.privateBrowserPerformanceProducer =
+        productionWorker.includes("class BrowserPerformanceTraceProducer") &&
+        productionWorker.includes("class BrowserPerformanceRuntimeController") &&
+        productionWorker.includes("NativeBrowserPerformanceSourceBridge") &&
+        productionWorker.includes("browserperformancecapture") &&
+        productionWorker.includes("normalizeBrowserPerformanceCommand") &&
+        productionWorker.includes("PERFORMANCE_INPUT_DIGEST_MISMATCH") &&
+        productionWorker.includes("qemu-virtio-input-ring") &&
+        !productionWorker.includes('action === "candidate"') &&
+        !productionWorker.includes('action === "inputdelivered"');
     }
     if (vcpus === 4) {
       sourceChecks.vcpuExperimentWorkerIdentity = productionWorker.startsWith(

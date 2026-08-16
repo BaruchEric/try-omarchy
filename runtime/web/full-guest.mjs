@@ -5,6 +5,7 @@ import {
   normalizeFullGuestDesktopProof,
   normalizeFullGuestFrame,
   normalizeFullGuestRelease,
+  verifyFullGuestBrowserPerformanceCapture,
 } from "./full-guest-evidence.mjs";
 
 const canvas = document.querySelector("#desktop");
@@ -29,6 +30,8 @@ const state = {
   guestReportOrigin: null,
   desktopProof: null,
   postProofFrame: null,
+  browserPerformanceCapture: null,
+  browserPerformanceCapturePending: false,
   ready: false,
   errors: [],
   stopped: false,
@@ -171,6 +174,37 @@ function onWorkerMessage({ data }) {
     preProofGuestFrameSequences.clear();
     canvas.dataset.desktopProof = "true";
     status.textContent = "Desktop transition and guest input acknowledged; waiting for a later live frame…";
+  } else if (data.type === "browserperformancecapture") {
+    if (!state.ready || !state.releaseIdentity || state.browserPerformanceCapture ||
+        state.browserPerformanceCapturePending) {
+      fail("The runtime emitted duplicated or out-of-order browser performance evidence.");
+      return;
+    }
+    state.browserPerformanceCapturePending = true;
+    verifyFullGuestBrowserPerformanceCapture(
+      data,
+      state.releaseIdentity.artifactManifestSha256,
+    ).then((capture) => {
+      if (state.stopped) return;
+      state.browserPerformanceCapturePending = false;
+      if (!capture) {
+        fail("The runtime emitted an invalid or unhashed browser performance capture.");
+        return;
+      }
+      state.browserPerformanceCapture = capture;
+      canvas.dataset.browserPerformanceTraceSha256 = capture.traceSha256;
+      appendSerial(`[performance] Verified sealed trace ${capture.traceSha256}.`);
+    }).catch(fail);
+  } else if (data.type === "browserperformancestate") {
+    const performance = data.performance;
+    if (!performance || typeof performance !== "object" ||
+        !["active", "sealed"].includes(performance.state)) {
+      fail("The runtime emitted an invalid browser performance state.");
+      return;
+    }
+    appendSerial(`[performance] ${performance.state}.`);
+  } else if (data.type === "browserperformanceerror") {
+    appendSerial(`[performance:error] ${data.error?.message ?? "capture rejected"}`);
   } else if (data.type === "runtimediagnostic") {
     appendSerial(`[runtime] ${data.line}`);
   } else if (data.type === "inputaccepted") {
@@ -181,6 +215,35 @@ function onWorkerMessage({ data }) {
     if (data.error?.stack) appendSerial(`[worker:stack] ${data.error.stack}`);
     fail(data.error?.message ?? "Unhandled Worker error.");
   }
+}
+
+function beginBrowserPerformance({ windowId, challengeSha256 } = {}) {
+  if (!worker || state.stopped || !state.ready) return false;
+  worker.postMessage({
+    type: "browserperformance",
+    action: "begin",
+    windowId,
+    challengeSha256,
+  });
+  return true;
+}
+
+function sendBrowserPerformanceInput({ inputId, actionDigest, event } = {}) {
+  if (!worker || state.stopped || !state.ready) return false;
+  worker.postMessage({
+    type: "browserperformance",
+    action: "input",
+    inputId,
+    actionDigest,
+    event,
+  });
+  return true;
+}
+
+function endBrowserPerformance() {
+  if (!worker || state.stopped || !state.ready) return false;
+  worker.postMessage({ type: "browserperformance", action: "end" });
+  return true;
 }
 
 function stop() {
@@ -256,5 +319,12 @@ async function start() {
 
 reset.addEventListener("click", () => location.reload());
 installInput();
-window.__omarchyFullGuest = Object.freeze({ state, stop, releaseBaseUrl: releaseBase.href });
+window.__omarchyFullGuest = Object.freeze({
+  state,
+  stop,
+  beginBrowserPerformance,
+  sendBrowserPerformanceInput,
+  endBrowserPerformance,
+  releaseBaseUrl: releaseBase.href,
+});
 start().catch(fail);

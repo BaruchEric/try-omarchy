@@ -18,6 +18,7 @@ import {
   normalizeFullGuestDesktopProof,
   normalizeFullGuestFrame,
   normalizeFullGuestRelease,
+  verifyFullGuestBrowserPerformanceCapture,
 } from "../web/full-guest-evidence.mjs";
 import {
   DESKTOP_PROOF_MAX_DOMINANT_PIXELS,
@@ -154,6 +155,12 @@ test("full-guest harness requires the production desktop-proof contract before r
   assert.match(source, /function updateReady\(\) \{\n {2}if \(state\.stopped \|\| state\.phase !== "running"\) return;/);
   assert.match(source, /function onWorkerMessage\(\{ data \}\) \{\n {2}if \(state\.stopped\) return;/);
   assert.match(source, /input event \(diagnostic only\)/);
+  assert.match(source, /verifyFullGuestBrowserPerformanceCapture/);
+  assert.match(source, /browserPerformanceCapturePending/);
+  assert.match(source, /beginBrowserPerformance/);
+  assert.match(source, /sendBrowserPerformanceInput/);
+  assert.match(source, /endBrowserPerformance/);
+  assert.equal(typeof verifyFullGuestBrowserPerformanceCapture, "function");
   assert.doesNotMatch(source, /frame\.sequence <= state\.frameSequenceAtReport/);
 });
 

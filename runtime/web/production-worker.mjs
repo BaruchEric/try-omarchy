@@ -1,7 +1,12 @@
 import {
   dispatchSanitizedWorkerInput,
+  dispatchSanitizedWorkerInputWithReceipt,
   sanitizeWorkerInput,
 } from "./worker-input.mjs";
+import {
+  createBrowserPerformanceRuntimeController,
+  normalizeBrowserPerformanceCommand,
+} from "./browser-performance-runtime.mjs";
 import {
   createPagedDiskPreRun,
   preflightPagedDisk,
@@ -2520,6 +2525,8 @@ export class OmarchyProductionWorkerHost {
   #deferredHibernationEvidence = [];
   #deferredHibernationEvidenceBytes = 0;
   #deferredHostInputs = [];
+  #browserPerformance = null;
+  #browserPerformanceCommandChain = Promise.resolve();
 
   constructor(scope = globalThis) {
     this.#scope = scope;
@@ -2623,6 +2630,23 @@ export class OmarchyProductionWorkerHost {
       const checkpointArtifacts = validateCheckpointArtifacts(runtimeManifest, artifacts);
       const hibernationCheckpoint = checkpointArtifacts !== null &&
         isHibernationCheckpoint(runtimeManifest.checkpoint);
+      const guestDescriptorArtifact = artifactAt(artifacts, "guest-manifest.json");
+      this.#browserPerformance = createBrowserPerformanceRuntimeController({
+        identity: Object.freeze({
+          artifactManifestSha256,
+          runtimeManifestSha256: runtimeManifestArtifact.sha256,
+          guestDescriptorSha256: guestDescriptorArtifact.sha256,
+          hibernateDescriptorSha256: hibernationCheckpoint
+            ? checkpointArtifacts.producerManifest.sha256
+            : null,
+        }),
+        clock: this.#scope.performance,
+        cryptoScope: this.#scope.crypto,
+        getInstance: () => this.#instance,
+        dispatchInput: dispatchSanitizedWorkerInputWithReceipt,
+        onState: (performance) => this.#post("browserperformancestate", { performance }),
+        onCapture: (capture) => this.#post("browserperformancecapture", { capture }),
+      });
       let checkpointSourceEvidence = null;
       let hibernationProducerDocument = null;
       if (checkpointArtifacts !== null) {
@@ -3020,6 +3044,7 @@ export class OmarchyProductionWorkerHost {
             this.fail(error);
           }
         },
+        ...this.#browserPerformance.moduleCallbacks(),
         onAbort: (reason) => this.fail(reason),
         onExit: (status) => {
           if (checkpointArtifacts !== null && this.#phase !== "failed") {
@@ -3157,6 +3182,38 @@ export class OmarchyProductionWorkerHost {
     this.#post("inputaccepted", { event });
     return event;
   }
+
+  browserPerformance(value) {
+    const command = normalizeBrowserPerformanceCommand(value);
+    const operation = this.#browserPerformanceCommandChain.then(async () => {
+      if (!this.#browserPerformance || this.#phase !== "running") {
+        fail(
+          "PERFORMANCE_RUNTIME_NOT_READY",
+          "Browser performance capture requires a running verified VM.",
+        );
+      }
+      if (command.action === "begin") {
+        if (!this.#guestReportSeen || this.#desktopProof.state !== "complete") {
+          fail(
+            "PERFORMANCE_DESKTOP_NOT_READY",
+            "Browser performance capture requires completed guest and desktop proof.",
+          );
+        }
+        return this.#browserPerformance.begin(command);
+      }
+      if (command.action === "input") {
+        const event = sanitizeWorkerInput(command.event);
+        return this.#browserPerformance.input({
+          inputId: command.inputId,
+          actionDigest: command.actionDigest,
+          event,
+        });
+      }
+      return this.#browserPerformance.end();
+    });
+    this.#browserPerformanceCommandChain = operation.catch(() => {});
+    return operation;
+  }
 }
 
 export function installProductionWorker(scope = globalThis) {
@@ -3171,6 +3228,20 @@ export function installProductionWorker(scope = globalThis) {
         host.input(data.event);
       } catch (error) {
         scope.postMessage({ type: "inputerror", error: serializeError(error) });
+      }
+    } else if (data.type === "browserperformance") {
+      try {
+        host.browserPerformance(data).catch((error) => {
+          scope.postMessage({
+            type: "browserperformanceerror",
+            error: serializeError(error),
+          });
+        });
+      } catch (error) {
+        scope.postMessage({
+          type: "browserperformanceerror",
+          error: serializeError(error),
+        });
       }
     }
   });

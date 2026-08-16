@@ -13,6 +13,7 @@ import {
   KEY_CODE_TO_SDL_SCANCODE,
   WorkerInputError,
   dispatchSanitizedWorkerInput,
+  dispatchSanitizedWorkerInputWithReceipt,
   dispatchWorkerInput,
   sanitizeWorkerInput,
 } from "../web/worker-input.mjs";
@@ -333,11 +334,35 @@ test("worker input bounds pointer and wheel values before calling Wasm", () => {
   dispatchWorkerInput(instance, { kind: "wheel", deltaX: 0, deltaY: 1 });
   dispatchSanitizedWorkerInput(instance, { kind: "key", scancode: 40, down: true });
   assert.deepEqual(calls, [
-    ["key", 41, 0],
-    ["pointer", 0, 32767, 5],
-    ["wheel", 0, -1],
-    ["key", 40, 1],
+    ["key", 41, 0, 0],
+    ["pointer", 0, 32767, 5, 0],
+    ["wheel", 0, -1, 0],
+    ["key", 40, 1, 0],
   ]);
+});
+
+test("trusted performance receipts reach only the private native input argument", () => {
+  const calls = [];
+  const instance = {
+    _omarchy_input_key(...arguments_) {
+      calls.push(arguments_);
+      return 0;
+    },
+  };
+  const event = Object.freeze({ kind: "key", scancode: 40, down: true });
+
+  dispatchSanitizedWorkerInput(instance, event);
+  dispatchSanitizedWorkerInputWithReceipt(instance, event, 27);
+
+  assert.deepEqual(calls, [[40, 1, 0], [40, 1, 27]]);
+  assert.throws(
+    () => dispatchSanitizedWorkerInputWithReceipt(instance, event, -1),
+    WorkerInputError,
+  );
+  assert.throws(
+    () => dispatchSanitizedWorkerInputWithReceipt(instance, event, 0x80000000),
+    WorkerInputError,
+  );
 });
 
 test("checkpoint proof waits for the QEMU-thread running latch", async () => {

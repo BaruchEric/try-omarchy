@@ -77,14 +77,22 @@ export function sanitizeWorkerInput(value) {
   failInput(`Unsupported input kind: ${String(value.kind)}.`);
 }
 
-export function dispatchSanitizedWorkerInput(instance, event) {
+export function dispatchSanitizedWorkerInputWithReceipt(
+  instance,
+  event,
+  receiptHandle = 0,
+) {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     failInput("Sanitized input event must be an object.");
   }
+  if (!Number.isSafeInteger(receiptHandle) || receiptHandle < 0 ||
+      receiptHandle > 0x7fffffff) {
+    failInput("Native input receipt handle is invalid.");
+  }
   const calls = {
-    key: ["_omarchy_input_key", [event.scancode, event.down ? 1 : 0]],
-    pointer: ["_omarchy_input_pointer", [event.x, event.y, event.buttons]],
-    wheel: ["_omarchy_input_wheel", [event.x, event.y]],
+    key: ["_omarchy_input_key", [event.scancode, event.down ? 1 : 0, receiptHandle]],
+    pointer: ["_omarchy_input_pointer", [event.x, event.y, event.buttons, receiptHandle]],
+    wheel: ["_omarchy_input_wheel", [event.x, event.y, receiptHandle]],
   };
   const call = calls[event.kind];
   if (!call) failInput(`Unsupported sanitized input kind: ${String(event.kind)}.`);
@@ -94,6 +102,10 @@ export function dispatchSanitizedWorkerInput(instance, event) {
   const result = exported(...arguments_);
   if (result !== 0) failInput(`${exportName} rejected the input event with status ${result}.`);
   return event;
+}
+
+export function dispatchSanitizedWorkerInput(instance, event) {
+  return dispatchSanitizedWorkerInputWithReceipt(instance, event, 0);
 }
 
 export function dispatchWorkerInput(instance, value) {

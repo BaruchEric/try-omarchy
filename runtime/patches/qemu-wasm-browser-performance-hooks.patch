@@ -1,0 +1,534 @@
+diff --git a/include/ui/sdl2.h b/include/ui/sdl2.h
+--- a/include/ui/sdl2.h
++++ b/include/ui/sdl2.h
+@@ -88,6 +88,13 @@
+     omarchy_desktop_baseline[OMARCHY_GL_FRAME_SAMPLE_COUNT];
+ int omarchy_count_dominant_pixels(
+     const uint32_t samples[OMARCHY_GL_FRAME_SAMPLE_COUNT]);
++void omarchy_gl_scanout_candidate_arm(uint32_t candidate_id);
++void omarchy_performance_input_capture_begin(void);
++void omarchy_performance_input_capture_end(void);
++void omarchy_performance_input_receipt_begin(uint32_t receipt_handle);
++void omarchy_performance_input_receipt_end(uint32_t receipt_handle);
++uint32_t omarchy_performance_input_events(void);
++uint32_t omarchy_performance_input_dropped_events(void);
+ #endif
+ 
+ void sdl2_gl_update(DisplayChangeListener *dcl,
+diff --git a/ui/sdl2.c b/ui/sdl2.c
+--- a/ui/sdl2.c
++++ b/ui/sdl2.c
+@@ -69,6 +69,8 @@
+ 
+ #ifdef __EMSCRIPTEN__
+ #define OMARCHY_RELEASE_MODIFIERS_EVENT (SDL_USEREVENT + 1)
++#define OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT (SDL_USEREVENT + 2)
++#define OMARCHY_PERFORMANCE_RECEIPT_END_EVENT (SDL_USEREVENT + 3)
+ 
+ static uint64_t omarchy_input_queued_count;
+ static uint64_t omarchy_input_processed_count;
+@@ -89,8 +91,27 @@
+     return *window_id ? 0 : -2;
+ }
+ 
++static int omarchy_input_receipt_boundary(uint32_t event_type,
++                                          uint32_t window_id,
++                                          uint32_t receipt_handle)
++{
++    SDL_Event event = { 0 };
++
++    if (receipt_handle == 0) {
++        return 0;
++    }
++    if (receipt_handle > INT32_MAX) {
++        return -3;
++    }
++    event.type = event_type;
++    event.user.type = event_type;
++    event.user.windowID = window_id;
++    event.user.data1 = (void *)(uintptr_t)receipt_handle;
++    return SDL_PushEvent(&event) == 1 ? 0 : -4;
++}
++
+ EMSCRIPTEN_KEEPALIVE
+-int omarchy_input_key(int scancode, int down)
++int omarchy_input_key(int scancode, int down, uint32_t receipt_handle)
+ {
+     SDL_Event event = { 0 };
+     uint32_t window_id;
+@@ -105,6 +126,10 @@
+     if (omarchy_input_window_id(&window_id) != 0) {
+         return -1;
+     }
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT,
++                                       window_id, receipt_handle) != 0) {
++        return -4;
++    }
+     event.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+     event.key.type = event.type;
+     event.key.windowID = window_id;
+@@ -112,6 +137,10 @@
+     event.key.repeat = 0;
+     event.key.keysym.scancode = scancode;
+     if (SDL_PushEvent(&event) != 1) {
++        return -4;
++    }
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_END_EVENT,
++                                       window_id, receipt_handle) != 0) {
+         return -4;
+     }
+     omarchy_input_queued_count++;
+@@ -127,7 +156,7 @@
+ 
+ EMSCRIPTEN_KEEPALIVE
+ int omarchy_input_pointer(int normalized_x, int normalized_y,
+-                          unsigned int buttons)
++                          unsigned int buttons, uint32_t receipt_handle)
+ {
+     static bool first_pointer_reported;
+     static unsigned int previous_buttons;
+@@ -152,6 +181,10 @@
+     if (width < 1 || height < 1) {
+         return -2;
+     }
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT,
++                                       window_id, receipt_handle) != 0) {
++        return -4;
++    }
+     x = (int)((int64_t)normalized_x * (width - 1) / 32767);
+     y = (int)((int64_t)normalized_y * (height - 1) / 32767);
+     event.type = SDL_MOUSEMOTION;
+@@ -184,6 +217,10 @@
+         }
+     }
+     previous_buttons = buttons;
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_END_EVENT,
++                                       window_id, receipt_handle) != 0) {
++        return -4;
++    }
+     if (!first_pointer_reported) {
+         fprintf(stderr,
+                 "OMARCHY_RUNTIME_DIAGNOSTIC input-pointer-queued x=%d y=%d buttons=%u\n",
+@@ -195,7 +232,8 @@
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE
+-int omarchy_input_wheel(int horizontal, int vertical)
++int omarchy_input_wheel(int horizontal, int vertical,
++                        uint32_t receipt_handle)
+ {
+     static bool first_wheel_reported;
+     SDL_Event event = { 0 };
+@@ -211,6 +249,10 @@
+     if (omarchy_input_window_id(&window_id) != 0) {
+         return -1;
+     }
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT,
++                                       window_id, receipt_handle) != 0) {
++        return -4;
++    }
+     event.type = SDL_MOUSEWHEEL;
+     event.wheel.type = SDL_MOUSEWHEEL;
+     event.wheel.windowID = window_id;
+@@ -219,6 +261,10 @@
+     if (SDL_PushEvent(&event) != 1) {
+         return -4;
+     }
++    if (omarchy_input_receipt_boundary(OMARCHY_PERFORMANCE_RECEIPT_END_EVENT,
++                                       window_id, receipt_handle) != 0) {
++        return -4;
++    }
+     if (!first_wheel_reported) {
+         fprintf(stderr,
+                 "OMARCHY_RUNTIME_DIAGNOSTIC input-wheel-queued x=%d y=%d\n",
+@@ -948,6 +994,16 @@
+ #endif
+             break;
+ #ifdef __EMSCRIPTEN__
++        case OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT:
++            idle = 0;
++            omarchy_performance_input_receipt_begin(
++                (uint32_t)(uintptr_t)ev->user.data1);
++            break;
++        case OMARCHY_PERFORMANCE_RECEIPT_END_EVENT:
++            idle = 0;
++            omarchy_performance_input_receipt_end(
++                (uint32_t)(uintptr_t)ev->user.data1);
++            break;
+         case OMARCHY_RELEASE_MODIFIERS_EVENT: {
+             static const QKeyCode modifiers[] = {
+                 Q_KEY_CODE_META_L, Q_KEY_CODE_META_R,
+diff --git a/ui/sdl2-gl.c b/ui/sdl2-gl.c
+--- a/ui/sdl2-gl.c
++++ b/ui/sdl2-gl.c
+@@ -56,6 +56,124 @@
+ #define OMARCHY_GL_DESKTOP_MIN_CHANGED_PIXELS 29
+ #define OMARCHY_GL_DESKTOP_MAX_DOMINANT_PIXELS 547
+ #define OMARCHY_GL_SAMPLE_INTERVAL_MS 250.0
++
++static bool omarchy_performance_capture_active;
++static uint32_t omarchy_performance_armed_candidate_id;
++static uint32_t omarchy_performance_current_candidate_id;
++static uint32_t omarchy_performance_scanout_event_count;
++static uint32_t omarchy_performance_scanout_drop_count;
++
++void omarchy_gl_scanout_candidate_arm(uint32_t candidate_id)
++{
++    if (!omarchy_performance_capture_active || candidate_id == 0) {
++        return;
++    }
++    if (candidate_id <= omarchy_performance_armed_candidate_id) {
++        omarchy_performance_scanout_drop_count++;
++        return;
++    }
++    omarchy_performance_armed_candidate_id = candidate_id;
++}
++
++EMSCRIPTEN_KEEPALIVE
++int omarchy_performance_capture_begin(void)
++{
++    if (omarchy_performance_capture_active) {
++        return -1;
++    }
++    omarchy_performance_capture_active = true;
++    omarchy_performance_armed_candidate_id = 0;
++    omarchy_performance_current_candidate_id = 0;
++    omarchy_performance_scanout_event_count = 0;
++    omarchy_performance_scanout_drop_count = 0;
++    omarchy_performance_input_capture_begin();
++    return 0;
++}
++
++EMSCRIPTEN_KEEPALIVE
++int omarchy_performance_capture_end(void)
++{
++    if (!omarchy_performance_capture_active) {
++        return -1;
++    }
++    omarchy_performance_capture_active = false;
++    omarchy_performance_input_capture_end();
++    return omarchy_performance_scanout_drop_count == 0 &&
++           omarchy_performance_input_dropped_events() == 0 ? 0 : -1;
++}
++
++EMSCRIPTEN_KEEPALIVE
++uint32_t omarchy_performance_scanout_events(void)
++{
++    return omarchy_performance_scanout_event_count;
++}
++
++EMSCRIPTEN_KEEPALIVE
++uint32_t omarchy_performance_dropped_events(void)
++{
++    return omarchy_performance_scanout_drop_count +
++           omarchy_performance_input_dropped_events();
++}
++
++static void sdl2_gl_performance_candidate(
++    uint32_t candidate_id,
++    const uint32_t samples[OMARCHY_GL_FRAME_SAMPLE_COUNT])
++{
++    int delivered = MAIN_THREAD_EM_ASM_INT({
++        const callback = typeof Module !== 'undefined'
++            ? Module['onBrowserPerformanceScanoutCandidate']
++            : null;
++        if (typeof callback !== 'function') {
++            return 0;
++        }
++        try {
++            const begin = $1 >>> 2;
++            const sample = HEAPU32.slice(
++                begin,
++                begin + OMARCHY_GL_FRAME_SAMPLE_COUNT,
++            );
++            return callback($0, sample) === true ? 1 : 0;
++        } catch (_error) {
++            return 0;
++        }
++    }, candidate_id, samples);
++
++    if (delivered) {
++        omarchy_performance_scanout_event_count++;
++        omarchy_performance_current_candidate_id = candidate_id;
++    } else {
++        omarchy_performance_scanout_drop_count++;
++        omarchy_performance_current_candidate_id = 0;
++    }
++}
++
++static void sdl2_gl_performance_present(void)
++{
++    int delivered;
++
++    if (!omarchy_performance_capture_active ||
++        omarchy_performance_current_candidate_id == 0) {
++        return;
++    }
++    delivered = MAIN_THREAD_EM_ASM_INT({
++        const callback = typeof Module !== 'undefined'
++            ? Module['onBrowserPerformanceScanoutPresent']
++            : null;
++        if (typeof callback !== 'function') {
++            return 0;
++        }
++        try {
++            return callback($0) === true ? 1 : 0;
++        } catch (_error) {
++            return 0;
++        }
++    }, omarchy_performance_current_candidate_id);
++    if (delivered) {
++        omarchy_performance_scanout_event_count++;
++    } else {
++        omarchy_performance_scanout_drop_count++;
++    }
++}
+ 
+ static int sdl2_gl_sample_scanout(
+     struct sdl2_console *scon,
+@@ -137,6 +255,8 @@
+     int dominant_pixels = 0;
+     bool proof_pending = proof_state == OMARCHY_GL_PROOF_AWAITING_BASELINE ||
+                          proof_state == OMARCHY_GL_PROOF_AWAITING_RESPONSE;
++    bool public_sample_pending;
++    bool performance_sample_pending;
+ 
+     scon->gl_present_count++;
+     if (scon->gl_present_metrics_start_ms == 0.0) {
+@@ -166,16 +286,28 @@
+         fflush(stderr);
+     }
+ 
++    public_sample_pending = proof_pending ||
++        now - scon->proof_last_sample_ms >= OMARCHY_GL_SAMPLE_INTERVAL_MS;
++    performance_sample_pending = omarchy_performance_capture_active &&
++        omarchy_performance_armed_candidate_id != 0 &&
++        omarchy_performance_armed_candidate_id !=
++            omarchy_performance_current_candidate_id;
+     if (scon->w != OMARCHY_GL_DESKTOP_WIDTH ||
+         scon->h != OMARCHY_GL_DESKTOP_HEIGHT ||
+-        (!proof_pending &&
+-         now - scon->proof_last_sample_ms < OMARCHY_GL_SAMPLE_INTERVAL_MS)) {
++        (!public_sample_pending && !performance_sample_pending)) {
+         return;
+     }
+ 
+     sampled_pixels = sdl2_gl_sample_scanout(
+         scon, samples, &non_black_pixels);
+     if (sampled_pixels != OMARCHY_GL_FRAME_SAMPLE_COUNT) {
++        return;
++    }
++    if (performance_sample_pending) {
++        sdl2_gl_performance_candidate(
++            omarchy_performance_armed_candidate_id, samples);
++    }
++    if (!public_sample_pending) {
+         return;
+     }
+     scon->proof_last_sample_ms = now;
+@@ -314,6 +446,8 @@
+     if (result != EMSCRIPTEN_RESULT_SUCCESS) {
+         fprintf(stderr, "OMARCHY_RUNTIME_DIAGNOSTIC "
+                 "webgl2-frame-commit-failed result=%d\n", result);
++    } else {
++        sdl2_gl_performance_present();
+     }
+ #else
+     SDL_GL_SwapWindow(scon->real_window);
+diff --git a/hw/display/virtio-gpu-virgl.c b/hw/display/virtio-gpu-virgl.c
+--- a/hw/display/virtio-gpu-virgl.c
++++ b/hw/display/virtio-gpu-virgl.c
+@@ -19,6 +19,9 @@
+ #include "hw/virtio/virtio-gpu.h"
+ 
+ #include "ui/egl-helpers.h"
++#ifdef __EMSCRIPTEN__
++#include "ui/sdl2.h"
++#endif
+ 
+ #include <virglrenderer.h>
+ 
+@@ -124,10 +127,19 @@
+ static void virtio_gpu_rect_update(VirtIOGPU *g, int idx, int x, int y,
+                                 int width, int height)
+ {
++#ifdef __EMSCRIPTEN__
++    static uint32_t omarchy_candidate_id;
++#endif
++
+     if (!g->parent_obj.scanout[idx].con) {
+         return;
+     }
+ 
++#ifdef __EMSCRIPTEN__
++    if (omarchy_candidate_id != UINT32_MAX) {
++        omarchy_gl_scanout_candidate_arm(++omarchy_candidate_id);
++    }
++#endif
+     dpy_gl_update(g->parent_obj.scanout[idx].con, x, y, width, height);
+ }
+ 
+diff --git a/hw/input/virtio-input.c b/hw/input/virtio-input.c
+--- a/hw/input/virtio-input.c
++++ b/hw/input/virtio-input.c
+@@ -16,16 +16,140 @@
+ 
+ #include "standard-headers/linux/input.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
++
+ #define VIRTIO_INPUT_VM_VERSION 1
+ 
+ /* ----------------------------------------------------------------- */
++
++#ifdef __EMSCRIPTEN__
++static bool omarchy_performance_input_capture_active;
++static uint32_t omarchy_performance_receipt_handle;
++static uint32_t omarchy_performance_input_event_count;
++static uint32_t omarchy_performance_input_drop_count;
++static bool omarchy_performance_receipt_report_seen;
++static bool omarchy_performance_receipt_report_failed;
++
++static bool omarchy_performance_is_syn_report(
++    const virtio_input_event *event)
++{
++    return event->type == cpu_to_le16(EV_SYN) &&
++           event->code == cpu_to_le16(SYN_REPORT);
++}
++
++void omarchy_performance_input_capture_begin(void)
++{
++    omarchy_performance_input_capture_active = true;
++    omarchy_performance_receipt_handle = 0;
++    omarchy_performance_input_event_count = 0;
++    omarchy_performance_input_drop_count = 0;
++    omarchy_performance_receipt_report_seen = false;
++    omarchy_performance_receipt_report_failed = false;
++}
++
++void omarchy_performance_input_capture_end(void)
++{
++    if (omarchy_performance_receipt_handle != 0) {
++        omarchy_performance_input_drop_count++;
++    }
++    omarchy_performance_input_capture_active = false;
++    omarchy_performance_receipt_handle = 0;
++    omarchy_performance_receipt_report_seen = false;
++    omarchy_performance_receipt_report_failed = false;
++}
++
++void omarchy_performance_input_receipt_begin(uint32_t receipt_handle)
++{
++    if (!omarchy_performance_input_capture_active || receipt_handle == 0 ||
++        omarchy_performance_receipt_handle != 0) {
++        if (omarchy_performance_input_capture_active) {
++            omarchy_performance_input_drop_count++;
++        }
++        return;
++    }
++    omarchy_performance_receipt_handle = receipt_handle;
++    omarchy_performance_receipt_report_seen = false;
++    omarchy_performance_receipt_report_failed = false;
++}
++
++void omarchy_performance_input_receipt_end(uint32_t receipt_handle)
++{
++    int delivered;
++
++    if (!omarchy_performance_input_capture_active || receipt_handle == 0 ||
++        receipt_handle != omarchy_performance_receipt_handle ||
++        !omarchy_performance_receipt_report_seen ||
++        omarchy_performance_receipt_report_failed) {
++        if (omarchy_performance_input_capture_active) {
++            omarchy_performance_input_drop_count++;
++        }
++        omarchy_performance_receipt_handle = 0;
++        omarchy_performance_receipt_report_seen = false;
++        omarchy_performance_receipt_report_failed = false;
++        return;
++    }
++    delivered = MAIN_THREAD_EM_ASM_INT({
++        const callback = typeof Module !== 'undefined'
++            ? Module['onBrowserPerformanceInputDelivered']
++            : null;
++        if (typeof callback !== 'function') {
++            return 0;
++        }
++        try {
++            return callback($0) === true ? 1 : 0;
++        } catch (_error) {
++            return 0;
++        }
++    }, receipt_handle);
++    if (delivered) {
++        omarchy_performance_input_event_count++;
++    } else {
++        omarchy_performance_input_drop_count++;
++    }
++    omarchy_performance_receipt_handle = 0;
++    omarchy_performance_receipt_report_seen = false;
++    omarchy_performance_receipt_report_failed = false;
++}
++
++EMSCRIPTEN_KEEPALIVE
++uint32_t omarchy_performance_input_events(void)
++{
++    return omarchy_performance_input_event_count;
++}
+ 
++EMSCRIPTEN_KEEPALIVE
++uint32_t omarchy_performance_input_dropped_events(void)
++{
++    return omarchy_performance_input_drop_count;
++}
++
++static void omarchy_performance_input_report(bool delivered)
++{
++    if (!omarchy_performance_input_capture_active ||
++        omarchy_performance_receipt_handle == 0) {
++        return;
++    }
++    if (delivered) {
++        omarchy_performance_receipt_report_seen = true;
++    } else {
++        omarchy_performance_receipt_report_failed = true;
++    }
++}
++#endif
++
+ void virtio_input_send(VirtIOInput *vinput, virtio_input_event *event)
+ {
+     VirtQueueElement *elem;
+     int i, len;
+ 
+     if (!vinput->active) {
++#ifdef __EMSCRIPTEN__
++        if (omarchy_performance_is_syn_report(event)) {
++            omarchy_performance_input_report(false);
++        }
++#endif
+         return;
+     }
+ 
+@@ -52,6 +176,9 @@
+             }
+             vinput->qindex = 0;
+             trace_virtio_input_queue_full();
++#ifdef __EMSCRIPTEN__
++            omarchy_performance_input_report(false);
++#endif
+             return;
+         }
+         vinput->queue[i].elem = elem;
+@@ -67,6 +194,9 @@
+     }
+     virtio_notify(VIRTIO_DEVICE(vinput), vinput->evt);
+     vinput->qindex = 0;
++#ifdef __EMSCRIPTEN__
++    omarchy_performance_input_report(true);
++#endif
+ }
+ 
+ static void virtio_input_handle_evt(VirtIODevice *vdev, VirtQueue *vq)

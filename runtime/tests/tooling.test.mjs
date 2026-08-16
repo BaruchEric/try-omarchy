@@ -69,11 +69,22 @@ test("packaged production Worker embeds exact input and storage modules without 
   const bundler = new URL("scripts/bundle-production-worker.mjs", runtime).pathname;
   const result = spawnSync(process.execPath, [bundler, destination], { encoding: "utf8" });
   assert.equal(result.status, 0, result.stderr);
-  const [bundle, inputSource, pagedDiskSource, boundedOverlaySource] = await Promise.all([
+  const [
+    bundle,
+    inputSource,
+    pagedDiskSource,
+    boundedOverlaySource,
+    performanceGateSource,
+    performanceProducerSource,
+    browserPerformanceRuntimeSource,
+  ] = await Promise.all([
     readFile(destination, "utf8"),
     readFile(new URL("web/worker-input.mjs", runtime), "utf8"),
     readFile(new URL("../storage/paged-disk.mjs", runtime), "utf8"),
     readFile(new URL("../storage/bounded-overlay.mjs", runtime), "utf8"),
+    readFile(new URL("../proofs/browser-performance/gate.mjs", runtime), "utf8"),
+    readFile(new URL("../proofs/browser-performance/producer.mjs", runtime), "utf8"),
+    readFile(new URL("web/browser-performance-runtime.mjs", runtime), "utf8"),
   ]);
   assert.doesNotMatch(bundle, /^\s*import\s/m);
   assert.match(bundle, /Generated self-contained production Worker/);
@@ -81,6 +92,9 @@ test("packaged production Worker embeds exact input and storage modules without 
     ["worker-input.mjs", inputSource],
     ["paged-disk.mjs", pagedDiskSource],
     ["bounded-overlay.mjs", boundedOverlaySource],
+    ["browser-performance/gate.mjs", performanceGateSource],
+    ["browser-performance/producer.mjs", performanceProducerSource],
+    ["browser-performance-runtime.mjs", browserPerformanceRuntimeSource],
   ]) {
     const digest = createHash("sha256").update(source).digest("hex");
     assert.match(bundle, new RegExp(`${name.replace(".", "\\.")} sha256=${digest}`));
@@ -88,6 +102,13 @@ test("packaged production Worker embeds exact input and storage modules without 
   assert.match(bundle, /dispatchSanitizedWorkerInput\(this\.#instance, event\)/);
   assert.match(bundle, /class DesktopProofProtocol/);
   assert.match(bundle, /this\.#post\("desktopproof", \{ proof \}\)/);
+  assert.match(bundle, /class BrowserPerformanceTraceProducer/);
+  assert.match(bundle, /class BrowserPerformanceRuntimeController/);
+  assert.match(bundle, /onBrowserPerformanceScanoutCandidate/);
+  assert.match(bundle, /browserperformancecapture/);
+  assert.match(bundle, /PERFORMANCE_INPUT_DIGEST_MISMATCH/);
+  assert.doesNotMatch(bundle, /action === "candidate"/);
+  assert.doesNotMatch(bundle, /action === "inputdelivered"/);
   assert.match(bundle, /async function preparePagedDisk\(/);
   assert.match(bundle, /async function preflightPagedDisk\(/);
   assert.match(bundle, /function createPagedDiskPreRun\(/);

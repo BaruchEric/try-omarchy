@@ -168,6 +168,8 @@ mkdir -p \
   "$source_overlay/accel/tcg" \
   "$source_overlay/system" \
   "$source_overlay/tcg" \
+  "$source_overlay/hw/display" \
+  "$source_overlay/hw/input" \
   "$source_overlay/include/ui" \
   "$source_overlay/ui" \
   "$source_overlay/subprojects"
@@ -176,6 +178,8 @@ cp "$qemu_source/accel/tcg/tcg-accel-ops-rr.c" "$source_overlay/accel/tcg/tcg-ac
 cp "$qemu_source/system/main.c" "$source_overlay/system/main.c"
 cp "$qemu_source/tcg/wasm32.c" "$source_overlay/tcg/wasm32.c"
 cp "$qemu_source/tcg/wasm32.h" "$source_overlay/tcg/wasm32.h"
+cp "$qemu_source/hw/display/virtio-gpu-virgl.c" "$source_overlay/hw/display/virtio-gpu-virgl.c"
+cp "$qemu_source/hw/input/virtio-input.c" "$source_overlay/hw/input/virtio-input.c"
 cp "$qemu_source/ui/sdl2-2d.c" "$source_overlay/ui/sdl2-2d.c"
 cp "$qemu_source/ui/sdl2.c" "$source_overlay/ui/sdl2.c"
 cp "$qemu_source/ui/sdl2-gl.c" "$source_overlay/ui/sdl2-gl.c"
@@ -238,6 +242,8 @@ if [[ -n "$webgl_build" ]]; then
       "$runtime_dir/patches/qemu-wasm-sdl-webgl-context.patch"
     git apply --recount --unsafe-paths \
       "$runtime_dir/patches/qemu-wasm-sdl-webgl-frame-proof.patch"
+    git apply --recount --unsafe-paths \
+      "$runtime_dir/patches/qemu-wasm-browser-performance-hooks.patch"
   )
 fi
 
@@ -250,6 +256,8 @@ docker run --rm --init \
   --volume "$source_overlay/system/main.c:/qemu-src/system/main.c:ro" \
   --volume "$source_overlay/tcg/wasm32.c:/qemu-src/tcg/wasm32.c:ro" \
   --volume "$source_overlay/tcg/wasm32.h:/qemu-src/tcg/wasm32.h:ro" \
+  --volume "$source_overlay/hw/display/virtio-gpu-virgl.c:/qemu-src/hw/display/virtio-gpu-virgl.c:ro" \
+  --volume "$source_overlay/hw/input/virtio-input.c:/qemu-src/hw/input/virtio-input.c:ro" \
   --volume "$source_overlay/ui/sdl2-2d.c:/qemu-src/ui/sdl2-2d.c:ro" \
   --volume "$source_overlay/ui/sdl2.c:/qemu-src/ui/sdl2.c:ro" \
   --volume "$source_overlay/ui/sdl2-gl.c:/qemu-src/ui/sdl2-gl.c:ro" \
