@@ -314,7 +314,8 @@ struct ResumeStoreTests {
             cpuCount: 4,
             memoryBytes: 4 * 1024 * 1024 * 1024,
             displayWidth: 1600,
-            displayHeight: 900
+            displayHeight: 900,
+            machineIdentifierBase64: Data("machine-a".utf8).base64EncodedString()
         )
         let directory = store.directory(for: expected.bundleIdentity)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -332,9 +333,22 @@ struct ResumeStoreTests {
             cpuCount: 8,
             memoryBytes: expected.memoryBytes,
             displayWidth: 1600,
-            displayHeight: 900
+            displayHeight: 900,
+            machineIdentifierBase64: expected.machineIdentifierBase64
         )
         #expect(!store.hasCompleteState(wrong))
+
+        let wrongMachine = ResumeMetadata(
+            schemaVersion: expected.schemaVersion,
+            bundleIdentity: expected.bundleIdentity,
+            architecture: expected.architecture,
+            cpuCount: expected.cpuCount,
+            memoryBytes: expected.memoryBytes,
+            displayWidth: expected.displayWidth,
+            displayHeight: expected.displayHeight,
+            machineIdentifierBase64: Data("machine-b".utf8).base64EncodedString()
+        )
+        #expect(!store.hasCompleteState(wrongMachine))
     }
 }
 

@@ -8,6 +8,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     private let resumeStore: ResumeStore
     private let allowResume: Bool
     private let plan: MachinePlan
+    private let machineIdentifier: VZGenericMachineIdentifier
     private let expectedResume: ResumeMetadata
     private let workingDirectory: URL
     private let workingDiskURL: URL
@@ -21,15 +22,33 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
         self.bundle = bundle
         self.resumeStore = resumeStore
         self.allowResume = allowResume
-        self.plan = try MachinePlan.make(spec: bundle.spec)
+        let machinePlan = try MachinePlan.make(spec: bundle.spec)
+        self.plan = machinePlan
+        let storedMetadata = allowResume ? resumeStore.metadata(for: bundle.identity) : nil
+        let storedIdentifier = storedMetadata.flatMap { metadata -> VZGenericMachineIdentifier? in
+            guard metadata.schemaVersion == 2,
+                  metadata.bundleIdentity == bundle.identity,
+                  metadata.architecture == "aarch64",
+                  metadata.cpuCount == machinePlan.cpuCount,
+                  metadata.memoryBytes == machinePlan.memoryBytes,
+                  metadata.displayWidth == machinePlan.width,
+                  metadata.displayHeight == machinePlan.height,
+                  let data = Data(base64Encoded: metadata.machineIdentifierBase64) else {
+                return nil
+            }
+            return VZGenericMachineIdentifier(dataRepresentation: data)
+        }
+        let machineIdentifier = storedIdentifier ?? VZGenericMachineIdentifier()
+        self.machineIdentifier = machineIdentifier
         self.expectedResume = ResumeMetadata(
-            schemaVersion: 1,
+            schemaVersion: 2,
             bundleIdentity: bundle.identity,
             architecture: "aarch64",
-            cpuCount: plan.cpuCount,
-            memoryBytes: plan.memoryBytes,
-            displayWidth: plan.width,
-            displayHeight: plan.height
+            cpuCount: machinePlan.cpuCount,
+            memoryBytes: machinePlan.memoryBytes,
+            displayWidth: machinePlan.width,
+            displayHeight: machinePlan.height,
+            machineIdentifierBase64: machineIdentifier.dataRepresentation.base64EncodedString()
         )
         self.serialMonitor = GuestSerialMonitor(spec: bundle.spec)
         self.workingDirectory = FileManager.default.temporaryDirectory
@@ -50,6 +69,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
             bundle: bundle,
             diskURL: workingDiskURL,
             plan: plan,
+            machineIdentifier: machineIdentifier,
             serialOutput: serialPipe.fileHandleForWriting
         )
         let machine = VZVirtualMachine(configuration: configuration)
@@ -175,9 +195,8 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
         let staging = resumeStore.root.appendingPathComponent(".\(bundle.identity).\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true)
-            try ResumeStore.cloneFile(from: workingDiskURL, to: staging.appendingPathComponent("rootfs.ext4"))
         } catch {
-            print("[native] Snapshot disk clone failed: \(error.localizedDescription)")
+            print("[native] Snapshot staging failed: \(error.localizedDescription)")
             resumeAfterSnapshot(machine)
             return
         }
@@ -188,6 +207,13 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
                 guard let self else { return }
                 do {
                     if let error { throw error }
+                    // Saving can drain device state while the VM is paused. Clone
+                    // the disk afterwards so the disk bytes correspond to the
+                    // exact device state recorded in machine.state.
+                    try ResumeStore.cloneFile(
+                        from: self.workingDiskURL,
+                        to: staging.appendingPathComponent("rootfs.ext4")
+                    )
                     let metadata = try JSONEncoder().encode(self.expectedResume)
                     try metadata.write(to: staging.appendingPathComponent("metadata.json"), options: .atomic)
                     if FileManager.default.fileExists(atPath: final.path) {

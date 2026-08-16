@@ -85,6 +85,7 @@ struct ResumeMetadata: Codable, Equatable {
     let memoryBytes: UInt64
     let displayWidth: Int
     let displayHeight: Int
+    let machineIdentifierBase64: String
 }
 
 struct HelperCapabilities: Codable, Equatable {

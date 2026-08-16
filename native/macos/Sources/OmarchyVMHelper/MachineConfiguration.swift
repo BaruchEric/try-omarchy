@@ -31,11 +31,19 @@ struct MachinePlan: Equatable {
 }
 
 enum MachineConfiguration {
-    static func make(bundle: GuestBundle, diskURL: URL, plan: MachinePlan, serialOutput: FileHandle) throws -> VZVirtualMachineConfiguration {
+    static func make(
+        bundle: GuestBundle,
+        diskURL: URL,
+        plan: MachinePlan,
+        machineIdentifier: VZGenericMachineIdentifier,
+        serialOutput: FileHandle
+    ) throws -> VZVirtualMachineConfiguration {
         let configuration = VZVirtualMachineConfiguration()
         configuration.cpuCount = plan.cpuCount
         configuration.memorySize = plan.memoryBytes
-        configuration.platform = VZGenericPlatformConfiguration()
+        let platform = VZGenericPlatformConfiguration()
+        platform.machineIdentifier = machineIdentifier
+        configuration.platform = platform
 
         let bootLoader = VZLinuxBootLoader(kernelURL: bundle.kernelURL)
         bootLoader.initialRamdiskURL = bundle.initramfsURL
