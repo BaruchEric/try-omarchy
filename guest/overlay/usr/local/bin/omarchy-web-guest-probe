@@ -287,13 +287,21 @@ def diagnostic_frame(
     )
 
 
-def _diagnostic_candidates() -> list[pathlib.Path]:
-    # virtio-serial is the preferred read-only evidence channel. ttyS0 keeps
-    # native QEMU smoke tests useful when the named port is not configured.
+def _diagnostic_candidates(machine: str | None = None) -> list[pathlib.Path]:
+    # The named virtio-serial device remains the strongest route when present.
+    # Apple Virtualization.framework exposes its console as hvc0, while a
+    # disconnected ttyS0 can still exist in the ARM guest. Trying ttyS0 first
+    # would therefore accept a write that the native helper can never observe.
+    # x86 QEMU retains its ttyS0 fallback and ordering.
+    architecture = os.uname().machine if machine is None else machine
+    fallbacks = (
+        [pathlib.Path("/dev/hvc0"), pathlib.Path("/dev/ttyS0")]
+        if architecture in {"aarch64", "arm64"}
+        else [pathlib.Path("/dev/ttyS0"), pathlib.Path("/dev/hvc0")]
+    )
     return [
         pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
-        pathlib.Path("/dev/ttyS0"),
-        pathlib.Path("/dev/hvc0"),
+        *fallbacks,
     ]
 
 

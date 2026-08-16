@@ -181,8 +181,9 @@ The ARM image boots through Apple's Virtualization.framework using the raw
 the ext4 disk, Virtio GPU, and native USB keyboard/pointer devices. The build
 normalizes its output names to `vmlinuz-linux`, `initramfs-linux.img`, and
 `rootfs.ext4`, so the helper consumes the same manifest roles without confusing
-the architectures. ARM serial evidence is emitted on `hvc0`; x86 retains its
-named virtio-serial/ttyS0 route.
+the architectures. ARM serial evidence prioritizes Apple's connected `hvc0`
+console ahead of any disconnected `ttyS0` node; x86 retains its named
+virtio-serial/`ttyS0` route.
 
 On Linux, the wrapper keeps its source checkout and temporary rootfs in the host
 directory `guest/.work-container`, preserving the original native build path.

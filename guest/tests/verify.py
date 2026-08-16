@@ -110,6 +110,24 @@ def test_static() -> None:
     report_lines = [line for line in serial_with_prompt.splitlines() if line.startswith("OMARCHY_GUEST_REPORT ")]
     framed_payload = json.loads(report_lines[0].removeprefix("OMARCHY_GUEST_REPORT ")) if len(report_lines) == 1 else {}
     check(framed_report.startswith("\r\nOMARCHY_GUEST_REPORT ") and framed_report.endswith("\r\n") and framed_payload == {"schemaVersion": 1, "source": "guest"}, "serial guest report starts on a fresh framed line after a getty prompt")
+    diagnostic_candidates = probe_namespace["_diagnostic_candidates"]
+    check(
+        diagnostic_candidates("aarch64")
+        == [
+            pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
+            pathlib.Path("/dev/hvc0"),
+            pathlib.Path("/dev/ttyS0"),
+        ]
+        and diagnostic_candidates("arm64")[1:] == [
+            pathlib.Path("/dev/hvc0"),
+            pathlib.Path("/dev/ttyS0"),
+        ]
+        and diagnostic_candidates("x86_64")[1:] == [
+            pathlib.Path("/dev/ttyS0"),
+            pathlib.Path("/dev/hvc0"),
+        ],
+        "diagnostic fallback prioritizes Apple's connected hvc0 console on ARM and ttyS0 on x86",
+    )
 
     with tempfile.TemporaryDirectory(prefix="omarchy-stage-protocol.") as temporary:
         state_path = pathlib.Path(temporary) / "stage-state.json"
