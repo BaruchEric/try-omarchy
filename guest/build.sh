@@ -107,7 +107,13 @@ while IFS= read -r package; do
 done <"$packages_file"
 
 echo "Installing ${#packages[@]} trimmed guest packages"
-upstream_pacman_config="$source_dir/default/pacman/pacman-stable.conf"
+pacman_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"].get("pacmanConfig", ""))' "$spec")
+if [[ -n $pacman_input ]]; then
+  upstream_pacman_config="$guest_dir/$pacman_input"
+else
+  upstream_pacman_config="$source_dir/default/pacman/pacman-stable.conf"
+fi
+[[ -f $upstream_pacman_config ]] || fail "pacman configuration not found: $upstream_pacman_config"
 package_cache="$work/pacman-cache"
 pacman_config="$work/pacman-builder.conf"
 [[ $package_cache != *$'\n'* ]] || fail "work path cannot contain a newline"

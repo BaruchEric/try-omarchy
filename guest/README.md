@@ -1,14 +1,21 @@
 # Real Omarchy guest image
 
-This directory builds the disposable x86_64 Arch guest consumed by the browser
-runtime. It is not an HTML recreation of Omarchy. The installed compositor,
+This directory builds two disposable Arch guests: the proven x86_64 image for
+the no-install browser runtime and an ARM64 image for the native macOS helper.
+It is not an HTML recreation of Omarchy. The installed compositor,
 desktop shell, commands, configuration, themes, and applications come from the
 pinned Basecamp Omarchy source and Arch/Omarchy packages.
 
-The current pin is Omarchy `4.0.0.alpha` at commit
+The proven x86 pin is Omarchy `4.0.0.alpha` at commit
 `f0020448ca87329199de7cb12f2015ebc4a3e5e7`. `spec.json` also pins its git tree,
 the normalized 1,615-file SHA-256, the complete 579-package transaction, the
 virtual hardware contract, and the selected authentic themes.
+
+`spec.aarch64.json` is the separate native-virtualization product. It pins the
+Quattro branch at `7488eaded43de68ff9d2d7e4bf50cd48e112eb0f`, its normalized
+1,622-file SHA-256, the official Omarchy ARM package-builder commit, the Arch
+Linux ARM packaging commit, and a 573-package ARM transaction. Updating ARM
+never silently changes the already-attested x86 fallback.
 
 ## What changes for the web demo
 
@@ -107,10 +114,12 @@ also owns the staged runtime paths, and the build rejects missing files with
 
 ## Fast verification on any development machine
 
-No Docker, Arch installation, root access, or network is needed:
+No Docker, Arch installation, root access, or network is needed for the x86
+pipeline tests and dual-architecture contract tests:
 
 ```bash
 ./guest/test
+node --test guest/tests/architecture.test.mjs
 ```
 
 If a clean checkout of the pinned source is available, deep mode also stages
@@ -156,6 +165,24 @@ It uses `--privileged` because `pacstrap`/`arch-chroot` need mount namespaces.
 The container disables pacman's downloader sandbox only because seccomp is not
 implemented correctly by common x86-on-ARM container emulators. Native builds
 keep the sandbox enabled.
+
+## ARM64 Quattro build
+
+On Apple Silicon the ARM transaction resolves and builds natively inside the
+Linux ARM Docker VM; no x86 emulation is involved. Its rootfs and cache are
+isolated from `guest/dist` and the x86 builder:
+
+```bash
+./guest/build-arm64-container.sh --output "$PWD/guest/dist-aarch64"
+```
+
+The ARM image boots through Apple's Virtualization.framework using the raw
+`/boot/Image` kernel, an explicit Virtio initramfs, a disposable APFS clone of
+the ext4 disk, Virtio GPU, and native USB keyboard/pointer devices. The build
+normalizes its output names to `vmlinuz-linux`, `initramfs-linux.img`, and
+`rootfs.ext4`, so the helper consumes the same manifest roles without confusing
+the architectures. ARM serial evidence is emitted on `hvc0`; x86 retains its
+named virtio-serial/ttyS0 route.
 
 On Linux, the wrapper keeps its source checkout and temporary rootfs in the host
 directory `guest/.work-container`, preserving the original native build path.

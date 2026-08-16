@@ -73,10 +73,17 @@ printf 'KEYMAP=us\n' >"$root/etc/vconsole.conf"
 printf '%s\n' "${commit:0:32}" >"$root/etc/machine-id"
 ln -sfn /usr/share/zoneinfo/UTC "$root/etc/localtime"
 
-# Keep the exact Omarchy package/mirror configuration in the guest. The demo
-# user has no root password, and package-management menu entries are hidden.
-install -m 0644 "$root/usr/share/omarchy/default/pacman/pacman-stable.conf" "$root/etc/pacman.conf"
-install -m 0644 "$root/usr/share/omarchy/default/pacman/mirrorlist-stable" "$root/etc/pacman.d/mirrorlist"
+# Keep the exact architecture-appropriate package/mirror configuration in the
+# guest. x86_64 retains upstream Omarchy's files; ARM64 uses the reviewed ALARM
+# configuration and the builder's pinned mirror list.
+pacman_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"].get("pacmanConfig", ""))' "$spec")
+if [[ -n $pacman_input ]]; then
+  install -m 0644 "$guest_dir/$pacman_input" "$root/etc/pacman.conf"
+  install -m 0644 /etc/pacman.d/mirrorlist "$root/etc/pacman.d/mirrorlist"
+else
+  install -m 0644 "$root/usr/share/omarchy/default/pacman/pacman-stable.conf" "$root/etc/pacman.conf"
+  install -m 0644 "$root/usr/share/omarchy/default/pacman/mirrorlist-stable" "$root/etc/pacman.d/mirrorlist"
+fi
 
 mask_unit() {
   local scope=$1

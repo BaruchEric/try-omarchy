@@ -1,0 +1,121 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+import { fileURLToPath } from "node:url";
+
+const guest = new URL("../", import.meta.url);
+
+function text(path) {
+  return readFileSync(new URL(path, guest), "utf8");
+}
+
+function json(path) {
+  return JSON.parse(text(path));
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function packageNames(path) {
+  return text(path)
+    .split("\n")
+    .map((line) => line.split("#", 1)[0].trim())
+    .filter(Boolean);
+}
+
+test("x86 and ARM specs are immutable, distinct Quattro products", () => {
+  const x86 = json("spec.json");
+  const arm = json("spec.aarch64.json");
+
+  assert.equal(x86.image.architecture, "x86_64");
+  assert.equal(arm.image.architecture, "aarch64");
+  assert.equal(arm.upstream.channel, "quattro");
+  assert.equal(arm.upstream.version, "4.0.0.alpha");
+  assert.match(arm.upstream.commit, /^[0-9a-f]{40}$/);
+  assert.match(arm.upstream.tree, /^[0-9a-f]{40}$/);
+  assert.match(arm.upstream.treeSha256, /^[0-9a-f]{64}$/);
+  assert.notEqual(arm.image.filesystemUuid, x86.image.filesystemUuid);
+  assert.deepEqual(arm.guest.virtualDisplay, x86.guest.virtualDisplay);
+  assert.equal(arm.runtime.hypervisor, "apple-virtualization-framework");
+  assert.equal(arm.runtime.kernelSource, "/boot/Image");
+  assert.match(arm.runtime.kernelCommandLine, /(?:^| )console=hvc0(?: |$)/);
+  assert.ok(!arm.runtime.kernelCommandLine.includes("ttyS0"));
+});
+
+test("ARM dependency transaction is architecture-matched and fully locked", () => {
+  const spec = json("spec.aarch64.json");
+  const packages = packageNames(spec.inputs.packages);
+  const lock = json(spec.inputs.packageLock);
+
+  assert.deepEqual(packages, [...new Set(packages)].sort());
+  assert.equal(lock.architecture, "aarch64");
+  assert.equal(lock.requestedFileSha256, sha256(text(spec.inputs.packages)));
+  assert.ok(Object.keys(lock.packages).length > 500);
+  for (const required of [
+    "chromium",
+    "foot",
+    "hyprland",
+    "linux-aarch64",
+    "mesa",
+    "quickshell",
+    "vulkan-swrast",
+  ]) {
+    assert.ok(packages.includes(required), `missing requested ARM package ${required}`);
+    assert.equal(typeof lock.packages[required], "string");
+  }
+  for (const unavailable of [
+    "omarchy-nvim",
+    "quickshell-git",
+    "ttf-jetbrains-mono-nerd-basic",
+    "xdg-terminal-exec",
+  ]) {
+    assert.ok(!packages.includes(unavailable));
+  }
+});
+
+test("ARM bootstrap and package repository inputs are commit and digest pinned", () => {
+  const spec = json("spec.aarch64.json");
+  const container = text("Containerfile.aarch64");
+  const pacstrap = text("vendor/omarchy-pkgs/pacstrap-docker");
+
+  assert.match(spec.supplyChain.omarchyPackagesCommit, /^[0-9a-f]{40}$/);
+  assert.match(spec.supplyChain.archLinuxArmPackagesCommit, /^[0-9a-f]{40}$/);
+  assert.ok(container.includes(spec.supplyChain.omarchyPackagesCommit));
+  assert.ok(container.includes(spec.supplyChain.archLinuxArmPackagesCommit));
+  assert.equal(
+    sha256(pacstrap),
+    "dc31490fa0c387a68ee860d18cca67b43831a45206f2d5e9cfaff103fba85055",
+  );
+  assert.match(container, /sha256sum -c -/);
+  assert.doesNotMatch(container, /latest/);
+});
+
+test("ARM wrapper selects native arm64 Docker and an isolated output", () => {
+  const output = execFileSync(
+    fileURLToPath(new URL("build-arm64-container.sh", guest)),
+    ["--dry-run"],
+    { encoding: "utf8" },
+  );
+  assert.match(output, /^architecture=aarch64$/m);
+  assert.match(output, /^platform=linux\/arm64$/m);
+  assert.match(output, /guest\/dist-aarch64$/m);
+  assert.match(output, /^work-volume=omarchy-arm64-guest-work-[0-9]+$/m);
+});
+
+test("guest identity and initramfs support both runtime device sets", () => {
+  const probe = text("overlay/usr/local/bin/omarchy-web-guest-probe");
+  const initramfs = text("overlay/etc/mkinitcpio.conf.d/90-omarchy-web.conf");
+  const terminal = text("overlay/usr/local/bin/xdg-terminal-exec");
+
+  assert.match(probe, /expected_architecture not in \{"x86_64", "aarch64"\}/);
+  assert.match(probe, /pathlib\.Path\("\/dev\/hvc0"\)/);
+  assert.match(probe, /package_version\("quickshell"/);
+  for (const module of ["virtio_mmio", "virtio_console", "virtio_rng", "virtio_net"]) {
+    assert.ok(initramfs.includes(module));
+  }
+  assert.match(terminal, /exec \/usr\/bin\/foot/);
+  assert.doesNotMatch(terminal, /eval|source /);
+});

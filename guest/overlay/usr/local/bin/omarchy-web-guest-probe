@@ -293,6 +293,7 @@ def _diagnostic_candidates() -> list[pathlib.Path]:
     return [
         pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
         pathlib.Path("/dev/ttyS0"),
+        pathlib.Path("/dev/hvc0"),
     ]
 
 
@@ -1157,6 +1158,8 @@ def build_report(environment: dict[str, str]) -> dict[str, object]:
         else package_version("hyprland", environment)
     )
     shell_version = package_version("quickshell-git", environment)
+    if shell_version == "unknown":
+        shell_version = package_version("quickshell", environment)
     if shell_version == "unknown":
         raise RuntimeError("quickshell package identity is unavailable")
 
