@@ -14,7 +14,7 @@ const EXPECTED = {
   qemuCommit: "0ef7b4e2814b231705d8371dd7997f5b72e70baf",
   guestManifestSha256: "d5f6e2eebd8ce80abf355d8d6f67d52c978c603cc253466e29fb064eab792c28",
   rootfsSha256: "ff89f566d58841bcb8fdb9c8b486d162dbafa2223a38a150c11337f52de52d33",
-  provenanceSha256: "527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738",
+  provenanceSha256: "771a12039baff3cf5034442496d0f47e345c2e3e394b49f6c30ed8d9753d6b38",
 };
 const REPORT_PREFIX = "OMARCHY_GUEST_REPORT ";
 
