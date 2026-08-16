@@ -76,7 +76,7 @@ def main() -> None:
             ]
             details = "\n".join(changed[:30])
             raise SystemExit(
-                "package repository transaction differs from packages.x86_64.lock.json; "
+                f"package repository transaction differs from {args.expect.name}; "
                 "refresh and review the lock intentionally\n" + details
             )
 

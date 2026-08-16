@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Runs inside the x86_64 Arch root after packages and files are staged.
+# Runs inside the architecture-matched Arch root after packages and files are staged.
 set -euo pipefail
 
 spec=/usr/share/omarchy-web/build-spec.json

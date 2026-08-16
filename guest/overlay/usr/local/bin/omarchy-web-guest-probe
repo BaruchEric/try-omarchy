@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Iterable
 
 PROVENANCE = pathlib.Path("/usr/share/omarchy-web/provenance.json")
+BUILD_SPEC = pathlib.Path("/usr/share/omarchy-web/build-spec.json")
 COMMANDS = [
     ["uname", "-m"],
     ["hyprctl", "version"],
@@ -1094,6 +1095,10 @@ def build_report(environment: dict[str, str]) -> dict[str, object]:
     if environment.get("XDG_SESSION_TYPE") != "wayland":
         raise RuntimeError("systemd user environment does not prove a Wayland session")
     provenance = json.loads(PROVENANCE.read_text())
+    build_spec = json.loads(BUILD_SPEC.read_text())
+    expected_architecture = str(build_spec["image"]["architecture"])
+    if expected_architecture not in {"x86_64", "aarch64"}:
+        raise RuntimeError("build spec has an unsupported guest architecture")
     normalized = provenance["normalizedUpstreamTree"]
     commands = [
         run(
@@ -1125,8 +1130,8 @@ def build_report(environment: dict[str, str]) -> dict[str, object]:
             "live quickshell process disappeared before report generation"
         )
     command_map = {tuple(item["argv"]): item for item in commands}
-    if str(command_map[("uname", "-m")]["stdout"]).strip() != "x86_64":
-        raise RuntimeError("uname identity is not x86_64")
+    if str(command_map[("uname", "-m")]["stdout"]).strip() != expected_architecture:
+        raise RuntimeError(f"uname identity is not {expected_architecture}")
     if "hyprland" not in str(command_map[("hyprctl", "version")]["stdout"]).lower():
         raise RuntimeError("hyprctl returned no Hyprland version identity")
     try:

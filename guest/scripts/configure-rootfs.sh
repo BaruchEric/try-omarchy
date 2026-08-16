@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: configure-rootfs.sh --root ROOT [--guest-dir GUEST_DIR]"
+  echo "Usage: configure-rootfs.sh --root ROOT [--guest-dir GUEST_DIR] [--spec SPEC]"
 }
 
 fail() {
@@ -14,6 +14,7 @@ fail() {
 script_dir=$(cd "$(dirname "$0")" && pwd)
 guest_dir=$(cd "$script_dir/.." && pwd)
 root=""
+spec=""
 
 while (($#)); do
   case "$1" in
@@ -23,6 +24,10 @@ while (($#)); do
       ;;
     --guest-dir)
       guest_dir=${2:-}
+      shift 2
+      ;;
+    --spec)
+      spec=${2:-}
       shift 2
       ;;
     -h|--help)
@@ -43,7 +48,8 @@ case "$root" in
     ;;
 esac
 [[ -d $root/usr/share/omarchy ]] || fail "materialize Omarchy before configuring the rootfs"
-[[ -f $guest_dir/spec.json ]] || fail "guest spec not found"
+[[ -n $spec ]] || spec="$guest_dir/spec.json"
+[[ -f $spec ]] || fail "guest spec not found: $spec"
 
 mkdir -p "$root/etc" "$root/etc/skel" "$root/usr/share/omarchy-web"
 cp -a "$guest_dir/overlay/." "$root/"
@@ -53,8 +59,8 @@ cp -a "$guest_dir/overlay/." "$root/"
 cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
 cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 
-hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$guest_dir/spec.json")
-commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["upstream"]["commit"])' "$guest_dir/spec.json")
+hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")
+commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["upstream"]["commit"])' "$spec")
 printf '%s\n' "$hostname" >"$root/etc/hostname"
 cat >"$root/etc/hosts" <<EOF
 127.0.0.1 localhost
@@ -103,14 +109,14 @@ find "$root/var/cache/pacman/pkg" -mindepth 1 -maxdepth 1 -type f -delete 2>/dev
 
 mkdir -p "$root/usr/local/lib/omarchy-web"
 install -m 0755 "$guest_dir/scripts/finalize-rootfs.sh" "$root/usr/local/lib/omarchy-web/finalize-rootfs"
-install -m 0644 "$guest_dir/spec.json" "$root/usr/share/omarchy-web/build-spec.json"
+install -m 0644 "$spec" "$root/usr/share/omarchy-web/build-spec.json"
 
 # Record content digests before the user overlay is copied into $HOME. This is
 # the machine-readable proof that the compositor/shell runtime came from the
 # pinned Omarchy tree rather than a frontend reproduction.
 python3 "$guest_dir/scripts/write-provenance.py" \
   --root "$root" \
-  --spec "$guest_dir/spec.json" \
+  --spec "$spec" \
   --output "$root/usr/share/omarchy-web/provenance.json"
 
 echo "Configured disposable Omarchy web profile in $root"

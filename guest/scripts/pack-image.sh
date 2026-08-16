@@ -44,8 +44,12 @@ done
 [[ -n $root ]] || fail "--root is required"
 [[ -n $output ]] || fail "--output is required"
 [[ $root == /* && $output == /* ]] || fail "root and output paths must be absolute"
-[[ -f $root/boot/vmlinuz-linux ]] || fail "kernel missing from staged root"
-[[ -f $root/boot/initramfs-linux.img ]] || fail "initramfs missing from staged root"
+kernel_source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"].get("kernelSource", "/boot/vmlinuz-linux"))' "$spec")
+initramfs_source=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"].get("initramfsSource", "/boot/initramfs-linux.img"))' "$spec")
+[[ $kernel_source == /boot/* && $kernel_source != *..* ]] || fail "unsafe kernel source in spec"
+[[ $initramfs_source == /boot/* && $initramfs_source != *..* ]] || fail "unsafe initramfs source in spec"
+[[ -f $root$kernel_source ]] || fail "kernel missing from staged root: $kernel_source"
+[[ -f $root$initramfs_source ]] || fail "initramfs missing from staged root: $initramfs_source"
 for command in mke2fs e2fsck zstd python3; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
@@ -71,8 +75,8 @@ mke2fs -q -F -t ext4 -b 4096 -L "$label" -U "$uuid" \
   -d "$root" "$raw" "$blocks"
 e2fsck -fn "$raw"
 
-install -m 0644 "$root/boot/vmlinuz-linux" "$output/vmlinuz-linux"
-install -m 0644 "$root/boot/initramfs-linux.img" "$output/initramfs-linux.img"
+install -m 0644 "$root$kernel_source" "$output/vmlinuz-linux"
+install -m 0644 "$root$initramfs_source" "$output/initramfs-linux.img"
 install -m 0644 "$root/usr/share/omarchy-web/build-spec.json" "$output/build-spec.json"
 install -m 0644 "$root/usr/share/omarchy-web/provenance.json" "$output/provenance.json"
 install -m 0644 "$root/usr/share/licenses/omarchy/LICENSE" "$output/LICENSE.omarchy"

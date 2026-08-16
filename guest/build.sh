@@ -8,10 +8,12 @@ Usage: guest/build.sh [options]
 
   --output DIR       Artifact directory (default: guest/dist)
   --work DIR         Persistent build/cache directory (default: guest/.work)
+  --spec FILE        Architecture build spec (default: guest/spec.json)
   --source DIR       Use an existing clean pinned Omarchy checkout
   --keep-rootfs      Keep the staged package root after a successful build
 
-Run as root on x86_64 Arch Linux, or use guest/build-container.sh.
+Run as root on the architecture selected by the spec, or use the matching
+container wrapper.
 USAGE
 }
 
@@ -24,6 +26,7 @@ guest_dir=$(cd "$(dirname "$0")" && pwd)
 output="$guest_dir/dist"
 work="$guest_dir/.work"
 source_dir=""
+spec="$guest_dir/spec.json"
 keep_rootfs=0
 
 while (($#)); do
@@ -38,6 +41,10 @@ while (($#)); do
       ;;
     --source)
       source_dir=${2:-}
+      shift 2
+      ;;
+    --spec)
+      spec=${2:-}
       shift 2
       ;;
     --keep-rootfs)
@@ -55,7 +62,17 @@ while (($#)); do
 done
 
 [[ $(uname -s) == "Linux" ]] || fail "full image builds require Linux"
-[[ $(uname -m) == "x86_64" ]] || fail "guest packages must be assembled on x86_64"
+[[ -f $spec ]] || fail "spec not found: $spec"
+spec=$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")
+architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"]["architecture"])' "$spec")
+packages_file=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["packages"])' "$spec")
+package_lock_file=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["packageLock"])' "$spec")
+packages_file="$guest_dir/$packages_file"
+package_lock_file="$guest_dir/$package_lock_file"
+[[ $architecture == "x86_64" || $architecture == "aarch64" ]] || fail "unsupported guest architecture: $architecture"
+[[ $(uname -m) == "$architecture" ]] || fail "guest packages for $architecture must be assembled on $architecture"
+[[ -f $packages_file ]] || fail "package list not found: $packages_file"
+[[ -f $package_lock_file ]] || fail "package lock not found: $package_lock_file"
 (( EUID == 0 )) || fail "run as root (pacstrap and arch-chroot require it)"
 for command in pacstrap arch-chroot git python3 mke2fs zstd; do
   command -v "$command" >/dev/null || fail "$command is required; use the supplied Arch builder container"
@@ -65,7 +82,7 @@ output=$(mkdir -p "$output" && cd "$output" && pwd)
 work=$(mkdir -p "$work" && cd "$work" && pwd)
 if [[ -z $source_dir ]]; then
   source_dir="$work/omarchy-source"
-  "$guest_dir/scripts/fetch-source.sh" --destination "$source_dir"
+  "$guest_dir/scripts/fetch-source.sh" --destination "$source_dir" --spec "$spec"
 else
   source_dir=$(cd "$source_dir" && pwd)
 fi
@@ -87,7 +104,7 @@ packages=()
 while IFS= read -r package; do
   [[ -n $package && $package != \#* ]] || continue
   packages+=("$package")
-done <"$guest_dir/packages.x86_64.txt"
+done <"$packages_file"
 
 echo "Installing ${#packages[@]} trimmed guest packages"
 upstream_pacman_config="$source_dir/default/pacman/pacman-stable.conf"
@@ -119,9 +136,9 @@ pacman -Syy --noconfirm --config "$pacman_config" \
 python3 "$guest_dir/scripts/resolve-package-lock.py" \
   --config "$pacman_config" \
   --dbpath "$resolution_db" \
-  --packages "$guest_dir/packages.x86_64.txt" \
+  --packages "$packages_file" \
   --output "$resolution_db/resolved.json" \
-  --expect "$guest_dir/packages.x86_64.lock.json"
+  --expect "$package_lock_file"
 
 # pacstrap reads configured CacheDir paths for host-cache mode only with -P.
 # The copied builder config is replaced by configure-rootfs below. Archives
@@ -140,12 +157,12 @@ while [[ $staged_parent != "$root" ]]; do
   staged_parent=$(dirname "$staged_parent")
 done
 
-"$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir"
-"$guest_dir/scripts/configure-rootfs.sh" --root "$root"
+"$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir" --spec "$spec"
+"$guest_dir/scripts/configure-rootfs.sh" --root "$root" --spec "$spec"
 "$guest_dir/scripts/register-omarchy-runtime.sh" \
   --root "$root" \
   --work "$work" \
-  --spec "$guest_dir/spec.json" \
+  --spec "$spec" \
   --pacman-config "$pacman_config"
 arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
 arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/packages.lock.txt"
@@ -154,5 +171,5 @@ arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/pack
 # after every chroot invocation has returned and the temporary mount is gone.
 ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"
 
-"$guest_dir/scripts/pack-image.sh" --root "$root" --output "$output"
+"$guest_dir/scripts/pack-image.sh" --root "$root" --output "$output" --spec "$spec"
 echo "Guest build complete: $output/guest-manifest.json"
