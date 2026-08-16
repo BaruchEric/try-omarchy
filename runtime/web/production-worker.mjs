@@ -144,6 +144,74 @@ export const CANONICAL_PRODUCTION_MANIFEST = deepFreeze({
   },
 });
 
+export const CANONICAL_ARM64_PRODUCTION_MANIFEST = deepFreeze({
+  schemaVersion: 2,
+  name: "Omarchy ARM64 browser experiment",
+  runtimeMode: "worker-paged",
+  display: { width: 1600, height: 900, devicePixelRatioCap: 2 },
+  assets: {
+    module: "qemu.mjs",
+    hostWorker: "production-worker.mjs",
+    workerInput: "worker-input.mjs",
+    pagedDisk: "paged-disk.mjs",
+    boundedOverlay: "bounded-overlay.mjs",
+    locate: {
+      "qemu-system-aarch64.wasm": "qemu.wasm",
+      "qemu-system-aarch64.worker.js": "qemu.worker.js",
+    },
+    firmware: {},
+  },
+  guest: {
+    rootfs: { artifactPath: "rootfs.ext4", mountPath: "/pack/rootfs.ext4" },
+    kernel: { artifactPath: "vmlinuz-linux", mountPath: "/pack/vmlinuz-linux" },
+    initramfs: { artifactPath: "initramfs-linux.img", mountPath: "/pack/initramfs-linux.img" },
+  },
+  qemu: {
+    architecture: "aarch64",
+    memoryMiB: 1536,
+    cores: 4,
+    arguments: [
+      "-machine", "virt,gic-version=3",
+      "-cpu", "cortex-a72",
+      "-m", "1536M",
+      "-accel", "tcg,tb-size=128,thread=multi",
+      "-smp", "4,sockets=1,cores=4,threads=1",
+      "-display", "sdl,gl=off,show-cursor=on",
+      "-device", "virtio-gpu-pci,max_outputs=1,xres=1600,yres=900",
+      "-device", "virtio-keyboard-pci",
+      "-device", "virtio-tablet-pci",
+      "-kernel", "/pack/vmlinuz-linux",
+      "-initrd", "/pack/initramfs-linux.img",
+      "-append",
+      "root=/dev/vda rw rootwait console=tty0 console=ttyAMA0,115200n8 console=hvc0 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1",
+      "-device", "virtio-serial-pci",
+      "-chardev", "stdio,id=omarchy-diag,mux=on",
+      "-serial", "chardev:omarchy-diag",
+      "-device", "virtserialport,chardev=omarchy-diag,name=omarchy.web.diagnostics",
+      "-monitor", "none",
+      "-parallel", "none",
+      "-nic", "none",
+      "-no-reboot",
+    ],
+  },
+});
+
+export function qemuGeneratedAssetNames(manifest) {
+  const architecture = manifest?.qemu?.architecture === "aarch64" ? "aarch64" : "x86_64";
+  const names = Object.freeze({
+    architecture,
+    wasm: `qemu-system-${architecture}.wasm`,
+    pthread: `qemu-system-${architecture}.worker.js`,
+  });
+  if (!isRecord(manifest?.assets?.locate) ||
+      manifest.assets.locate[names.wasm] !== "qemu.wasm" ||
+      manifest.assets.locate[names.pthread] !== "qemu.worker.js" ||
+      Object.keys(manifest.assets.locate).length !== 2) {
+    fail("INVALID_RUNTIME_MANIFEST", `Runtime executable mapping is invalid for ${architecture}.`);
+  }
+  return names;
+}
+
 export const CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE =
   `${CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[
     CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-append") + 1
@@ -1519,8 +1587,18 @@ export function validateCheckpointGuestManifestDocument(value, checkpoint, expec
 
 export function validateProductionManifest(manifest) {
   if (!isRecord(manifest) || !("checkpoint" in manifest)) {
-    assertExactProfile(manifest, CANONICAL_PRODUCTION_MANIFEST);
+    const expected = manifest?.qemu?.architecture === "aarch64"
+      ? CANONICAL_ARM64_PRODUCTION_MANIFEST
+      : CANONICAL_PRODUCTION_MANIFEST;
+    assertExactProfile(manifest, expected);
+    qemuGeneratedAssetNames(manifest);
     return manifest;
+  }
+  if (manifest?.qemu?.architecture === "aarch64") {
+    fail(
+      "INVALID_RUNTIME_MANIFEST",
+      "ARM64 checkpoint manifests are refused until the exact ARM64 resume contract is present.",
+    );
   }
   const coldProfile = {
     ...manifest,
@@ -1808,17 +1886,22 @@ export function createVerifiedBlobUrl(file, scope, mediaType) {
   return url;
 }
 
-export function createVerifiedExecutableUrls({ module, pthread, wasm }, scope) {
+export function createVerifiedExecutableUrls({ module, pthread, wasm }, scope, generatedAssets = null) {
+  const names = generatedAssets ?? Object.freeze({
+    architecture: "x86_64",
+    wasm: "qemu-system-x86_64.wasm",
+    pthread: "qemu-system-x86_64.worker.js",
+  });
   return deepFreeze({
     module: createVerifiedBlobUrl(module, scope, "text/javascript"),
     locate: {
-      "qemu-system-x86_64.wasm": createVerifiedBlobUrl(wasm, scope, "application/wasm"),
-      "qemu-system-x86_64.worker.js": createVerifiedBlobUrl(pthread, scope, "text/javascript"),
+      [names.wasm]: createVerifiedBlobUrl(wasm, scope, "application/wasm"),
+      [names.pthread]: createVerifiedBlobUrl(pthread, scope, "text/javascript"),
     },
   });
 }
 
-export async function prepareVerifiedExecutables(artifacts, base, scope) {
+export async function prepareVerifiedExecutables(artifacts, base, scope, generatedAssets = null) {
   if (!isRecord(artifacts)) fail("MISSING_ARTIFACT", "Verified executable artifact set is invalid.");
   const [moduleFile, wasmFile, pthreadFile] = await Promise.all([
     fetchVerifiedArtifact(artifacts.module, base, scope, MAX_MODULE_BYTES),
@@ -1832,6 +1915,7 @@ export async function prepareVerifiedExecutables(artifacts, base, scope) {
     urls: createVerifiedExecutableUrls(
       { module: moduleFile, pthread: pthreadFile, wasm: wasmFile },
       scope,
+      generatedAssets,
     ),
   });
 }
@@ -1895,7 +1979,7 @@ export function validateCheckpointArtifacts(manifest, artifacts) {
   if (guestManifest.sha256 !== checkpoint.identity.baseGuestManifestSha256) {
     fail("CHECKPOINT_GUEST_MISMATCH", "Checkpoint base guest manifest artifact is invalid.");
   }
-  const wasmPath = manifest.assets.locate["qemu-system-x86_64.wasm"];
+  const wasmPath = manifest.assets.locate[qemuGeneratedAssetNames(manifest).wasm];
   const wasm = artifactAt(artifacts, wasmPath);
   if (wasm.sha256 !== checkpoint.identity.browserQemuWasmSha256) {
     fail("CHECKPOINT_QEMU_MISMATCH", "Checkpoint is not compatible with the verified browser QEMU build.");
@@ -2878,14 +2962,16 @@ export class OmarchyProductionWorkerHost {
       }
 
       const locate = runtimeManifest.assets.locate;
+      const generatedAssets = qemuGeneratedAssetNames(runtimeManifest);
       const executables = await prepareVerifiedExecutables(
         {
           module: artifactAt(artifacts, runtimeManifest.assets.module),
-          wasm: artifactAt(artifacts, locate["qemu-system-x86_64.wasm"]),
-          pthread: artifactAt(artifacts, locate["qemu-system-x86_64.worker.js"]),
+          wasm: artifactAt(artifacts, locate[generatedAssets.wasm]),
+          pthread: artifactAt(artifacts, locate[generatedAssets.pthread]),
         },
         base,
         this.#scope,
+        generatedAssets,
       );
       this.#setPhase("starting-emulator");
       const { default: createQemu } = await import(executables.urls.module);

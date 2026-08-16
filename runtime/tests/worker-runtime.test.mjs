@@ -23,6 +23,7 @@ import {
   ProductionWorkerError,
   CANONICAL_CHECKPOINT_ARGUMENTS,
   CANONICAL_CHECKPOINT_IDENTITY,
+  CANONICAL_ARM64_PRODUCTION_MANIFEST,
   CANONICAL_PAGED_DISK_ARGUMENTS,
   CANONICAL_PRODUCTION_MANIFEST,
   OmarchyProductionWorkerHost,
@@ -43,6 +44,7 @@ import {
   parseDesktopProofAcknowledgementLine,
   parseGuestReportLine,
   parseGuestStageLine,
+  qemuGeneratedAssetNames,
   qemuStartupFailureForLine,
   readBoundedResponseBody,
   releaseIdentityFromArtifactManifest,
@@ -61,6 +63,7 @@ import {
 } from "../web/production-worker.mjs";
 
 const manifestUrl = new URL("../config/demo.json", import.meta.url);
+const arm64ManifestUrl = new URL("../config/arm64-browser.json", import.meta.url);
 
 function checkpointProfile() {
   return {
@@ -840,6 +843,39 @@ test("production manifest is paged-worker-only and declares bounded assets", asy
   assert.throws(
     () => validatePagedDiskArguments([...CANONICAL_PAGED_DISK_ARGUMENTS, "-drive", "file=evil"]),
     (error) => error instanceof ProductionWorkerError && error.code === "INVALID_PAGED_DISK_PROFILE",
+  );
+});
+
+test("ARM64 browser manifest is exact, isolated, and cannot be mixed with x86 assets", async () => {
+  const manifest = JSON.parse(await readFile(arm64ManifestUrl, "utf8"));
+  assert.equal(validateProductionManifest(manifest), manifest);
+  assert.deepEqual(CANONICAL_ARM64_PRODUCTION_MANIFEST, manifest);
+  assert.deepEqual(qemuGeneratedAssetNames(manifest), {
+    architecture: "aarch64",
+    wasm: "qemu-system-aarch64.wasm",
+    pthread: "qemu-system-aarch64.worker.js",
+  });
+  assert.deepEqual(manifest.qemu.arguments.slice(0, 4), [
+    "-machine", "virt,gic-version=3", "-cpu", "cortex-a72",
+  ]);
+  assert.equal(manifest.qemu.cores, 4);
+  assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1],
+    "4,sockets=1,cores=4,threads=1");
+
+  const mixed = structuredClone(manifest);
+  mixed.assets.locate = {
+    "qemu-system-x86_64.wasm": "qemu.wasm",
+    "qemu-system-x86_64.worker.js": "qemu.worker.js",
+  };
+  assert.throws(
+    () => validateProductionManifest(mixed),
+    (error) => error instanceof ProductionWorkerError && error.code === "INVALID_RUNTIME_MANIFEST",
+  );
+
+  const unprovenCheckpoint = { ...structuredClone(manifest), checkpoint: checkpointProfile() };
+  assert.throws(
+    () => validateProductionManifest(unprovenCheckpoint),
+    (error) => error instanceof ProductionWorkerError && error.code === "INVALID_RUNTIME_MANIFEST",
   );
 });
 
