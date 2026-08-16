@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := test
 
-.PHONY: audit build build-arm64-browser-experiment build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
+.PHONY: audit build build-arm64-browser-experiment package-arm64-browser-experiment serve-full-arm64-browser-experiment build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
 
 TCG_THRESHOLD_250_OUTPUT ?= $(CURDIR)/experiments/tcg-threshold-250/dist
 TCG_BASELINE_METRICS_OUTPUT ?= $(CURDIR)/experiments/tcg-baseline-1500-metrics/dist
@@ -21,6 +21,13 @@ build-arm64-browser-experiment:
 	OMARCHY_QEMU_ARCHITECTURE=aarch64 \
 	QEMU_WASM_OUTPUT="$(ARM64_BROWSER_OUTPUT)" \
 	./scripts/build-qemu-wasm.sh
+
+package-arm64-browser-experiment:
+	@test -n "$(GUEST_DIR)" || (echo "usage: make package-arm64-browser-experiment GUEST_DIR=/absolute/path/to/arm64/assets" >&2; exit 2)
+	./scripts/package-arm64-browser.sh "$(GUEST_DIR)" "$(ARM64_BROWSER_OUTPUT)"
+
+serve-full-arm64-browser-experiment:
+	node ./scripts/serve-full-guest.mjs --runtime-root "$(ARM64_BROWSER_OUTPUT)" --guest-root ../guest/dist-aarch64 --port 8100
 
 build-tcg-threshold-250:
 	OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT=250 \

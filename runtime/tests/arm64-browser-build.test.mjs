@@ -25,6 +25,11 @@ test("ARM64 browser experiment is isolated and uses the QEMU virt machine", asyn
   assert.ok(manifest.qemu.arguments.includes("virtio-gpu-pci,max_outputs=1,xres=1600,yres=900"));
   assert.equal(Object.keys(manifest.assets.firmware).length, 0);
   assert.match(makefile, /build-arm64-browser-experiment:/);
+  assert.match(makefile, /package-arm64-browser-experiment:/);
+  assert.match(makefile, /serve-full-arm64-browser-experiment:/);
+  assert.match(makefile, /--port 8100/);
+  const packageSource = await readFile(new URL("../scripts/package-arm64-browser.sh", import.meta.url), "utf8");
+  assert.match(packageSource, /value\?\.guest\?\.architecture !== "aarch64"/);
   assert.match(makefile, /experiments\/arm64-browser\/dist/);
   assert.match(buildSource, /experiments must use an isolated output directory/);
   assert.match(buildSource, /OMARCHY_QEMU_ARCHITECTURE=\$qemu_architecture/);
