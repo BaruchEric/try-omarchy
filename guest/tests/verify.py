@@ -128,6 +128,17 @@ def test_static() -> None:
         ],
         "diagnostic fallback prioritizes Apple's connected hvc0 console on ARM and ttyS0 on x86",
     )
+    diagnostic_rules = (
+        GUEST / "overlay/etc/udev/rules.d/90-omarchy-web-diagnostics.rules"
+    ).read_text().splitlines()
+    check(
+        diagnostic_rules
+        == [
+            'SUBSYSTEM=="virtio-ports", ATTR{name}=="omarchy.web.diagnostics", MODE="0620", GROUP="users"',
+            'SUBSYSTEM=="tty", KERNEL=="hvc0", MODE="0620", GROUP="users"',
+        ],
+        "diagnostic devices grant only the Omarchy users group narrow write access",
+    )
 
     with tempfile.TemporaryDirectory(prefix="omarchy-stage-protocol.") as temporary:
         state_path = pathlib.Path(temporary) / "stage-state.json"
