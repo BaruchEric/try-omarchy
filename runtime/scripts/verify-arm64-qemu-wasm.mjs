@@ -15,6 +15,7 @@ const [moduleSource, wasm, pthreadSource, manifestSource] = await Promise.all([
 const manifest = JSON.parse(manifestSource);
 
 assert.equal(manifest.qemu?.architecture, "aarch64");
+assert.equal(manifest.qemu?.memoryMiB, 1024);
 assert.equal(manifest.qemu?.cores, 4);
 assert.deepEqual(manifest.qemu?.arguments?.slice(0, 4), [
   "-machine", "virt,gic-version=3", "-cpu", "cortex-a72",

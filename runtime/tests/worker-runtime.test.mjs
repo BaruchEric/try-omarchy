@@ -858,6 +858,8 @@ test("ARM64 browser manifest is exact, isolated, and cannot be mixed with x86 as
   assert.deepEqual(manifest.qemu.arguments.slice(0, 4), [
     "-machine", "virt,gic-version=3", "-cpu", "cortex-a72",
   ]);
+  assert.equal(manifest.qemu.memoryMiB, 1024);
+  assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-m") + 1], "1024M");
   assert.equal(manifest.qemu.cores, 4);
   assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1],
     "4,sockets=1,cores=4,threads=1");

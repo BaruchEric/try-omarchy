@@ -35,7 +35,7 @@
   },
   "qemu": {
     "architecture": "aarch64",
-    "memoryMiB": 1536,
+    "memoryMiB": 1024,
     "cores": 4,
     "arguments": [
       "-machine",
@@ -43,7 +43,7 @@
       "-cpu",
       "cortex-a72",
       "-m",
-      "1536M",
+      "1024M",
       "-accel",
       "tcg,tb-size=128,thread=multi",
       "-smp",

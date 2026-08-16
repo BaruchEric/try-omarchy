@@ -60,6 +60,7 @@ const metadata = {
     promotionEligible: false,
     machine: "virt,gic-version=3",
     cpu: "cortex-a72",
+    memoryMiB: 1024,
     vcpus: 4,
     pthreadPoolSize: 8,
   },

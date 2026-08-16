@@ -168,12 +168,12 @@ export const CANONICAL_ARM64_PRODUCTION_MANIFEST = deepFreeze({
   },
   qemu: {
     architecture: "aarch64",
-    memoryMiB: 1536,
+    memoryMiB: 1024,
     cores: 4,
     arguments: [
       "-machine", "virt,gic-version=3",
       "-cpu", "cortex-a72",
-      "-m", "1536M",
+      "-m", "1024M",
       "-accel", "tcg,tb-size=128,thread=multi",
       "-smp", "4,sockets=1,cores=4,threads=1",
       "-display", "sdl,gl=off,show-cursor=on",
