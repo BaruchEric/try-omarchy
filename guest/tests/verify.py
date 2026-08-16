@@ -761,12 +761,12 @@ def test_source(source: pathlib.Path) -> None:
         check(autostart == expected_autostart, "welcome is an additive user override")
 
         hyprland = (root / "etc/skel/.config/hypr/hyprland.lua").read_bytes()
-        expected_hyprland = (GUEST / "fragments/hypr-x86-web-looknfeel.preload.lua").read_bytes() + (source / "config/hypr/hyprland.lua").read_bytes()
-        check(hyprland == expected_hyprland, "x86 web look-and-feel is a deterministic user-level preload")
+        expected_hyprland = (GUEST / "fragments/hypr-x86-web.lua").read_bytes()
+        check(hyprland == expected_hyprland, "x86 web Hyprland profile is deterministic and bounded")
         check(
-            (source / "default/hypr/looknfeel.lua").read_bytes()
-            == (root / "usr/share/omarchy/default/hypr/looknfeel.lua").read_bytes(),
-            "authentic Quattro default look-and-feel remains byte-identical",
+            (source / "config/hypr/hyprland.lua").read_bytes()
+            == (root / "usr/share/omarchy/config/hypr/hyprland.lua").read_bytes(),
+            "authentic Quattro user bootstrap remains byte-identical",
         )
 
         hidden_webapps = {

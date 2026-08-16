@@ -221,12 +221,13 @@ The full package/image build is deliberately not part of the fast test. Do not
 spend that bandwidth until the runtime's virtio-gpu canvas path has passed its
 graphics gate.
 
-For the x86 browser fallback, the user profile preloads a single-call,
-animation-free Hyprland look-and-feel before Quattro's authentic defaults are
-required. The upstream runtime remains installed byte-for-byte; this bounded
-user override prevents Hyprland's Lua reload budget from expiring under TCG and
-avoids spending emulated CPU on desktop animations. The ARM/native profile
-retains Quattro's full look-and-feel.
+For the x86 browser fallback, a bounded user-level Hyprland profile starts the
+real Quattro shell, commands, menu, theme, terminal, tiling, and primary
+shortcuts without loading physical-hardware rules or hundreds of bindings for
+apps absent from the disposable image. The authentic upstream configs remain
+installed byte-for-byte. This prevents Hyprland's Lua reload budget from
+expiring under TCG and avoids spending emulated CPU on animations. The
+ARM/native profile retains Quattro's full configuration and look-and-feel.
 
 ## Output contract
 
