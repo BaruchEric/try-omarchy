@@ -120,8 +120,8 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
         serialPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            FileHandle.standardOutput.write(data)
             Task { @MainActor in self?.consumeSerial(data) }
+            BestEffortOutput.write(data, to: STDOUT_FILENO)
         }
     }
 

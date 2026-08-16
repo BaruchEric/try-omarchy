@@ -2,6 +2,42 @@ import Foundation
 import Testing
 @testable import OmarchyVMHelper
 
+@Suite("Best-effort serial output")
+struct BestEffortOutputTests {
+    @Test("retries interruption and stops harmlessly at backpressure")
+    func handlesNonblockingOutput() {
+        let data = Data("authenticated-report".utf8)
+        var calls = 0
+        let written = BestEffortOutput.write(data, to: 1) { _, _, count in
+            calls += 1
+            switch calls {
+            case 1:
+                errno = EINTR
+                return -1
+            case 2:
+                return min(5, count)
+            default:
+                errno = EAGAIN
+                return -1
+            }
+        }
+        #expect(calls == 3)
+        #expect(written == 5)
+    }
+
+    @Test("writes every byte across bounded partial writes")
+    func handlesPartialWrites() {
+        let data = Data("desktop-ready".utf8)
+        var calls = 0
+        let written = BestEffortOutput.write(data, to: 1) { _, _, count in
+            calls += 1
+            return min(3, count)
+        }
+        #expect(written == data.count)
+        #expect(calls > 1)
+    }
+}
+
 private struct Fixture {
     let root: URL
     let spec: [String: Any]
