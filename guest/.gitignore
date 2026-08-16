@@ -1,4 +1,5 @@
 /dist/
+/dist-aarch64/
 /.work/
 /.work-container/
 __pycache__/
