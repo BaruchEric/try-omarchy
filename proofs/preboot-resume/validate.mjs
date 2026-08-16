@@ -12,8 +12,8 @@ import { verifyGuestArtifacts } from "./artifact-integrity.mjs";
 
 const EXPECTED = {
   qemuCommit: "0ef7b4e2814b231705d8371dd7997f5b72e70baf",
-  guestManifestSha256: "55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37",
-  rootfsSha256: "db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac",
+  guestManifestSha256: "d5f6e2eebd8ce80abf355d8d6f67d52c978c603cc253466e29fb064eab792c28",
+  rootfsSha256: "ff89f566d58841bcb8fdb9c8b486d162dbafa2223a38a150c11337f52de52d33",
   provenanceSha256: "527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738",
 };
 const REPORT_PREFIX = "OMARCHY_GUEST_REPORT ";

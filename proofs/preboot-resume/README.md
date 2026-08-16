@@ -11,10 +11,10 @@ The producer and fresh restore target use one exact profile:
 - `2,sockets=1,cores=2,threads=1`;
 - `tcg,tb-size=128,thread=multi` (MTTCG);
 - one virtio VGA output at 1600×900, virtio keyboard/tablet, no network;
-- canonical guest manifest SHA-256
-  `55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37`;
-- canonical rootfs SHA-256
-  `db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac`.
+- canonical Quattro guest manifest SHA-256
+  `d5f6e2eebd8ce80abf355d8d6f67d52c978c603cc253466e29fb064eab792c28`;
+- canonical Quattro rootfs SHA-256
+  `ff89f566d58841bcb8fdb9c8b486d162dbafa2223a38a150c11337f52de52d33`.
 
 The proof rejects CPU-count, accelerator, machine, RAM, guest-identity, or
 migration-compression overrides. This profile is intentionally different from
