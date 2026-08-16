@@ -760,6 +760,15 @@ def test_source(source: pathlib.Path) -> None:
         expected_autostart = (source / "config/hypr/autostart.lua").read_bytes() + (GUEST / "fragments/hypr-autostart.append.lua").read_bytes()
         check(autostart == expected_autostart, "welcome is an additive user override")
 
+        hyprland = (root / "etc/skel/.config/hypr/hyprland.lua").read_bytes()
+        expected_hyprland = (GUEST / "fragments/hypr-x86-web-looknfeel.preload.lua").read_bytes() + (source / "config/hypr/hyprland.lua").read_bytes()
+        check(hyprland == expected_hyprland, "x86 web look-and-feel is a deterministic user-level preload")
+        check(
+            (source / "default/hypr/looknfeel.lua").read_bytes()
+            == (root / "usr/share/omarchy/default/hypr/looknfeel.lua").read_bytes(),
+            "authentic Quattro default look-and-feel remains byte-identical",
+        )
+
         hidden_webapps = {
             "Basecamp.desktop", "Discord.desktop", "Docker.desktop",
             "Google Contacts.desktop", "Google Maps.desktop", "Google Messages.desktop",
@@ -780,6 +789,34 @@ def test_source(source: pathlib.Path) -> None:
         check(provenance["normalizedUpstreamTree"]["sha256"] == SPEC["upstream"]["treeSha256"], "staged provenance records pinned source")
         check(provenance["sha256Trees"]["shell"], "staged shell content digest recorded")
         check((root / "usr/local/bin/omarchy-web-guest-probe").exists(), "live authenticity probe installed")
+
+    with tempfile.TemporaryDirectory(prefix="omarchy-arm64-guest-test.") as temporary:
+        arm_root = pathlib.Path(temporary)
+        arm_spec = GUEST / "spec.aarch64.json"
+        arm_materialize = run(
+            GUEST / "scripts/materialize-omarchy.sh",
+            "--root", arm_root,
+            "--source", source,
+            "--spec", arm_spec,
+        )
+        check(arm_materialize.returncode == 0, "materialize pinned Omarchy payload for ARM")
+        if arm_materialize.returncode != 0:
+            print(arm_materialize.stderr)
+            return
+        arm_configure = run(
+            GUEST / "scripts/configure-rootfs.sh",
+            "--root", arm_root,
+            "--spec", arm_spec,
+        )
+        check(arm_configure.returncode == 0, "apply native ARM virtual-hardware profile")
+        if arm_configure.returncode != 0:
+            print(arm_configure.stderr)
+            return
+        check(
+            (arm_root / "etc/skel/.config/hypr/hyprland.lua").read_bytes()
+            == (source / "config/hypr/hyprland.lua").read_bytes(),
+            "ARM profile retains Quattro's native look-and-feel bootstrap",
+        )
 
 
 def main() -> None:

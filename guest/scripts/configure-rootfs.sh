@@ -54,6 +54,19 @@ esac
 mkdir -p "$root/etc" "$root/etc/skel" "$root/usr/share/omarchy-web"
 cp -a "$guest_dir/overlay/." "$root/"
 
+# Quattro's authentic default look-and-feel remains installed byte-for-byte.
+# The x86 browser profile preloads a single-call, animation-free user override
+# before the authentic user configuration bootstraps Omarchy. This avoids the
+# bounded Hyprland Lua reload timeout under TCG without changing ARM/native.
+architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"]["architecture"])' "$spec")
+if [[ $architecture == x86_64 ]]; then
+  hyprland_user_config="$root/etc/skel/.config/hypr/hyprland.lua"
+  hyprland_user_config_new="$hyprland_user_config.omarchy-web"
+  cat "$guest_dir/fragments/hypr-x86-web-looknfeel.preload.lua" \
+      "$hyprland_user_config" >"$hyprland_user_config_new"
+  mv "$hyprland_user_config_new" "$hyprland_user_config"
+fi
+
 # User customizations are additive. The prefix of each file remains byte-for-
 # byte identical to Basecamp's pinned config and can be audited independently.
 cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
