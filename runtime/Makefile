@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := test
 
-.PHONY: audit build build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
+.PHONY: audit build build-arm64-browser-experiment build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
 
 TCG_THRESHOLD_250_OUTPUT ?= $(CURDIR)/experiments/tcg-threshold-250/dist
 TCG_BASELINE_METRICS_OUTPUT ?= $(CURDIR)/experiments/tcg-baseline-1500-metrics/dist
@@ -9,11 +9,17 @@ VIRGL_WEBGL2_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2/dist
 VIRGL_WEBGL2_TCG_BASELINE_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-baseline-1500-metrics/dist
 VIRGL_WEBGL2_TCG_CLOCK_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-bounded-clock/dist
 VIRGL_WEBGL2_TCG_750_4VCPU_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-threshold-750-4vcpu/dist
+ARM64_BROWSER_OUTPUT ?= $(CURDIR)/experiments/arm64-browser/dist
 
 audit:
 	./scripts/audit-upstreams.sh
 
 build:
+	./scripts/build-qemu-wasm.sh
+
+build-arm64-browser-experiment:
+	OMARCHY_QEMU_ARCHITECTURE=aarch64 \
+	QEMU_WASM_OUTPUT="$(ARM64_BROWSER_OUTPUT)" \
 	./scripts/build-qemu-wasm.sh
 
 build-tcg-threshold-250:

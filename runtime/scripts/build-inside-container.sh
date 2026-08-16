@@ -9,6 +9,7 @@ jobs="${BUILD_JOBS:-2}"
 output_uid="${OUTPUT_UID:-0}"
 output_gid="${OUTPUT_GID:-0}"
 graphics_experiment="${OMARCHY_GRAPHICS_EXPERIMENT:-}"
+qemu_architecture="${OMARCHY_QEMU_ARCHITECTURE:-x86_64}"
 webgl_build=
 if [[ "$graphics_experiment" == "virgl-webgl2" ||
       "$graphics_experiment" == "webgl2-present" ]]; then
@@ -27,6 +28,24 @@ fi
   printf 'unsupported graphics experiment: %s\n' "$graphics_experiment" >&2
   exit 1
 }
+case "$qemu_architecture" in
+  x86_64)
+    qemu_target=x86_64-softmmu
+    qemu_executable=qemu-system-x86_64
+    ;;
+  aarch64)
+    qemu_target=aarch64-softmmu
+    qemu_executable=qemu-system-aarch64
+    [[ -z "$graphics_experiment" ]] || {
+      printf 'ARM browser experiment does not yet support a graphics experiment\n' >&2
+      exit 1
+    }
+    ;;
+  *)
+    printf 'unsupported QEMU guest architecture: %s\n' "$qemu_architecture" >&2
+    exit 1
+    ;;
+esac
 
 mkdir -p "$build_dir" "$output_dir/firmware"
 cd "$build_dir"
@@ -77,6 +96,12 @@ if [[ -n "$webgl_build" ]]; then
   )
 fi
 common_flags_string="${common_flags[*]}"
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  # QEMU main + RCU + four MTTCG vCPUs consume six pthreads. Prewarming eight
+  # avoids on-demand module instantiation during the first browser launch.
+  common_flags+=( -sPTHREAD_POOL_SIZE=8 )
+  common_flags_string="${common_flags[*]}"
+fi
 
 graphics_configure_flags=()
 if [[ -n "$webgl_build" ]]; then
@@ -90,7 +115,7 @@ fi
 
 emconfigure "$source_dir/configure" \
   --static \
-  --target-list=x86_64-softmmu \
+  --target-list="$qemu_target" \
   --cpu=wasm32 \
   --cross-prefix= \
   --without-default-features \
@@ -122,15 +147,17 @@ if [[ -n "$webgl_build" ]]; then
   }
 fi
 
-emmake make -j "$jobs" qemu-system-x86_64
-node "$runtime_dir/scripts/patch-generated-qemu.mjs" qemu-system-x86_64
+emmake make -j "$jobs" "$qemu_executable"
+node "$runtime_dir/scripts/patch-generated-qemu.mjs" "$qemu_executable"
 
-install -m 0644 qemu-system-x86_64 "$output_dir/qemu.mjs"
-install -m 0644 qemu-system-x86_64.wasm "$output_dir/qemu.wasm"
-install -m 0644 qemu-system-x86_64.worker.js "$output_dir/qemu.worker.js"
+install -m 0644 "$qemu_executable" "$output_dir/qemu.mjs"
+install -m 0644 "$qemu_executable.wasm" "$output_dir/qemu.wasm"
+install -m 0644 "$qemu_executable.worker.js" "$output_dir/qemu.worker.js"
 
-for firmware in bios-256k.bin vgabios-stdvga.bin vgabios-virtio.bin kvmvapic.bin linuxboot_dma.bin; do
-  install -m 0644 "$source_dir/pc-bios/$firmware" "$output_dir/firmware/$firmware"
-done
+if [[ "$qemu_architecture" == "x86_64" ]]; then
+  for firmware in bios-256k.bin vgabios-stdvga.bin vgabios-virtio.bin kvmvapic.bin linuxboot_dma.bin; do
+    install -m 0644 "$source_dir/pc-bios/$firmware" "$output_dir/firmware/$firmware"
+  done
+fi
 
 chown -R "$output_uid:$output_gid" "$output_dir"

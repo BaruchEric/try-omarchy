@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 2,
+  "name": "Omarchy ARM64 browser experiment",
+  "runtimeMode": "worker-paged",
+  "display": {
+    "width": 1600,
+    "height": 900,
+    "devicePixelRatioCap": 2
+  },
+  "assets": {
+    "module": "qemu.mjs",
+    "hostWorker": "production-worker.mjs",
+    "workerInput": "worker-input.mjs",
+    "pagedDisk": "paged-disk.mjs",
+    "boundedOverlay": "bounded-overlay.mjs",
+    "locate": {
+      "qemu-system-aarch64.wasm": "qemu.wasm",
+      "qemu-system-aarch64.worker.js": "qemu.worker.js"
+    },
+    "firmware": {}
+  },
+  "guest": {
+    "rootfs": {
+      "artifactPath": "rootfs.ext4",
+      "mountPath": "/pack/rootfs.ext4"
+    },
+    "kernel": {
+      "artifactPath": "vmlinuz-linux",
+      "mountPath": "/pack/vmlinuz-linux"
+    },
+    "initramfs": {
+      "artifactPath": "initramfs-linux.img",
+      "mountPath": "/pack/initramfs-linux.img"
+    }
+  },
+  "qemu": {
+    "architecture": "aarch64",
+    "memoryMiB": 1536,
+    "cores": 4,
+    "arguments": [
+      "-machine",
+      "virt,gic-version=3",
+      "-cpu",
+      "cortex-a72",
+      "-m",
+      "1536M",
+      "-accel",
+      "tcg,tb-size=128,thread=multi",
+      "-smp",
+      "4,sockets=1,cores=4,threads=1",
+      "-display",
+      "sdl,gl=off,show-cursor=on",
+      "-device",
+      "virtio-gpu-pci,max_outputs=1,xres=1600,yres=900",
+      "-device",
+      "virtio-keyboard-pci",
+      "-device",
+      "virtio-tablet-pci",
+      "-kernel",
+      "/pack/vmlinuz-linux",
+      "-initrd",
+      "/pack/initramfs-linux.img",
+      "-append",
+      "root=/dev/vda rw rootwait console=tty0 console=ttyAMA0,115200n8 console=hvc0 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1",
+      "-device",
+      "virtio-serial-pci",
+      "-chardev",
+      "stdio,id=omarchy-diag,mux=on",
+      "-serial",
+      "chardev:omarchy-diag",
+      "-device",
+      "virtserialport,chardev=omarchy-diag,name=omarchy.web.diagnostics",
+      "-monitor",
+      "none",
+      "-parallel",
+      "none",
+      "-nic",
+      "none",
+      "-no-reboot"
+    ]
+  }
+}

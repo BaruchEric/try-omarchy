@@ -8,12 +8,16 @@ builder_image="${QEMU_WASM_BUILDER_IMAGE:-omarchy-qemu-wasm-builder:emsdk-3.1.50
 em_cache_volume="${QEMU_WASM_EM_CACHE_VOLUME:-omarchy-qemu-wasm-emcache-3.1.50}"
 tcg_experiment="${OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT:-}"
 graphics_experiment="${OMARCHY_GRAPHICS_EXPERIMENT:-}"
+qemu_architecture="${OMARCHY_QEMU_ARCHITECTURE:-x86_64}"
 webgl_build=
 if [[ "$graphics_experiment" == "virgl-webgl2" ||
       "$graphics_experiment" == "webgl2-present" ]]; then
   webgl_build=1
 fi
 default_build_volume=omarchy-qemu-wasm-build-qemu-8.2-emsdk-3.1.50
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  default_build_volume+=-aarch64
+fi
 if [[ "$tcg_experiment" == "250" ]]; then
   default_build_volume+=-tcg-threshold-250
 elif [[ "$tcg_experiment" == "750" ]]; then
@@ -60,6 +64,14 @@ command -v node >/dev/null 2>&1 || { printf 'node is required\n' >&2; exit 1; }
   printf 'unsupported QEMU-Wasm graphics experiment: %s\n' "$graphics_experiment" >&2
   exit 2
 }
+[[ "$qemu_architecture" == "x86_64" || "$qemu_architecture" == "aarch64" ]] || {
+  printf 'unsupported QEMU guest architecture: %s\n' "$qemu_architecture" >&2
+  exit 2
+}
+[[ "$qemu_architecture" == "x86_64" || -z "$graphics_experiment" ]] || {
+  printf 'ARM browser experiment does not yet support a graphics experiment\n' >&2
+  exit 2
+}
 [[ -z "$tcg_experiment" || -z "$graphics_experiment" ||
    ( ( "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "750" ||
        "$tcg_experiment" == "1500-clock" ) &&
@@ -72,7 +84,7 @@ command -v node >/dev/null 2>&1 || { printf 'node is required\n' >&2; exit 1; }
 mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 qemu_source="$(cd "$qemu_source" && pwd)"
-if [[ ( -n "$tcg_experiment" || -n "$graphics_experiment" ) &&
+if [[ ( "$qemu_architecture" != "x86_64" || -n "$tcg_experiment" || -n "$graphics_experiment" ) &&
       "$output_dir" == "$runtime_dir/dist" ]]; then
   printf 'experiments must use an isolated output directory, not runtime/dist\n' >&2
   exit 2
@@ -270,6 +282,7 @@ docker run --rm --init \
   "${virgl_mount_args[@]}" \
   --env "BUILD_JOBS=$jobs" \
   --env "OMARCHY_GRAPHICS_EXPERIMENT=$graphics_experiment" \
+  --env "OMARCHY_QEMU_ARCHITECTURE=$qemu_architecture" \
   --env "OUTPUT_UID=$(id -u)" \
   --env "OUTPUT_GID=$(id -g)" \
   --entrypoint /runtime/scripts/build-inside-container.sh \
@@ -278,7 +291,9 @@ docker run --rm --init \
 cleanup_source_overlay
 trap - EXIT
 
-if [[ "$graphics_experiment" == "virgl-webgl2" ]]; then
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  cp "$runtime_dir/config/arm64-browser.json" "$output_dir/runtime-manifest.json"
+elif [[ "$graphics_experiment" == "virgl-webgl2" ]]; then
   cp "$runtime_dir/config/virgl-webgl2.json" "$output_dir/runtime-manifest.json"
 elif [[ "$graphics_experiment" == "webgl2-present" ]]; then
   cp "$runtime_dir/config/webgl2-present.json" "$output_dir/runtime-manifest.json"
@@ -286,6 +301,11 @@ else
   cp "$runtime_dir/config/demo.json" "$output_dir/runtime-manifest.json"
 fi
 install -m 0644 "$runtime_dir/web/runtime.mjs" "$output_dir/runtime.mjs"
+if [[ "$qemu_architecture" == "aarch64" ]]; then
+  node "$runtime_dir/scripts/verify-arm64-qemu-wasm.mjs" "$output_dir"
+  printf 'Experimental ARM64 QEMU-Wasm runtime written to %s\n' "$output_dir"
+  exit 0
+fi
 node "$runtime_dir/scripts/bundle-production-worker.mjs" "$output_dir/production-worker.mjs"
 if [[ -n "$tcg_experiment" ]]; then
   node "$runtime_dir/scripts/stamp-tcg-threshold-experiment.mjs" \

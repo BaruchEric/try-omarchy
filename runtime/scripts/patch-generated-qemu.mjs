@@ -5,6 +5,12 @@ import { resolve } from "node:path";
 
 const path = resolve(process.argv[2] ?? "qemu-system-x86_64");
 const source = await readFile(path, "utf8");
+const wasmBinaryName = source.match(
+  /wasmBinaryFile="(qemu-system-[a-z0-9_]+\.wasm)"/,
+)?.[1];
+if (!wasmBinaryName) {
+  throw new Error(`Generated QEMU module has no target-specific Wasm name: ${path}.`);
+}
 const transforms = [
   {
     label: "Emscripten Browser.init pointer-lock branch",
@@ -14,7 +20,7 @@ const transforms = [
   {
     label: "pthread Wasm URL bootstrap",
     needle: 'var wasmBinaryFile;if(Module["locateFile"]){',
-    replacement: 'var wasmBinaryFile;if(ENVIRONMENT_IS_PTHREAD){wasmBinaryFile="qemu-system-x86_64.wasm"}else if(Module["locateFile"]){',
+    replacement: `var wasmBinaryFile;if(ENVIRONMENT_IS_PTHREAD){wasmBinaryFile="${wasmBinaryName}"}else if(Module["locateFile"]){`,
   },
 ];
 const optionalTransforms = [
