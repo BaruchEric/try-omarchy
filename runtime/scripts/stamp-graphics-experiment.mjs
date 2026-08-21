@@ -24,17 +24,26 @@ function assertExactlyOnce(source, value, label) {
   if (count !== 1) throw new Error(`${label} must occur exactly once; found ${count}`);
 }
 
+function replaceNearestBeforeUniqueAnchor(source, from, to, anchor, label) {
+  assertExactlyOnce(source, anchor, `${label} anchor`);
+  const anchorIndex = source.indexOf(anchor);
+  const fromIndex = source.lastIndexOf(from, anchorIndex);
+  if (fromIndex < 0) throw new Error(`${label} must occur before its anchor`);
+  return source.slice(0, fromIndex) + to + source.slice(fromIndex + from.length);
+}
+
 export function stampGraphicsExperiment(workerSource, wasmSha256, experiment = "virgl-webgl2") {
   if (!EXPERIMENTS.has(experiment)) throw new Error(`unsupported graphics experiment: ${experiment}`);
   if (!SHA256.test(wasmSha256)) throw new Error("experimental QEMU Wasm SHA-256 is invalid");
   if (workerSource.includes("OMARCHY_EXPERIMENT qemu-wasm-graphics")) {
     throw new Error("bundled Worker is already stamped as a graphics experiment");
   }
-  let stamped = replaceExactlyOnce(
+  let stamped = replaceNearestBeforeUniqueAnchor(
     workerSource,
     COLD_DISPLAY,
     WEBGL_DISPLAY,
-    "canonical software display profile",
+    COLD_DEVICE,
+    "canonical x86 software display profile",
   );
   if (experiment === "virgl-webgl2") {
     stamped = replaceExactlyOnce(

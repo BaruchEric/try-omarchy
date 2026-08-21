@@ -786,6 +786,21 @@ test("VirGL/WebGL2 Worker stamping changes only the exact display profile", () =
   assert.throws(() => stampGraphicsExperiment(source, wasmSha256, "other"), /unsupported/);
 });
 
+test("VirGL/WebGL2 Worker stamping leaves the ARM software display profile unchanged", () => {
+  const wasmSha256 = "e".repeat(64);
+  const source = [
+    'const x86Display = "sdl,gl=off,show-cursor=on";',
+    'const x86Device = "virtio-vga,max_outputs=1,xres=1600,yres=900";',
+    'const armDisplay = "sdl,gl=off,show-cursor=on";',
+    'const armDevice = "virtio-gpu-pci,max_outputs=1,xres=1600,yres=900";',
+  ].join("\n");
+  const stamped = stampGraphicsExperiment(source, wasmSha256, "virgl-webgl2");
+  assert.equal(stamped.split("sdl,gl=es,show-cursor=on").length - 1, 1);
+  assert.equal(stamped.split("sdl,gl=off,show-cursor=on").length - 1, 1);
+  assert.match(stamped, /virtio-vga-gl,max_outputs=1,xres=1600,yres=900/);
+  assert.match(stamped, /virtio-gpu-pci,max_outputs=1,xres=1600,yres=900/);
+});
+
 test("WebGL2 presenter preserves the checkpoint GPU device and rebinds only the experimental Wasm", () => {
   const canonical = "c49072051ba41f5edc9c5044ff3623563aa9088314b0e63207f53d36b3a7dae8";
   const wasmSha256 = "d".repeat(64);
