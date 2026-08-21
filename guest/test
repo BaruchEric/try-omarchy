@@ -29,4 +29,7 @@ elif [[ -d /private/tmp/omarchy-source-inspected/.git ]]; then
   args+=(--source /private/tmp/omarchy-source-inspected)
 fi
 
-exec python3 "$guest_dir/tests/verify.py" "${args[@]}"
+if ((${#args[@]})); then
+  exec python3 "$guest_dir/tests/verify.py" "${args[@]}"
+fi
+exec python3 "$guest_dir/tests/verify.py"

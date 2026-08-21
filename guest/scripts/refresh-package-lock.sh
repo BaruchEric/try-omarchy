@@ -5,7 +5,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: refresh-package-lock.sh --source OMARCHY_SOURCE --output FILE"
+  echo "Usage: refresh-package-lock.sh [--source OMARCHY_SOURCE] [--spec FILE] --output FILE"
 }
 
 fail() {
@@ -16,6 +16,7 @@ fail() {
 script_dir=$(cd "$(dirname "$0")" && pwd)
 guest_dir=$(cd "$script_dir/.." && pwd)
 source_dir=""
+spec="$guest_dir/spec.json"
 output=""
 
 while (($#)); do
@@ -28,6 +29,10 @@ while (($#)); do
       output=${2:-}
       shift 2
       ;;
+    --spec)
+      spec=${2:-}
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -38,10 +43,26 @@ while (($#)); do
   esac
 done
 
-[[ -n $source_dir && -d $source_dir/.git ]] || fail "--source must be the pinned Omarchy checkout"
+[[ -f $spec ]] || fail "--spec must be a build spec"
+spec=$(cd "$(dirname "$spec")" && pwd)/$(basename "$spec")
+architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"]["architecture"])' "$spec")
+packages_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["packages"])' "$spec")
+packages_file="$guest_dir/$packages_input"
+[[ $architecture == "x86_64" || $architecture == "aarch64" ]] || fail "unsupported spec architecture: $architecture"
+[[ -f $packages_file ]] || fail "package list not found: $packages_file"
 [[ -n $output ]] || fail "--output is required"
-[[ $(uname -s) == "Linux" && $(uname -m) == "x86_64" ]] || fail "run on x86_64 Linux (the builder container is fine)"
+[[ $(uname -s) == "Linux" && $(uname -m) == "$architecture" ]] \
+  || fail "run on $architecture Linux (the matching builder container is fine)"
 (( EUID == 0 )) || fail "run as root so pacman can refresh its isolated databases"
+
+pacman_input=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"].get("pacmanConfig", ""))' "$spec")
+if [[ -n $pacman_input ]]; then
+  upstream_pacman_config="$guest_dir/$pacman_input"
+else
+  [[ -n $source_dir && -d $source_dir/.git ]] || fail "--source must be the pinned Omarchy checkout"
+  upstream_pacman_config="$source_dir/default/pacman/pacman-stable.conf"
+fi
+[[ -f $upstream_pacman_config ]] || fail "pacman configuration not found: $upstream_pacman_config"
 
 temporary=$(mktemp -d)
 cleanup() {
@@ -52,7 +73,7 @@ chmod 0755 "$temporary"
 mkdir -p "$temporary/db"
 chmod 0755 "$temporary/db"
 config="$temporary/pacman.conf"
-cp "$source_dir/default/pacman/pacman-stable.conf" "$config"
+cp "$upstream_pacman_config" "$config"
 if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]; then
   sed -i '/^\[options\]$/a DisableSandbox' "$config"
 fi
@@ -62,7 +83,7 @@ pacman -Syy --noconfirm --config "$config" \
 python3 "$script_dir/resolve-package-lock.py" \
   --config "$config" \
   --dbpath "$temporary/db" \
-  --packages "$guest_dir/packages.x86_64.txt" \
+  --packages "$packages_file" \
   --output "$temporary/resolved.json"
 
 mkdir -p "$(dirname "$output")"

@@ -287,6 +287,10 @@ sudo ./guest/scripts/refresh-package-lock.sh \
 diff -u guest/packages.x86_64.lock.json /tmp/packages.x86_64.lock.json
 ```
 
+The same resolver is architecture-aware. For ARM64, run it inside the supplied
+ARM builder and pass `--spec /workspace/guest/spec.aarch64.json`; always write
+to a separate review file before editing `packages.aarch64.lock.json`.
+
 For release reproduction, retain the exact builder image digest and package
 archive/cache alongside the manifest. The lock prevents silent mirror drift;
 the retained cache protects against an old package disappearing from a rolling
