@@ -880,7 +880,8 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
     `const identity = { browserQemuWasmSha256: "${canonical}" };`,
     "const qemu = { cores: 2, arguments: [",
     '  "2,sockets=1,cores=2,threads=1",',
-    '], smp: "2,sockets=1,cores=2,threads=1" };',
+    '], smp: "2,sockets=1,cores=2,threads=1",',
+    'restoreSmp: "2,sockets=1,cores=2,threads=1" };',
     'const display = "sdl,gl=off,show-cursor=on";',
     'const device = "virtio-vga,max_outputs=1,xres=1600,yres=900";',
   ].join("\n");
@@ -894,7 +895,7 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   assert.match(combined, /virtio-vga-gl,max_outputs=1,xres=1600,yres=900/);
   assert.match(fourVcpu, /^\/\/ OMARCHY_EXPERIMENT browser-vcpus count=4 /);
   assert.match(fourVcpu, /cores: 4,/);
-  assert.equal(fourVcpu.split("4,sockets=1,cores=4,threads=1").length - 1, 2);
+  assert.equal(fourVcpu.split("4,sockets=1,cores=4,threads=1").length - 1, 3);
   assert.throws(() => stampVcpuExperiment(fourVcpu, candidate, 4), /already stamped/);
 
   const [makefile, buildScript, packageScript, verifier] = await Promise.all([

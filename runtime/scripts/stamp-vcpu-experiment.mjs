@@ -25,7 +25,7 @@ export function stampVcpuExperiment(workerSource, wasmSha256, vcpus = EXPERIMENT
     throw new Error("bundled Worker is already stamped as a vCPU experiment");
   }
   let stamped = replaceExactly(workerSource, "cores: 2,", "cores: 4,", 1, "canonical core count");
-  stamped = replaceExactly(stamped, CANONICAL_SMP, EXPERIMENTAL_SMP, 2, "canonical SMP profile");
+  stamped = replaceExactly(stamped, CANONICAL_SMP, EXPERIMENTAL_SMP, 3, "canonical SMP profile");
   return `// OMARCHY_EXPERIMENT browser-vcpus count=4 promotion-eligible=false ` +
     `qemu-wasm-sha256=${wasmSha256}\n${stamped}`;
 }
