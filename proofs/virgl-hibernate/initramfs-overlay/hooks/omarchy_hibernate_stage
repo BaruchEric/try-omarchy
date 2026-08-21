@@ -28,6 +28,7 @@ run_latehook() {
 
     cat >"$root/etc/modprobe.d/90-omarchy-hibernate-virtio-gpu.conf" <<'EOF'
 blacklist virtio_gpu
+blacklist virtio_input
 EOF
     cp /usr/local/libexec/omarchy-egl-renderer-probe \
         "$root/usr/local/libexec/omarchy-egl-renderer-probe"
@@ -73,6 +74,7 @@ trap 'fail_closed producer-command-failed' ERR
 [[ $nonce =~ ^[0-9a-f]{64}$ ]] || fail_closed invalid-nonce
 [[ $swap_uuid == 4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f ]] || fail_closed invalid-swap-uuid
 [[ ! -d /sys/module/virtio_gpu ]] || fail_closed gpu-bound-before-hibernate
+[[ ! -d /sys/module/virtio_input ]] || fail_closed input-bound-before-hibernate
 grep -qw disk /sys/power/state || fail_closed kernel-hibernation-unavailable
 source_boot_id=$(</proc/sys/kernel/random/boot_id)
 printf '%s\n' "$source_boot_id" >"$source_boot_id_file"
@@ -110,9 +112,21 @@ dmesg >"$state_dir/post-resume-dmesg.log"
 grep -Fq 'PM: hibernation: hibernation exit' "$state_dir/post-resume-dmesg.log" \
   || fail_closed missing-hibernation-exit-proof
 [[ ! -d /sys/module/virtio_gpu ]] || fail_closed gpu-restored-from-image
+[[ ! -d /sys/module/virtio_input ]] || fail_closed input-restored-from-image
 [[ $(</proc/sys/kernel/random/boot_id) == "$source_boot_id" ]] || fail_closed boot-id-mismatch
 
 rm -f /etc/modprobe.d/90-omarchy-hibernate-virtio-gpu.conf
+modprobe virtio_input
+input_device_count=0
+for _attempt in $(seq 1 120); do
+  input_device_count=$(find /sys/bus/virtio/drivers/virtio_input \
+    -maxdepth 1 -type l -name 'virtio*' 2>/dev/null | wc -l)
+  (( input_device_count == 2 )) && break
+  sleep 1
+done
+(( input_device_count == 2 )) || fail_closed fresh-input-devices-missing
+udevadm trigger --subsystem-match=input --action=change
+udevadm settle --timeout=60
 modprobe virtio_gpu
 for _attempt in $(seq 1 120); do
   [[ -e /dev/dri/renderD128 ]] && break

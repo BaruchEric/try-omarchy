@@ -238,7 +238,7 @@ test("the native QEMU producer is pinned and built with VirGL/SDL/OpenGL", async
   }
 });
 
-test("derived initramfs defers virtio_gpu and carries exact resume/late hooks", async () => {
+test("derived initramfs defers virtio GPU and input and carries exact resume/late hooks", async () => {
   const [config, prepare, blacklist, resume, late] = await Promise.all([
     read("initramfs-overlay/config"),
     read("prepare-initramfs.sh"),
@@ -247,7 +247,7 @@ test("derived initramfs defers virtio_gpu and carries exact resume/late hooks", 
     read("initramfs-overlay/hooks/omarchy_hibernate_stage"),
   ]);
   assert.equal(config, [
-    'MODULES="virtio_input"',
+    'MODULES=""',
     'EARLYHOOKS="udev"',
     'HOOKS="udev keymap resume"',
     'LATEHOOKS="omarchy_hibernate_stage"',
@@ -255,9 +255,10 @@ test("derived initramfs defers virtio_gpu and carries exact resume/late hooks", 
     'EMERGENCYHOOKS=""',
     "",
   ].join("\n"));
-  assert.doesNotMatch(config, /\bkms\b|virtio_gpu/);
-  assert.match(blacklist, /^# The source hibernates[\s\S]*\nblacklist virtio_gpu\n+$/);
+  assert.doesNotMatch(config, /\bkms\b|virtio_gpu|virtio_input/);
+  assert.match(blacklist, /^# The source hibernates[\s\S]*\nblacklist virtio_gpu\nblacklist virtio_input\n+$/);
   assert.equal(occurrences(blacklist, "blacklist virtio_gpu"), 1);
+  assert.equal(occurrences(blacklist, "blacklist virtio_input"), 1);
   for (const token of [
     "cmp -n", "zstd -dc", "cpio -it", "hooks/resume",
     "hooks/omarchy_hibernate_stage", "omarchy-egl-renderer-probe",
@@ -276,8 +277,10 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
   const late = await read("initramfs-overlay/hooks/omarchy_hibernate_stage");
   for (const token of [
     "blacklist virtio_gpu",
+    "blacklist virtio_input",
     "TimeoutStartSec=infinity",
     "[[ ! -d /sys/module/virtio_gpu ]]",
+    "[[ ! -d /sys/module/virtio_input ]]",
     "mkswap --force --uuid",
     "stat -Lc '0x%t 0x%T'",
     "resume-device-mismatch",
@@ -303,8 +306,9 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
   );
   assert.ok(
     late.indexOf(">/sys/power/state") < late.indexOf("missing-hibernation-exit-proof") &&
-      late.indexOf("missing-hibernation-exit-proof") < late.indexOf("modprobe virtio_gpu"),
-    "the restored branch must prove hibernation exit before binding the GPU",
+      late.indexOf("missing-hibernation-exit-proof") < late.indexOf("modprobe virtio_input") &&
+      late.indexOf("modprobe virtio_input") < late.indexOf("modprobe virtio_gpu"),
+    "the restored branch must prove hibernation exit before binding fresh input and GPU devices",
   );
   assert.doesNotMatch(late, /systemctl\s+hibernate|hibernate\.target\s+(unmask|start)/);
   for (const variable of ["LIBGL_ALWAYS_SOFTWARE", "GALLIUM_DRIVER", "WLR_RENDERER_ALLOW_SOFTWARE"]) {

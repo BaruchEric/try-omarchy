@@ -4,7 +4,8 @@ This is an isolated, non-promotable producer/proof harness for the
 `guest-hibernation-resume` path. It exists because QEMU 8.2 rejects migration
 of an active VirGL device: instead of serializing QEMU device state, a fresh
 QEMU boots the pinned kernel and derived initramfs, Linux restores userspace
-from a dedicated swap disk, and `virtio_gpu` is initialized only after resume.
+from a dedicated swap disk, and `virtio_gpu` plus `virtio_input` are initialized
+only after resume.
 
 No script in this directory changes `guest/dist`, `runtime/dist`, a release
 manifest, or a running server. Generated builds and evidence remain under the
@@ -30,8 +31,10 @@ ordered block records must match. Native evidence additionally pins
 TrueColor GLX visual that supports QEMU's shared OpenGL 4.5 core context. This
 keeps fullscreen Xvfb capture self-contained without DirectColor colormaps.
 
-The derived initramfs omits `kms`, removes `virtio_gpu` from early modules,
-and blacklists it during the new-kernel resume phase. A pre-desktop oneshot
+The derived initramfs omits `kms`, removes `virtio_gpu` and `virtio_input` from
+early modules, and blacklists both during the new-kernel resume phase. This
+prevents a fresh target from inheriting stale input virtqueues from the saved
+kernel image. A pre-desktop oneshot
 formats the blank swap device and enters swsusp directly with
 `printf disk > /sys/power/state`; it does not rely on a systemd sleep-target
 transaction. `TimeoutStartSec=infinity` prevents systemd from killing a slow
@@ -39,9 +42,10 @@ TCG producer. A failed fresh target emits `OMARCHY_HIBERNATION_COLD_BOOT` and
 powers off instead of silently continuing as a cold boot.
 
 After an authentic restore, the suspended oneshot explicitly loads
-`virtio_gpu`, requires kernel `+virgl` evidence, creates a fresh EGL/GLES
-context on `/dev/dri/renderD128`, and emits the renderer report immediately
-before the nonce-bound hibernation report. A native software host may report
+`virtio_input`, requires both QEMU input devices to bind, settles udev, and only
+then loads `virtio_gpu`. It requires kernel `+virgl` evidence, creates a fresh
+EGL/GLES context on `/dev/dri/renderD128`, and emits the renderer report
+immediately before the nonce-bound hibernation report. A native software host may report
 `virgl (llvmpipe ...)`; this still proves that the guest selected VirGL rather
 than direct guest llvmpipe. Browser acceptance separately proves WebGL2 host
 presentation.
