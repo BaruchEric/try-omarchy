@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 private func usage() -> Never {
-    fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT]\n", stderr)
+    fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] [--stream-window] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT] [--stream-window]\n", stderr)
     exit(64)
 }
 
@@ -24,6 +24,7 @@ do {
     let command = arguments[0]
     let directory = URL(fileURLWithPath: arguments[1], isDirectory: true).standardizedFileURL
     let allowResume = !arguments.dropFirst(2).contains("--no-resume")
+    let streamWindow = arguments.dropFirst(2).contains("--stream-window")
 
     switch command {
     case "--validate":
@@ -37,7 +38,9 @@ do {
             "status": "valid",
         ])
     case "--run":
-        guard arguments.count == 2 || (arguments.count == 3 && !allowResume) else { usage() }
+        let runOptions = Set(arguments.dropFirst(2))
+        guard runOptions.isSubset(of: Set(["--no-resume", "--stream-window"])),
+              arguments.count == 2 + runOptions.count else { usage() }
         guard HostCapabilities.virtualizationAvailable else {
             throw HelperError.unsupportedHost("requires Apple Silicon and Virtualization.framework")
         }
@@ -46,7 +49,8 @@ do {
             let controller = try MachineController(
                 bundle: bundle,
                 resumeStore: ResumeStore(),
-                allowResume: allowResume
+                allowResume: allowResume,
+                streamWindow: streamWindow
             )
             let application = NSApplication.shared
             application.setActivationPolicy(.regular)
@@ -71,11 +75,20 @@ do {
         } else {
             port = LoopbackServer.defaultPort
         }
-        let allowedArguments = Set([0, 1, originIndex, originIndex + 1] + (arguments.firstIndex(of: "--port").map { [$0, $0 + 1] } ?? []))
+        let streamWindowIndex = arguments.firstIndex(of: "--stream-window")
+        let allowedArguments = Set(
+            [0, 1, originIndex, originIndex + 1] +
+            (arguments.firstIndex(of: "--port").map { [$0, $0 + 1] } ?? []) +
+            (streamWindowIndex.map { [$0] } ?? [])
+        )
         guard allowedArguments.count == arguments.count else { usage() }
         let bundle = try GuestBundle.load(directory: directory)
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let launcher = NativeVMLauncher(executableURL: executable, bundleDirectory: directory)
+        let launcher = NativeVMLauncher(
+            executableURL: executable,
+            bundleDirectory: directory,
+            streamWindow: streamWindow
+        )
         try LoopbackServer.serve(port: port, allowedOrigin: allowedOrigin, bundle: bundle, launcher: launcher)
     default:
         usage()

@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import OmarchyVMHelper
@@ -410,7 +411,7 @@ struct LocalAPITests {
             allowedOrigin: origin,
             bundle: bundle,
             capabilities: capabilities,
-            launch: { Issue.record("GET must not launch"); return false }
+            launch: { _ in Issue.record("GET must not launch"); return false }
         )
         #expect(response.status == 200)
         #expect(response.headers["Access-Control-Allow-Origin"] == origin)
@@ -425,7 +426,7 @@ struct LocalAPITests {
             allowedOrigin: origin,
             bundle: bundle,
             capabilities: capabilities,
-            launch: { false }
+            launch: { _ in false }
         )
         #expect(rejectedOrigin.status == 403)
         #expect(rejectedOrigin.headers["Access-Control-Allow-Origin"] == nil)
@@ -435,7 +436,7 @@ struct LocalAPITests {
             allowedOrigin: origin,
             bundle: bundle,
             capabilities: capabilities,
-            launch: { false }
+            launch: { _ in false }
         )
         #expect(stale.status == 400)
     }
@@ -455,7 +456,11 @@ struct LocalAPITests {
             request(method: "POST", target: "/v1/launch", body: body),
             allowedOrigin: origin,
             bundle: bundle,
-            launch: { launches += 1; return true }
+            launch: { token in
+                #expect(token == challenge)
+                launches += 1
+                return true
+            }
         )
         #expect(accepted.status == 202)
         #expect(launches == 1)
@@ -473,7 +478,7 @@ struct LocalAPITests {
             request(method: "POST", target: "/v1/launch", body: hostileBody),
             allowedOrigin: origin,
             bundle: bundle,
-            launch: { Issue.record("hostile POST must not launch"); return true }
+            launch: { _ in Issue.record("hostile POST must not launch"); return true }
         )
         #expect(hostile.status == 400)
 
@@ -481,7 +486,7 @@ struct LocalAPITests {
             request(method: "POST", target: "/v1/launch", body: body),
             allowedOrigin: origin,
             bundle: bundle,
-            launch: { false }
+            launch: { _ in false }
         )
         #expect(conflict.status == 409)
     }
@@ -506,7 +511,7 @@ struct LocalAPITests {
             ),
             allowedOrigin: origin,
             bundle: bundle,
-            launch: { false }
+            launch: { _ in false }
         )
         #expect(response.status == 204)
         #expect(response.headers["Access-Control-Allow-Origin"] == origin)
@@ -526,10 +531,89 @@ struct LocalAPITests {
             ),
             allowedOrigin: origin,
             bundle: bundle,
-            launch: { false }
+            launch: { _ in false }
         )
         #expect(getResponse.status == 204)
         #expect(getResponse.headers["Access-Control-Allow-Private-Network"] == "true")
+
+        let inputResponse = LocalAPI.handle(
+            LocalHTTPRequest(
+                method: "OPTIONS",
+                target: "/v1/input",
+                headers: [
+                    "origin": origin,
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "content-type",
+                    "access-control-request-private-network": "true",
+                ],
+                body: Data()
+            ),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false }
+        )
+        #expect(inputResponse.status == 204)
+        #expect(inputResponse.headers["Access-Control-Allow-Private-Network"] == "true")
+    }
+
+    @Test("input requires the launch token and an exact bounded event")
+    func inputContract() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let bundle = try GuestBundle.load(directory: fixture.root)
+        let event: [String: Any] = [
+            "kind": "key",
+            "sequence": 7,
+            "code": "KeyA",
+            "down": true,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "sessionToken": challenge,
+            "event": event,
+        ], options: [.sortedKeys])
+        var received: NativeRemoteInput?
+        let accepted = LocalAPI.handle(
+            request(method: "POST", target: "/v1/input", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in Issue.record("input must not launch"); return false },
+            input: { token, value in
+                #expect(token == challenge)
+                received = value
+                return true
+            }
+        )
+        #expect(accepted.status == 202)
+        #expect(received == .key(sequence: 7, code: "KeyA", down: true))
+        #expect(try JSONDecoder().decode(NativeInputReceipt.self, from: accepted.body) ==
+            NativeInputReceipt(schemaVersion: 1, accepted: true, sequence: 7))
+
+        let unavailable = LocalAPI.handle(
+            request(method: "POST", target: "/v1/input", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false },
+            input: { _, _ in false }
+        )
+        #expect(unavailable.status == 409)
+
+        var hostileEvent = event
+        hostileEvent["command"] = "open -a Calculator"
+        let hostileBody = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "sessionToken": challenge,
+            "event": hostileEvent,
+        ], options: [.sortedKeys])
+        let hostile = LocalAPI.handle(
+            request(method: "POST", target: "/v1/input", body: hostileBody),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false },
+            input: { _, _ in Issue.record("malformed input must not be relayed"); return true }
+        )
+        #expect(hostile.status == 400)
     }
 
     private func request(
@@ -541,5 +625,54 @@ struct LocalAPITests {
         var headers = ["origin": origin ?? self.origin]
         if method == "POST" { headers["content-type"] = "application/json" }
         return LocalHTTPRequest(method: method, target: target, headers: headers, body: body)
+    }
+}
+
+@Suite("Native remote input")
+struct NativeInputRelayTests {
+    @Test("parser accepts exact browser events and rejects unknown keys")
+    func parser() {
+        #expect(NativeRemoteInput.parse([
+            "kind": "pointer", "sequence": 1, "x": 0.25, "y": 0.75, "buttons": 1,
+        ]) == .pointer(sequence: 1, x: 0.25, y: 0.75, buttons: 1))
+        #expect(NativeRemoteInput.parse([
+            "kind": "wheel", "sequence": 2, "deltaX": 0, "deltaY": 120,
+        ]) == .wheel(sequence: 2, deltaX: 0, deltaY: 120))
+        #expect(NativeRemoteInput.parse([
+            "kind": "release-all", "sequence": 3,
+        ]) == .releaseAll(sequence: 3))
+        #expect(NativeRemoteInput.parse([
+            "kind": "key", "sequence": 4, "code": "KeyA", "down": true, "extra": true,
+        ]) == nil)
+        #expect(NativeRemoteInput.parse([
+            "kind": "key", "sequence": 4, "code": "Unknown", "down": true,
+        ]) == nil)
+    }
+
+    @Test("relay posts key, pointer, wheel, and release events to one process")
+    func postsEvents() {
+        var posted: [(pid_t, CGEventType, CGPoint, Int64)] = []
+        let relay = NativeInputRelay(
+            postEvent: { event, processIdentifier in
+                posted.append((
+                    processIdentifier,
+                    event.type,
+                    event.location,
+                    event.getIntegerValueField(.keyboardEventKeycode)
+                ))
+            },
+            windowBounds: { _ in CGRect(x: 100, y: 200, width: 1600, height: 900) }
+        )
+        #expect(relay.send(.key(sequence: 1, code: "KeyA", down: true), to: 42))
+        #expect(relay.send(.pointer(sequence: 2, x: 0.5, y: 0.5, buttons: 1), to: 42))
+        #expect(relay.send(.wheel(sequence: 3, deltaX: 0, deltaY: 120), to: 42))
+        #expect(relay.send(.releaseAll(sequence: 4), to: 42))
+        #expect(posted.allSatisfy { $0.0 == 42 })
+        #expect(posted.contains { $0.1 == .keyDown && $0.3 == 0 })
+        #expect(posted.contains { $0.1 == .keyUp && $0.3 == 0 })
+        #expect(posted.contains { $0.1 == .leftMouseDown })
+        #expect(posted.contains { $0.1 == .leftMouseUp })
+        #expect(posted.contains { $0.1 == .scrollWheel })
+        #expect(posted.contains { $0.2 == CGPoint(x: 900, y: 650) })
     }
 }

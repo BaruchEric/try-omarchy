@@ -6,7 +6,7 @@ const FIXED_KEY_CODES = new Set([
   "Enter", "Escape", "Backspace", "Tab", "Space", "Minus", "Equal",
   "BracketLeft", "BracketRight", "Backslash", "IntlHash", "Semicolon",
   "Quote", "Backquote", "Comma", "Period", "Slash", "CapsLock",
-  "PrintScreen", "ScrollLock", "Pause", "Insert", "Home", "PageUp",
+  "Insert", "Home", "PageUp",
   "Delete", "End", "PageDown", "ArrowRight", "ArrowLeft", "ArrowDown",
   "ArrowUp", "NumLock", "NumpadDivide", "NumpadMultiply", "NumpadSubtract",
   "NumpadAdd", "NumpadEnter", "Numpad1", "Numpad2", "Numpad3",
@@ -30,7 +30,7 @@ function isAllowedKeyCode(code) {
     FIXED_KEY_CODES.has(code) ||
     /^Key[A-Z]$/.test(code) ||
     /^Digit[0-9]$/.test(code) ||
-    /^F(?:[1-9]|1[0-9]|2[0-4])$/.test(code)
+    /^F(?:[1-9]|1[0-9]|20)$/.test(code)
   );
 }
 

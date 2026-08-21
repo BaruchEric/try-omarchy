@@ -132,3 +132,9 @@ struct NativeLaunchEnvelope: Codable, Equatable {
     let architecture: String
     let display: String
 }
+
+struct NativeInputReceipt: Codable, Equatable {
+    let schemaVersion: Int
+    let accepted: Bool
+    let sequence: Int
+}

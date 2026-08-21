@@ -5,31 +5,52 @@ final class NativeVMLauncher: @unchecked Sendable {
     private let lock = NSLock()
     private let executableURL: URL
     private let bundleDirectory: URL
+    private let inputRelay: NativeInputRelay
+    private let streamWindow: Bool
     private var child: Process?
+    private var sessionToken: String?
 
-    init(executableURL: URL, bundleDirectory: URL) {
+    init(
+        executableURL: URL,
+        bundleDirectory: URL,
+        streamWindow: Bool = false,
+        inputRelay: NativeInputRelay = NativeInputRelay()
+    ) {
         self.executableURL = executableURL
         self.bundleDirectory = bundleDirectory
+        self.streamWindow = streamWindow
+        self.inputRelay = inputRelay
     }
 
-    func launch() throws -> Bool {
+    func launch(sessionToken: String) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         if child?.isRunning == true { return false }
 
         let process = Process()
         process.executableURL = executableURL
-        process.arguments = ["--run", bundleDirectory.path]
+        process.arguments = ["--run", bundleDirectory.path] + (streamWindow ? ["--stream-window"] : [])
         process.standardInput = FileHandle.nullDevice
         process.terminationHandler = { [weak self, weak process] _ in
             guard let self, let process else { return }
             self.lock.lock()
-            if self.child === process { self.child = nil }
+            if self.child === process {
+                self.child = nil
+                self.sessionToken = nil
+            }
             self.lock.unlock()
         }
         try process.run()
         child = process
+        self.sessionToken = sessionToken
         return true
+    }
+
+    func sendInput(sessionToken: String, event: NativeRemoteInput) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let child, child.isRunning, self.sessionToken == sessionToken else { return false }
+        return inputRelay.send(event, to: child.processIdentifier)
     }
 }
 
@@ -82,7 +103,8 @@ enum LoopbackServer {
                         request,
                         allowedOrigin: allowedOrigin,
                         bundle: bundle,
-                        launch: launcher.launch
+                        launch: { token in try launcher.launch(sessionToken: token) },
+                        input: { token, event in launcher.sendInput(sessionToken: token, event: event) }
                     )
                 } catch {
                     response = LocalHTTPResponse(

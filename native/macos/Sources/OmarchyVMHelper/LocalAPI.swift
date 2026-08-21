@@ -77,6 +77,7 @@ struct LocalHTTPResponse {
 enum LocalAPI {
     static let capabilityPath = "/v1/capabilities"
     static let launchPath = "/v1/launch"
+    static let inputPath = "/v1/input"
     static let challengePattern = try! NSRegularExpression(pattern: "^[0-9a-f]{64}$")
 
     static func handle(
@@ -84,7 +85,8 @@ enum LocalAPI {
         allowedOrigin: String,
         bundle: GuestBundle,
         capabilities: HelperCapabilities = HostCapabilities.report(),
-        launch: () throws -> Bool
+        launch: (String) throws -> Bool,
+        input: (String, NativeRemoteInput) -> Bool = { _, _ in false }
     ) -> LocalHTTPResponse {
         guard request.headers["origin"] == allowedOrigin else {
             return response(status: 403, reason: "Forbidden", body: ["error": "origin rejected"])
@@ -107,7 +109,7 @@ enum LocalAPI {
                 && URLComponents(string: "http://loopback\(request.target)")?.path == capabilityPath
                 && request.headers["access-control-request-headers"] == nil
             let launchPreflight = requestedMethod == "POST"
-                && request.target == launchPath
+                && [launchPath, inputPath].contains(request.target)
                 && request.headers["access-control-request-headers"]?.lowercased() == "content-type"
             guard capabilityPreflight || launchPreflight else {
                 return response(status: 403, reason: "Forbidden", headers: cors, body: ["error": "preflight rejected"])
@@ -141,9 +143,33 @@ enum LocalAPI {
             return encodableResponse(status: 200, reason: "OK", headers: cors, value: envelope)
         }
 
-        guard request.method == "POST", request.target == launchPath,
+        guard request.method == "POST",
+              [launchPath, inputPath].contains(request.target),
               request.headers["content-type"]?.lowercased() == "application/json",
-              let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any],
+              let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
+            return response(status: 400, reason: "Bad Request", headers: cors, body: ["error": "request rejected"])
+        }
+
+        if request.target == inputPath {
+            guard Set(object.keys) == Set(["schemaVersion", "sessionToken", "event"]),
+                  object["schemaVersion"] as? Int == 1,
+                  let sessionToken = object["sessionToken"] as? String,
+                  isChallenge(sessionToken),
+                  let event = NativeRemoteInput.parse(object["event"] as Any) else {
+                return response(status: 400, reason: "Bad Request", headers: cors, body: ["error": "input request rejected"])
+            }
+            guard input(sessionToken, event) else {
+                return response(status: 409, reason: "Conflict", headers: cors, body: ["error": "native VM input unavailable"])
+            }
+            return encodableResponse(
+                status: 202,
+                reason: "Accepted",
+                headers: cors,
+                value: NativeInputReceipt(schemaVersion: 1, accepted: true, sequence: event.sequence)
+            )
+        }
+
+        guard
               Set(object.keys) == Set(["schemaVersion", "challenge"]),
               object["schemaVersion"] as? Int == 1,
               let challenge = object["challenge"] as? String,
@@ -151,7 +177,7 @@ enum LocalAPI {
             return response(status: 400, reason: "Bad Request", headers: cors, body: ["error": "launch request rejected"])
         }
         do {
-            guard try launch() else {
+            guard try launch(challenge) else {
                 return response(status: 409, reason: "Conflict", headers: cors, body: ["error": "native VM is already running"])
             }
             return encodableResponse(

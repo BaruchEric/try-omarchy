@@ -7,6 +7,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     private let bundle: GuestBundle
     private let resumeStore: ResumeStore
     private let allowResume: Bool
+    private let streamWindow: Bool
     private let plan: MachinePlan
     private let machineIdentifier: VZGenericMachineIdentifier
     private let expectedResume: ResumeMetadata
@@ -18,10 +19,16 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     private var virtualMachine: VZVirtualMachine?
     private var window: NSWindow?
 
-    init(bundle: GuestBundle, resumeStore: ResumeStore, allowResume: Bool) throws {
+    init(
+        bundle: GuestBundle,
+        resumeStore: ResumeStore,
+        allowResume: Bool,
+        streamWindow: Bool = false
+    ) throws {
         self.bundle = bundle
         self.resumeStore = resumeStore
         self.allowResume = allowResume
+        self.streamWindow = streamWindow
         let machinePlan = try MachinePlan.make(spec: bundle.spec)
         self.plan = machinePlan
         let storedMetadata = allowResume ? resumeStore.metadata(for: bundle.identity) : nil
@@ -123,13 +130,15 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
 
         let window = NSWindow(
             contentRect: frame,
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: streamWindow ? [.borderless] : [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.title = "Omarchy Quattro · ARM64"
         window.contentView = view
-        window.contentAspectRatio = NSSize(width: plan.width, height: plan.height)
+        if !streamWindow {
+            window.contentAspectRatio = NSSize(width: plan.width, height: plan.height)
+        }
         window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)
