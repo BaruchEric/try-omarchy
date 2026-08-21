@@ -94,8 +94,8 @@ function graphicsExperiment() {
 function vcpuExperiment() {
   const value = process.env.OMARCHY_VCPU_EXPERIMENT;
   if (value === undefined || value === "") return null;
-  assert.equal(value, "4", "unsupported browser vCPU experiment");
-  return 4;
+  assert.ok(value === "1" || value === "4", "unsupported browser vCPU experiment");
+  return Number(value);
 }
 
 export function graphicsExperimentWorkerIdentityMatches(
@@ -135,14 +135,14 @@ function validateRuntimeManifest(manifest, threshold, graphics, vcpus) {
   if (manifest.schemaVersion !== 2) return;
   const canonicalShape = structuredClone(manifest);
   const hibernation = canonicalShape.checkpoint?.mode === HIBERNATION_MODE;
-  if (vcpus === 4) {
-    assert.equal(canonicalShape.qemu.cores, 4, "four-vCPU manifest metadata is missing");
+  if (vcpus !== null) {
+    assert.equal(canonicalShape.qemu.cores, vcpus, "experimental vCPU manifest metadata is missing");
     canonicalShape.qemu.cores = 2;
     replaceArgumentExactlyOnce(
       canonicalShape.qemu.arguments,
-      "4,sockets=1,cores=4,threads=1",
+      `${vcpus},sockets=1,cores=${vcpus},threads=1`,
       "2,sockets=1,cores=2,threads=1",
-      "four-vCPU SMP profile",
+      "experimental SMP profile",
     );
   }
   if (graphics === VIRGL_GRAPHICS_EXPERIMENT) {
@@ -336,9 +336,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
   );
   assert.ok(
     vcpus === null ||
-      (vcpus === 4 && [750, 6000].includes(tcgExperiment?.instantiateThreshold) &&
+      ([1, 4].includes(vcpus) && [750, 6000].includes(tcgExperiment?.instantiateThreshold) &&
         graphics === VIRGL_GRAPHICS_EXPERIMENT),
-    "the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
+    "the browser vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
   );
   const tcgThreshold = tcgExperiment?.instantiateThreshold ?? null;
   validateRuntimeManifest(manifest, tcgThreshold, graphics, vcpus);
@@ -587,12 +587,12 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         !productionWorker.includes('action === "candidate"') &&
         !productionWorker.includes('action === "inputdelivered"');
     }
-    if (vcpus === 4) {
+    if (vcpus !== null) {
       sourceChecks.vcpuExperimentWorkerIdentity = productionWorker.startsWith(
-        `// OMARCHY_EXPERIMENT browser-vcpus count=4 promotion-eligible=false ` +
+        `// OMARCHY_EXPERIMENT browser-vcpus count=${vcpus} promotion-eligible=false ` +
         `qemu-wasm-sha256=${wasmSha256}\n`,
-      ) && productionWorker.includes("cores: 4,") &&
-        productionWorker.split("4,sockets=1,cores=4,threads=1").length - 1 === 3 &&
+      ) && productionWorker.includes(`cores: ${vcpus},`) &&
+        productionWorker.split(`${vcpus},sockets=1,cores=${vcpus},threads=1`).length - 1 === 3 &&
         !productionWorker.includes("cores: 2,") &&
         !productionWorker.includes("2,sockets=1,cores=2,threads=1");
     }
@@ -647,9 +647,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
           browserApi: "WebGL2",
         },
       } : {}),
-      ...(vcpus === 4 ? {
+      ...(vcpus !== null ? {
         vcpuExperiment: {
-          count: 4,
+          count: vcpus,
           promotionEligible: false,
           qemuWasmSha256: wasmSha256,
         },

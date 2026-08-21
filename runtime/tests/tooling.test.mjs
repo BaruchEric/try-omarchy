@@ -888,6 +888,7 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   const tcgStamped = stampTcgThresholdExperiment(source, candidate, "750");
   const combined = stampGraphicsExperiment(tcgStamped, candidate, "virgl-webgl2");
   const fourVcpu = stampVcpuExperiment(combined, candidate, 4);
+  const oneVcpu = stampVcpuExperiment(combined, candidate, 1);
   assert.match(combined, /^\/\/ OMARCHY_EXPERIMENT qemu-wasm-graphics kind=virgl-webgl2 /);
   assert.match(combined, /OMARCHY_EXPERIMENT qemu-wasm-tcg-hot-threshold threshold=750 /);
   assert.match(combined, /browserQemuWasmSha256: "c{64}"/);
@@ -896,6 +897,9 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   assert.match(fourVcpu, /^\/\/ OMARCHY_EXPERIMENT browser-vcpus count=4 /);
   assert.match(fourVcpu, /cores: 4,/);
   assert.equal(fourVcpu.split("4,sockets=1,cores=4,threads=1").length - 1, 3);
+  assert.match(oneVcpu, /^\/\/ OMARCHY_EXPERIMENT browser-vcpus count=1 /);
+  assert.match(oneVcpu, /cores: 1,/);
+  assert.equal(oneVcpu.split("1,sockets=1,cores=1,threads=1").length - 1, 3);
   assert.throws(() => stampVcpuExperiment(fourVcpu, candidate, 4), /already stamped/);
 
   const [makefile, buildScript, packageScript, verifier] = await Promise.all([
@@ -916,7 +920,7 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   );
   assert.match(
     verifier,
-    /split\("4,sockets=1,cores=4,threads=1"\)\.length - 1 === 3/,
+    /split\(`\$\{vcpus\},sockets=1,cores=\$\{vcpus\},threads=1`\)\.length - 1 === 3/,
   );
 });
 

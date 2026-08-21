@@ -96,6 +96,7 @@ test("fill-only build, package, identity, and verifier plumbing stays isolated",
     packageScript,
     /"750" \|\| "\$tcg_experiment" == "6000-fill"/,
   );
+  assert.match(packageScript, /"1" \|\|[\s\S]+"4"/);
   assert.match(manifest, /experimentValue === "6000-fill"/);
   assert.match(
     manifest,

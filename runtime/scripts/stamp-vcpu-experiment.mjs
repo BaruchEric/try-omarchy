@@ -6,9 +6,8 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SHA256 = /^[a-f0-9]{64}$/;
-const EXPERIMENTAL_VCPUS = 4;
+const EXPERIMENTAL_VCPUS = new Set([1, 4]);
 const CANONICAL_SMP = "2,sockets=1,cores=2,threads=1";
-const EXPERIMENTAL_SMP = "4,sockets=1,cores=4,threads=1";
 
 function replaceExactly(source, from, to, expected, label) {
   const count = source.split(from).length - 1;
@@ -16,17 +15,19 @@ function replaceExactly(source, from, to, expected, label) {
   return source.split(from).join(to);
 }
 
-export function stampVcpuExperiment(workerSource, wasmSha256, vcpus = EXPERIMENTAL_VCPUS) {
-  if (vcpus !== EXPERIMENTAL_VCPUS && vcpus !== String(EXPERIMENTAL_VCPUS)) {
+export function stampVcpuExperiment(workerSource, wasmSha256, vcpus = 4) {
+  const count = Number(vcpus);
+  if (!Number.isInteger(count) || !EXPERIMENTAL_VCPUS.has(count)) {
     throw new Error(`unsupported browser vCPU experiment: ${vcpus}`);
   }
   if (!SHA256.test(wasmSha256)) throw new Error("experimental QEMU Wasm SHA-256 is invalid");
   if (workerSource.includes("OMARCHY_EXPERIMENT browser-vcpus")) {
     throw new Error("bundled Worker is already stamped as a vCPU experiment");
   }
-  let stamped = replaceExactly(workerSource, "cores: 2,", "cores: 4,", 1, "canonical core count");
-  stamped = replaceExactly(stamped, CANONICAL_SMP, EXPERIMENTAL_SMP, 3, "canonical SMP profile");
-  return `// OMARCHY_EXPERIMENT browser-vcpus count=4 promotion-eligible=false ` +
+  const experimentalSmp = `${count},sockets=1,cores=${count},threads=1`;
+  let stamped = replaceExactly(workerSource, "cores: 2,", `cores: ${count},`, 1, "canonical core count");
+  stamped = replaceExactly(stamped, CANONICAL_SMP, experimentalSmp, 3, "canonical SMP profile");
+  return `// OMARCHY_EXPERIMENT browser-vcpus count=${count} promotion-eligible=false ` +
     `qemu-wasm-sha256=${wasmSha256}\n${stamped}`;
 }
 

@@ -572,14 +572,15 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     "unsupported QEMU-Wasm TCG threshold experiment",
   );
   invariant(
-    vcpuExperiment === undefined || vcpuExperiment === "" || vcpuExperiment === "4",
+    vcpuExperiment === undefined || vcpuExperiment === "" ||
+      vcpuExperiment === "1" || vcpuExperiment === "4",
     "unsupported browser vCPU experiment",
   );
   invariant(
     !vcpuExperiment ||
       ((experimentValue === "750" || experimentValue === "6000-fill") &&
         graphicsExperiment === "virgl-webgl2"),
-    "the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
+    "the browser vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
   );
   invariant(
     graphicsExperiment === undefined || graphicsExperiment === "" ||
@@ -612,12 +613,14 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     expected,
     forceCold: graphicsExperiment === "virgl-webgl2" && !hibernationRequested,
   });
-  if (vcpuExperiment === "4") {
-    result.manifest.qemu.cores = 4;
+  if (vcpuExperiment === "1" || vcpuExperiment === "4") {
+    const experimentalVcpus = Number(vcpuExperiment);
+    result.manifest.qemu.cores = experimentalVcpus;
     const smpIndexes = result.manifest.qemu.arguments.flatMap((value, index) =>
       value === "2,sockets=1,cores=2,threads=1" ? [index] : []);
     invariant(smpIndexes.length === 1, "canonical two-vCPU SMP argument must occur exactly once");
-    result.manifest.qemu.arguments[smpIndexes[0]] = "4,sockets=1,cores=4,threads=1";
+    result.manifest.qemu.arguments[smpIndexes[0]] =
+      `${experimentalVcpus},sockets=1,cores=${experimentalVcpus},threads=1`;
   }
   if (graphicsExperiment === "virgl-webgl2" &&
       result.mode !== "cold" && result.mode !== "hibernation") {

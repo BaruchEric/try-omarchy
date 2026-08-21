@@ -88,13 +88,14 @@ if (tcgExperimentProfile !== null && graphicsExperiment === "virgl-webgl2" &&
     ![750, 1500, 6000].includes(tcgExperimentProfile.instantiateThreshold)) {
   throw new Error("only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2");
 }
-if (vcpuExperiment !== undefined && vcpuExperiment !== "" && vcpuExperiment !== "4") {
+if (vcpuExperiment !== undefined && vcpuExperiment !== "" &&
+    vcpuExperiment !== "1" && vcpuExperiment !== "4") {
   throw new Error(`unsupported browser vCPU experiment: ${vcpuExperiment}`);
 }
-if (vcpuExperiment === "4" &&
+if ((vcpuExperiment === "1" || vcpuExperiment === "4") &&
     !([750, 6000].includes(tcgExperimentProfile?.instantiateThreshold) &&
       graphicsExperiment === "virgl-webgl2")) {
-  throw new Error("the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile");
+  throw new Error("the browser vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile");
 }
 
 const artifactDefinitions = [
@@ -173,12 +174,12 @@ if (graphicsExperiment === "virgl-webgl2" || graphicsExperiment === "webgl2-pres
     throw new Error("graphics experiment build metadata is not backed by verified QEMU Wasm bytes");
   }
 }
-if (vcpuExperiment === "4") {
+if (vcpuExperiment === "1" || vcpuExperiment === "4") {
   const verification = JSON.parse(
     await readFile(join(outputDirectory, "runtime-verification.json"), "utf8"),
   );
   const wasmArtifact = artifacts.find(({ path }) => path === "qemu.wasm");
-  if (verification?.wasm?.vcpuExperiment?.count !== 4 ||
+  if (verification?.wasm?.vcpuExperiment?.count !== Number(vcpuExperiment) ||
       verification?.wasm?.vcpuExperiment?.promotionEligible !== false ||
       verification?.wasm?.vcpuExperiment?.qemuWasmSha256 !== wasmArtifact?.sha256) {
     throw new Error("vCPU experiment build metadata is not backed by verified QEMU Wasm bytes");
@@ -246,9 +247,9 @@ const graphicsExperimentMetadata = graphicsExperiment === "virgl-webgl2" ? {
   checkpointCompatible: true,
   presentationPath: "SDL2 surface texture upload and WebGL2 framebuffer blit",
 } : null;
-const vcpuExperimentMetadata = vcpuExperiment === "4" ? {
+const vcpuExperimentMetadata = vcpuExperiment === "1" || vcpuExperiment === "4" ? {
   kind: "browser-vcpus",
-  count: 4,
+  count: Number(vcpuExperiment),
   promotionEligible: false,
 } : null;
 const experimentMetadata = [
