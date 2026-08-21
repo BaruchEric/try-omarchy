@@ -55,7 +55,7 @@ command line. The target command line is public and contains no nonce.
 The canonical inputs are currently:
 
 - `vmlinuz-linux`: 17,101,312 bytes
-- `initramfs-linux.img`: 51,831,735 bytes
+- `initramfs-linux.img`: 51,827,771 bytes
 - `rootfs.ext4`: 6,442,450,944 bytes
 
 The successful proof emits the four release candidates below plus evidence:

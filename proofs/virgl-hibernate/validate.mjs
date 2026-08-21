@@ -12,11 +12,11 @@ if (!guestDirectory || !evidenceDirectory || !browserQemuWasmPath) {
 }
 
 const expected = Object.freeze({
-  guestManifest: "55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37",
-  rootfs: "db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac",
+  guestManifest: "cabfbb1148ea0cfafd62fccc8ff877ec3dcec09d6af6832624f7e20c27f9df97",
+  rootfs: "f03468dd6d0264e80d496188d72dc82501731807e3833acd3842392b4174d2d8",
   kernel: "1f2572d6d03706ed0f818ee17d77df021b7875f4e9fd119a1157f3a208aeed73",
-  initramfs: "9a4239b35f2ad1fe6684c6c006f38a04489df640a08feae3fe56e5b91a6e17ed",
-  provenance: "527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738",
+  initramfs: "73c801fdb121254663483f9befd5c902ec7a8b9a14c4e2080323104c6bb7ea4e",
+  provenance: "771a12039baff3cf5034442496d0f47e345c2e3e394b49f6c30ed8d9753d6b38",
   qemuCommit: "0ef7b4e2814b231705d8371dd7997f5b72e70baf",
   swapUuid: "4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f",
 });

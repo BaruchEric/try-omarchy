@@ -31,11 +31,11 @@ source_pid=
 target_pid=
 phase=preflight
 
-expected_manifest_sha256=55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37
-expected_rootfs_sha256=db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac
+expected_manifest_sha256=cabfbb1148ea0cfafd62fccc8ff877ec3dcec09d6af6832624f7e20c27f9df97
+expected_rootfs_sha256=f03468dd6d0264e80d496188d72dc82501731807e3833acd3842392b4174d2d8
 expected_kernel_sha256=1f2572d6d03706ed0f818ee17d77df021b7875f4e9fd119a1157f3a208aeed73
-expected_initramfs_sha256=9a4239b35f2ad1fe6684c6c006f38a04489df640a08feae3fe56e5b91a6e17ed
-expected_provenance_sha256=527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738
+expected_initramfs_sha256=73c801fdb121254663483f9befd5c902ec7a8b9a14c4e2080323104c6bb7ea4e
+expected_provenance_sha256=771a12039baff3cf5034442496d0f47e345c2e3e394b49f6c30ed8d9753d6b38
 expected_qemu_commit=0ef7b4e2814b231705d8371dd7997f5b72e70baf
 
 set_phase() {
@@ -697,12 +697,12 @@ const manifest = {
   schemaVersion: 1,
   kind: "omarchy-web-guest-hibernation",
   identity: {
-    baseGuestManifestSha256: "55aecd33a4e285f4caba5c565cde0831e8a556cb6160bb2dbf6173d915ff3d37",
-    rootfsSha256: "db677ce248761affd81967501fc21fd3687d2ca8c1644499268a5c3dc39e7cac",
+    baseGuestManifestSha256: "cabfbb1148ea0cfafd62fccc8ff877ec3dcec09d6af6832624f7e20c27f9df97",
+    rootfsSha256: "f03468dd6d0264e80d496188d72dc82501731807e3833acd3842392b4174d2d8",
     kernelSha256: "1f2572d6d03706ed0f818ee17d77df021b7875f4e9fd119a1157f3a208aeed73",
-    baseInitramfsSha256: "9a4239b35f2ad1fe6684c6c006f38a04489df640a08feae3fe56e5b91a6e17ed",
+    baseInitramfsSha256: "73c801fdb121254663483f9befd5c902ec7a8b9a14c4e2080323104c6bb7ea4e",
     derivedInitramfsSha256,
-    guestProvenanceSha256: "527c0e84e7594a44363cc7ff3ac2b5c871643a3eeb86ba104ed9be4040d0d738",
+    guestProvenanceSha256: "771a12039baff3cf5034442496d0f47e345c2e3e394b49f6c30ed8d9753d6b38",
     browserQemuWasmSha256,
   },
   qemu: {

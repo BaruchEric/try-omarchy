@@ -4,7 +4,7 @@ set -euo pipefail
 proof_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source_image=${1:?source initramfs path is required}
 output_image=${2:?output initramfs path is required}
-expected_sha256=9a4239b35f2ad1fe6684c6c006f38a04489df640a08feae3fe56e5b91a6e17ed
+expected_sha256=73c801fdb121254663483f9befd5c902ec7a8b9a14c4e2080323104c6bb7ea4e
 renderer_probe="$proof_dir/.build/qemu-8.2-native-virgl/egl-renderer-probe"
 overlay_tmp=
 
