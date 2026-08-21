@@ -83,6 +83,33 @@ function vcpuExperiment() {
   return 4;
 }
 
+export function graphicsExperimentWorkerIdentityMatches(
+  productionWorker,
+  graphics,
+  wasmSha256,
+) {
+  const graphicsMarker =
+    `// OMARCHY_EXPERIMENT qemu-wasm-graphics kind=${graphics} ` +
+    `promotion-eligible=false qemu-wasm-sha256=${wasmSha256}\n`;
+  const expectedDevice = graphics === VIRGL_GRAPHICS_EXPERIMENT
+    ? "virtio-vga-gl,max_outputs=1,xres=1600,yres=900"
+    : "virtio-vga,max_outputs=1,xres=1600,yres=900";
+  const rejectedDevice = graphics === VIRGL_GRAPHICS_EXPERIMENT
+    ? "virtio-vga,max_outputs=1,xres=1600,yres=900"
+    : "virtio-vga-gl,max_outputs=1,xres=1600,yres=900";
+  const webglDisplay = '"sdl,gl=es,show-cursor=on"';
+  const softwareDisplay = '"sdl,gl=off,show-cursor=on"';
+  const armDevice = '"virtio-gpu-pci,max_outputs=1,xres=1600,yres=900"';
+  return productionWorker.split(graphicsMarker).length - 1 === 1 &&
+    productionWorker.includes(webglDisplay) &&
+    productionWorker.split(softwareDisplay).length - 1 === 1 &&
+    productionWorker.split(armDevice).length - 1 === 1 &&
+    productionWorker.includes(`"${expectedDevice}"`) &&
+    !productionWorker.includes(`"${rejectedDevice}"`) &&
+    (graphics !== WEBGL2_PRESENT_EXPERIMENT ||
+      productionWorker.includes(`browserQemuWasmSha256: "${wasmSha256}"`));
+}
+
 function replaceArgumentExactlyOnce(arguments_, from, to, label) {
   const indexes = arguments_.flatMap((value, index) => value === from ? [index] : []);
   assert.equal(indexes.length, 1, `${label} must occur exactly once`);
@@ -515,23 +542,8 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       }
     }
     if (graphics !== null) {
-      const graphicsMarker =
-        `// OMARCHY_EXPERIMENT qemu-wasm-graphics kind=${graphics} ` +
-        `promotion-eligible=false qemu-wasm-sha256=${wasmSha256}\n`;
-      const expectedDevice = graphics === VIRGL_GRAPHICS_EXPERIMENT
-        ? "virtio-vga-gl,max_outputs=1,xres=1600,yres=900"
-        : "virtio-vga,max_outputs=1,xres=1600,yres=900";
-      const rejectedDevice = graphics === VIRGL_GRAPHICS_EXPERIMENT
-        ? "virtio-vga,max_outputs=1,xres=1600,yres=900"
-        : "virtio-vga-gl,max_outputs=1,xres=1600,yres=900";
       sourceChecks.graphicsExperimentWorkerIdentity =
-        productionWorker.split(graphicsMarker).length - 1 === 1 &&
-        productionWorker.includes('"sdl,gl=es,show-cursor=on"') &&
-        productionWorker.includes(`"${expectedDevice}"`) &&
-        !productionWorker.includes('"sdl,gl=off,show-cursor=on"') &&
-        !productionWorker.includes(`"${rejectedDevice}"`) &&
-        (graphics !== WEBGL2_PRESENT_EXPERIMENT ||
-          productionWorker.includes(`browserQemuWasmSha256: "${wasmSha256}"`));
+        graphicsExperimentWorkerIdentityMatches(productionWorker, graphics, wasmSha256);
       sourceChecks.webgl2Loader = Object.values(
         inspectWebgl2ArtifactPlumbing(moduleSource, wasm),
       ).every(Boolean);

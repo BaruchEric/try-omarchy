@@ -8,6 +8,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
 import {
+  graphicsExperimentWorkerIdentityMatches,
   inspectWebgl2ArtifactPlumbing,
   parseImportedMemories,
   verifyCheckpointWasmIdentity,
@@ -799,6 +800,39 @@ test("VirGL/WebGL2 Worker stamping leaves the ARM software display profile uncha
   assert.equal(stamped.split("sdl,gl=off,show-cursor=on").length - 1, 1);
   assert.match(stamped, /virtio-vga-gl,max_outputs=1,xres=1600,yres=900/);
   assert.match(stamped, /virtio-gpu-pci,max_outputs=1,xres=1600,yres=900/);
+});
+
+test("graphics verification accepts exactly one untouched ARM software profile", () => {
+  const wasmSha256 = "f".repeat(64);
+  const marker =
+    `// OMARCHY_EXPERIMENT qemu-wasm-graphics kind=virgl-webgl2 ` +
+    `promotion-eligible=false qemu-wasm-sha256=${wasmSha256}\n`;
+  const source = marker + [
+    '"sdl,gl=es,show-cursor=on"',
+    '"virtio-vga-gl,max_outputs=1,xres=1600,yres=900"',
+    '"sdl,gl=off,show-cursor=on"',
+    '"virtio-gpu-pci,max_outputs=1,xres=1600,yres=900"',
+  ].join("\n");
+  assert.equal(
+    graphicsExperimentWorkerIdentityMatches(source, "virgl-webgl2", wasmSha256),
+    true,
+  );
+  assert.equal(
+    graphicsExperimentWorkerIdentityMatches(
+      source.replace('"virtio-gpu-pci,max_outputs=1,xres=1600,yres=900"', ""),
+      "virgl-webgl2",
+      wasmSha256,
+    ),
+    false,
+  );
+  assert.equal(
+    graphicsExperimentWorkerIdentityMatches(
+      `${source}\n"sdl,gl=off,show-cursor=on"`,
+      "virgl-webgl2",
+      wasmSha256,
+    ),
+    false,
+  );
 });
 
 test("WebGL2 presenter preserves the checkpoint GPU device and rebinds only the experimental Wasm", () => {
