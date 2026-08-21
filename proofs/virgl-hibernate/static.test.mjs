@@ -39,7 +39,7 @@ function markerWasm(markers) {
 
 async function writeCandidateFixture(
   directory,
-  { markers = true, graphics = true, clock = true, clockVersion = 2 } = {},
+  { markers = true, graphics = true, clock = true, clockVersion = 2, hibernation = false } = {},
 ) {
   await mkdir(directory, { recursive: true });
   const metricsSchemaVersion = clockVersion === 2 ? 4 : 3;
@@ -141,7 +141,7 @@ async function writeCandidateFixture(
       memoryMiB: 1024,
       cores: 2,
       arguments: [
-        "-machine", "pc-q35-8.2,i8042=off",
+        "-machine", hibernation ? "pc-q35-8.2,i8042=off" : "pc-q35-8.2",
         "-m", "1024M",
         "-accel", "tcg,tb-size=128,thread=multi",
         "-smp", "2,sockets=1,cores=2,threads=1",
@@ -149,6 +149,7 @@ async function writeCandidateFixture(
         "-device", "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
       ],
     },
+    ...(hibernation ? { checkpoint: { mode: "guest-hibernation-resume" } } : {}),
   };
   await Promise.all([
     writeFile(path.join(directory, "qemu.wasm"), wasm),
@@ -186,6 +187,8 @@ test("browser candidate gate accepts only hash-bound VirGL plus bounded CLOCK", 
   const result = await validateBrowserCandidate(valid);
   assert.equal(result.status, "PASS");
   assert.equal(result.profile, "virgl-webgl2-tcg-bounded-clock");
+  const hibernation = await writeCandidateFixture(path.join(root, "hibernation"), { hibernation: true });
+  assert.equal((await validateBrowserCandidate(hibernation)).status, "PASS");
 
   const arbitrary = await writeCandidateFixture(path.join(root, "arbitrary"), { markers: false });
   await assert.rejects(validateBrowserCandidate(arbitrary), /missing marker/);

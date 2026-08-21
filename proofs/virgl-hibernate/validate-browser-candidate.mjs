@@ -118,7 +118,14 @@ export async function validateBrowserCandidate(wasmPath) {
   invariant(runtimeManifest.schemaVersion === 2 && runtimeManifest.qemu?.memoryMiB === 1024 &&
     runtimeManifest.qemu?.cores === 2 && Array.isArray(runtimeManifest.qemu?.arguments),
   "candidate runtime manifest has an incompatible machine envelope");
-  exactArgument(runtimeManifest.qemu.arguments, "-machine", "pc-q35-8.2,i8042=off");
+  const hibernationCandidate = runtimeManifest.checkpoint?.mode === "guest-hibernation-resume";
+  invariant(runtimeManifest.checkpoint === undefined || hibernationCandidate,
+    "candidate runtime manifest has an unsupported checkpoint mode");
+  exactArgument(
+    runtimeManifest.qemu.arguments,
+    "-machine",
+    hibernationCandidate ? "pc-q35-8.2,i8042=off" : "pc-q35-8.2",
+  );
   exactArgument(runtimeManifest.qemu.arguments, "-m", "1024M");
   exactArgument(runtimeManifest.qemu.arguments, "-accel", "tcg,tb-size=128,thread=multi");
   exactArgument(runtimeManifest.qemu.arguments, "-smp", "2,sockets=1,cores=2,threads=1");

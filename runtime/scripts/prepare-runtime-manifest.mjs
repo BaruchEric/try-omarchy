@@ -10,6 +10,7 @@ import {
   CANONICAL_HIBERNATION_KERNEL_COMMAND_LINE_BASE,
   CANONICAL_HIBERNATION_PRODUCER_MACHINE,
   CANONICAL_HIBERNATION_RUNTIME_MACHINE,
+  CANONICAL_PRODUCTION_MANIFEST,
   HIBERNATION_SWAP_UUID,
   HIBERNATION_SWAP_VIRTUAL_BYTES,
   normalizedJsonBytes,
@@ -428,7 +429,13 @@ export async function buildRuntimeManifest({
         `hibernation base manifest ${label} is invalid`);
       return indexes[0];
     };
-    exactArgument("-machine", checkpoint.identity.runtimeMachine.type, "machine type");
+    const canonicalMachineIndex = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-machine");
+    const machineIndex = exactArgument(
+      "-machine",
+      CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[canonicalMachineIndex + 1],
+      "cold machine type",
+    );
+    arguments_[machineIndex + 1] = checkpoint.identity.runtimeMachine.type;
     exactArgument("-display", checkpoint.restoreContract.runtimeDisplay, "runtime display");
     const displayDeviceIndexes = arguments_.flatMap((value, index) =>
       value === "-device" && arguments_[index + 1] === checkpoint.identity.runtimeMachine.displayDevice ? [index] : []);

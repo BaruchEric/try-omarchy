@@ -43,7 +43,7 @@
     "cores": 2,
     "arguments": [
       "-machine",
-      "pc-q35-8.2,i8042=off",
+      "pc-q35-8.2",
       "-m",
       "1024M",
       "-accel",
