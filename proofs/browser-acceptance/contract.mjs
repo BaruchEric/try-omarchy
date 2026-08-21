@@ -1,6 +1,7 @@
 import {
   acceptVmHostMessage,
   createVmHostCommand,
+  vmHostMessagePayload,
 } from "../../app/components/vm-host-protocol.mjs";
 import {
   ACTIVE_UPSTREAM,
@@ -18,7 +19,7 @@ import {
   normalizeHibernationResumeEvidence,
 } from "../../public/vm/host-utils.mjs";
 
-export { acceptVmHostMessage, createVmHostCommand };
+export { acceptVmHostMessage, createVmHostCommand, vmHostMessagePayload };
 
 export const ACCEPTANCE_SCHEMA_VERSION = 4;
 export const FRAME_SAMPLE_PIXELS = DESKTOP_PROOF_SAMPLE_PIXELS;

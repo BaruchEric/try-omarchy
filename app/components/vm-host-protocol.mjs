@@ -318,6 +318,20 @@ export function acceptVmHostMessage(
   return validateHostPayload(event.data, expectedNonce);
 }
 
+export function vmHostMessagePayload(value) {
+  if (
+    !isRecord(value) ||
+    value.channel !== VM_HOST_PROTOCOL.channel ||
+    value.version !== VM_HOST_PROTOCOL.version ||
+    typeof value.runNonce !== "string" ||
+    !NONCE_PATTERN.test(value.runNonce)
+  ) {
+    return null;
+  }
+  const { channel: _channel, version: _version, runNonce: _runNonce, ...payload } = value;
+  return payload;
+}
+
 export function createVmHostCommand(type, runNonce) {
   if (!PARENT_COMMAND_TYPES.has(type)) {
     throw new TypeError(`Unsupported VM host command: ${String(type)}`);

@@ -14,6 +14,7 @@ import {
   advanceAcceptance,
   checkAcceptanceTimeout,
   createAcceptanceState,
+  vmHostMessagePayload,
 } from "./contract.mjs";
 import { inspectScreenshotPng } from "./png.mjs";
 import { assertFinalAcceptancePass, parseArguments } from "./run.mjs";
@@ -593,6 +594,7 @@ test("active iframe nonce/source binding rejects replayed desktop proof", () => 
     ),
     data,
   );
+  assert.deepEqual(vmHostMessagePayload(data), desktopProof());
   assert.equal(
     acceptVmHostMessage(
       {

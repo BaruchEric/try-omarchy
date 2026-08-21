@@ -7,6 +7,7 @@ import {
   DEFAULT_TIMEOUTS,
   failAcceptance,
   publicAcceptanceSnapshot,
+  vmHostMessagePayload,
 } from "./contract.mjs";
 
 const RELEASE_ID = /^[a-f0-9]{64}$/;
@@ -55,11 +56,12 @@ state = createAcceptanceState({ releaseId, runNonce, now: now() });
 
 window.addEventListener("message", (event) => {
   if (event.source !== iframe.contentWindow) return;
-  const message = acceptVmHostMessage(event, {
+  const envelope = acceptVmHostMessage(event, {
     expectedOrigin: location.origin,
     expectedSource: iframe.contentWindow,
     expectedNonce: runNonce,
   });
+  const message = vmHostMessagePayload(envelope);
   if (!message) {
     fail("The active production iframe emitted a malformed or misbound protocol event.");
     return;
