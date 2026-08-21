@@ -61,6 +61,30 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
       "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
       "eviction=disabled gc-pressure=disabled",
   }),
+  "6000-batch32": Object.freeze({
+    kind: "qemu-wasm-tcg-exact-batch32",
+    instantiateThreshold: 6000,
+    metricsSchemaVersion: 6,
+    cachePolicy: Object.freeze({
+      kind: "fill-only-v1",
+      activeCap: 120000,
+      retainedCap: 120000,
+      eviction: "disabled",
+      gcPressure: "disabled",
+    }),
+    batchPolicy: Object.freeze({
+      kind: "exact-signature-v1",
+      batchSize: 32,
+      partialFlushPromotions: 128,
+      tableEntriesPerBatch: 1,
+    }),
+    cachePolicyMarker:
+      "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
+      "eviction=disabled gc-pressure=disabled",
+    batchPolicyMarker:
+      "batch=exact-signature-v1 batch-size=32 partial-flush-promotions=128 " +
+      "dispatchers=one-per-module",
+  }),
 });
 const TCG_EXPERIMENT_MARKER_PREFIX =
   "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=";
@@ -401,6 +425,12 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         "linked QEMU binary does not include the requested TCG cache policy",
       );
     }
+    if (tcgExperiment.batchPolicyMarker !== undefined) {
+      assert.ok(
+        wasm.includes(Buffer.from(tcgExperiment.batchPolicyMarker)),
+        "linked QEMU binary does not include the requested TCG batch policy",
+      );
+    }
   } else {
     assert.equal(
       wasm.includes(Buffer.from(TCG_EXPERIMENT_MARKER_PREFIX)),
@@ -465,6 +495,12 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       tcgFillOnlyNoGcPressure:
         !moduleSource.includes("gc_pressure=pressure;setTimeout(") &&
         !moduleSource.includes("gc_pressure=pressure;queueMicrotask("),
+      ...(tcgExperiment.batchPolicy !== undefined ? {
+        tcgExactBatchDispatcher:
+          moduleSource.includes("generated exact-signature Wasm batch is invalid") &&
+          moduleSource.includes("unexpected nested Wasm section layout") &&
+          moduleSource.includes("__wasm32_tb.batching"),
+      } : {}),
     } : {}),
   };
   if (manifest.schemaVersion === 2) {
@@ -631,6 +667,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         tcgMetricsMarker: TCG_METRICS_MARKER,
         ...(tcgExperiment.cachePolicy !== undefined
           ? { tcgCachePolicyMarker: tcgExperiment.cachePolicyMarker }
+          : {}),
+        ...(tcgExperiment.batchPolicy !== undefined
+          ? { tcgBatchPolicyMarker: tcgExperiment.batchPolicyMarker }
           : {}),
       } : {}),
       ...(graphics !== null ? {

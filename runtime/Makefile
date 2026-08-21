@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := test
 
-.PHONY: audit build build-arm64-browser-experiment package-arm64-browser-experiment serve-full-arm64-browser-experiment build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-fill-120k build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-fill-120k package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-fill-120k serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
+.PHONY: audit build build-arm64-browser-experiment package-arm64-browser-experiment serve-full-arm64-browser-experiment build-tcg-threshold-250 build-tcg-baseline-metrics build-webgl2-present build-virgl-webgl2 build-virgl-webgl2-tcg-baseline-metrics build-virgl-webgl2-tcg-bounded-clock build-virgl-webgl2-tcg-fill-120k build-virgl-webgl2-tcg-batch32 build-virgl-webgl2-tcg-threshold-750-4vcpu package package-tcg-threshold-250 package-tcg-baseline-metrics package-webgl2-present package-virgl-webgl2 package-virgl-webgl2-tcg-baseline-metrics package-virgl-webgl2-tcg-bounded-clock package-virgl-webgl2-tcg-fill-120k package-virgl-webgl2-tcg-batch32 package-virgl-webgl2-tcg-threshold-750-4vcpu serve serve-full serve-full-tcg-threshold-250 serve-full-tcg-baseline-metrics serve-full-webgl2-present serve-full-virgl-webgl2 serve-full-virgl-webgl2-tcg-baseline-metrics serve-full-virgl-webgl2-tcg-fill-120k serve-full-virgl-webgl2-tcg-batch32 serve-full-virgl-webgl2-tcg-threshold-750-4vcpu smoke test verify-dist
 
 TCG_THRESHOLD_250_OUTPUT ?= $(CURDIR)/experiments/tcg-threshold-250/dist
 TCG_BASELINE_METRICS_OUTPUT ?= $(CURDIR)/experiments/tcg-baseline-1500-metrics/dist
@@ -9,6 +9,7 @@ VIRGL_WEBGL2_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2/dist
 VIRGL_WEBGL2_TCG_BASELINE_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-baseline-1500-metrics/dist
 VIRGL_WEBGL2_TCG_CLOCK_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-bounded-clock/dist
 VIRGL_WEBGL2_TCG_FILL_120K_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-fill-120k/dist
+VIRGL_WEBGL2_TCG_BATCH32_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-batch32/dist
 VIRGL_WEBGL2_TCG_750_4VCPU_OUTPUT ?= $(CURDIR)/experiments/virgl-webgl2-tcg-threshold-750-4vcpu/dist
 ARM64_BROWSER_OUTPUT ?= $(CURDIR)/experiments/arm64-browser/dist
 
@@ -68,6 +69,12 @@ build-virgl-webgl2-tcg-fill-120k:
 	QEMU_WASM_OUTPUT="$(VIRGL_WEBGL2_TCG_FILL_120K_OUTPUT)" \
 	./scripts/build-qemu-wasm.sh
 
+build-virgl-webgl2-tcg-batch32:
+	OMARCHY_GRAPHICS_EXPERIMENT=virgl-webgl2 \
+	OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT=6000-batch32 \
+	QEMU_WASM_OUTPUT="$(VIRGL_WEBGL2_TCG_BATCH32_OUTPUT)" \
+	./scripts/build-qemu-wasm.sh
+
 build-virgl-webgl2-tcg-threshold-750-4vcpu:
 	OMARCHY_GRAPHICS_EXPERIMENT=virgl-webgl2 \
 	OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT=750 \
@@ -116,6 +123,12 @@ package-virgl-webgl2-tcg-fill-120k:
 	OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT=6000-fill \
 	./scripts/package-guest.sh "$(GUEST_DIR)" "$(VIRGL_WEBGL2_TCG_FILL_120K_OUTPUT)"
 
+package-virgl-webgl2-tcg-batch32:
+	@test -n "$(GUEST_DIR)" || (echo "usage: make package-virgl-webgl2-tcg-batch32 GUEST_DIR=/absolute/path/to/assets" >&2; exit 2)
+	OMARCHY_GRAPHICS_EXPERIMENT=virgl-webgl2 \
+	OMARCHY_TCG_HOT_THRESHOLD_EXPERIMENT=6000-batch32 \
+	./scripts/package-guest.sh "$(GUEST_DIR)" "$(VIRGL_WEBGL2_TCG_BATCH32_OUTPUT)"
+
 package-virgl-webgl2-tcg-threshold-750-4vcpu:
 	@test -n "$(GUEST_DIR)" || (echo "usage: make package-virgl-webgl2-tcg-threshold-750-4vcpu GUEST_DIR=/absolute/path/to/assets" >&2; exit 2)
 	OMARCHY_GRAPHICS_EXPERIMENT=virgl-webgl2 \
@@ -152,6 +165,9 @@ serve-full-virgl-webgl2-tcg-bounded-clock:
 
 serve-full-virgl-webgl2-tcg-fill-120k:
 	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_FILL_120K_OUTPUT)" --guest-root ../guest/dist --port 8101
+
+serve-full-virgl-webgl2-tcg-batch32:
+	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_BATCH32_OUTPUT)" --guest-root ../guest/dist --port 8102
 
 serve-full-virgl-webgl2-tcg-threshold-750-4vcpu:
 	node ./scripts/serve-full-guest.mjs --runtime-root "$(VIRGL_WEBGL2_TCG_750_4VCPU_OUTPUT)" --guest-root ../guest/dist --port 8097

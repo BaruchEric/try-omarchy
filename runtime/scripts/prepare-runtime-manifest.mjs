@@ -568,7 +568,7 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
     experimentValue === undefined || experimentValue === "" || experimentValue === "250" ||
       experimentValue === "750" ||
       experimentValue === "1500-metrics" || experimentValue === "1500-clock" ||
-      experimentValue === "6000-fill",
+      experimentValue === "6000-fill" || experimentValue === "6000-batch32",
     "unsupported QEMU-Wasm TCG threshold experiment",
   );
   invariant(
@@ -590,14 +590,15 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   invariant(
     !experimentValue || !graphicsExperiment ||
       ((experimentValue === "1500-metrics" || experimentValue === "750" ||
-        experimentValue === "1500-clock" || experimentValue === "6000-fill") &&
+        experimentValue === "1500-clock" || experimentValue === "6000-fill" ||
+        experimentValue === "6000-batch32") &&
         graphicsExperiment === "virgl-webgl2"),
     "only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2",
   );
   const qemuWasmPath = join(resolve(outputPath, ".."), "qemu.wasm");
   const expected = experimentValue === "250" || experimentValue === "750" ||
     experimentValue === "1500-metrics" || experimentValue === "1500-clock" ||
-    experimentValue === "6000-fill" ||
+    experimentValue === "6000-fill" || experimentValue === "6000-batch32" ||
     graphicsExperiment === "webgl2-present"
     ? { ...EXPECTED, browserQemuWasmSha256: (await fileRecord(qemuWasmPath)).sha256 }
     : EXPECTED;
@@ -641,6 +642,11 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   if (experimentValue === "6000-fill") {
     process.stdout.write(
       "runtime experiment: qemu-wasm-tcg-fill-only threshold=6000 metrics-schema=5 cache=fill-only-v1 active-cap=120000 promotion-eligible=false\n",
+    );
+  }
+  if (experimentValue === "6000-batch32") {
+    process.stdout.write(
+      "runtime experiment: qemu-wasm-tcg-exact-batch32 threshold=6000 metrics-schema=6 batch-size=32 promotion-eligible=false\n",
     );
   }
   if (graphicsExperiment === "virgl-webgl2") {

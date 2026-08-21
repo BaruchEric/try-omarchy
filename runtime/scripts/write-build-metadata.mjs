@@ -75,6 +75,35 @@ const tcgExperimentProfiles = Object.freeze({
       "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
       "eviction=disabled gc-pressure=disabled",
   }),
+  "6000-batch32": Object.freeze({
+    kind: "qemu-wasm-tcg-exact-batch32",
+    instantiateThreshold: 6000,
+    metricsSchemaVersion: 6,
+    cachePolicy: Object.freeze({
+      kind: "fill-only-v1",
+      activeCap: 120000,
+      retainedCap: 120000,
+      eviction: "disabled",
+      gcPressure: "disabled",
+    }),
+    batchPolicy: Object.freeze({
+      kind: "exact-signature-v1",
+      batchSize: 32,
+      partialFlushPromotions: 128,
+      tableEntriesPerBatch: 1,
+    }),
+    patches: [
+      "patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch",
+      "patches/qemu-wasm-tcg-fill-only-120k.patch",
+      "patches/qemu-wasm-tcg-exact-batch32.patch",
+    ],
+    cachePolicyMarker:
+      "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
+      "eviction=disabled gc-pressure=disabled",
+    batchPolicyMarker:
+      "batch=exact-signature-v1 batch-size=32 partial-flush-promotions=128 " +
+      "dispatchers=one-per-module",
+  }),
 });
 const tcgExperimentProfile = tcgExperimentProfiles[tcgExperiment] ?? null;
 if (tcgExperiment !== undefined && tcgExperiment !== "" && tcgExperimentProfile === null) {
@@ -159,6 +188,9 @@ if (tcgExperimentProfile !== null) {
         (verification?.wasm?.tcgExperiment?.kind !== tcgExperimentProfile.kind ||
           JSON.stringify(verification?.wasm?.tcgExperiment?.cachePolicy) !==
             JSON.stringify(tcgExperimentProfile.cachePolicy))) ||
+      (tcgExperimentProfile.batchPolicy !== undefined &&
+        JSON.stringify(verification?.wasm?.tcgExperiment?.batchPolicy) !==
+          JSON.stringify(tcgExperimentProfile.batchPolicy)) ||
       verification?.wasm?.tcgExperimentArtifactSha256 !== wasmArtifact?.sha256) {
     throw new Error("TCG experiment build metadata is not backed by verified QEMU Wasm bytes");
   }
@@ -221,11 +253,17 @@ const tcgExperimentMetadata = tcgExperimentProfile === null ? null : {
   ...(tcgExperimentProfile.cachePolicy !== undefined
     ? { cachePolicy: tcgExperimentProfile.cachePolicy }
     : {}),
+  ...(tcgExperimentProfile.batchPolicy !== undefined
+    ? { batchPolicy: tcgExperimentProfile.batchPolicy }
+    : {}),
   diagnosticMarkers: [
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=${tcgExperimentProfile.instantiateThreshold} metrics-schema=${tcgExperimentProfile.metricsSchemaVersion}`,
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics schema=${tcgExperimentProfile.metricsSchemaVersion} threshold=${tcgExperimentProfile.instantiateThreshold}`,
     ...(tcgExperimentProfile.cachePolicyMarker !== undefined
       ? [tcgExperimentProfile.cachePolicyMarker]
+      : []),
+    ...(tcgExperimentProfile.batchPolicyMarker !== undefined
+      ? [tcgExperimentProfile.batchPolicyMarker]
       : []),
   ],
 };

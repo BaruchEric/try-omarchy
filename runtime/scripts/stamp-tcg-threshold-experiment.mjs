@@ -13,6 +13,7 @@ const EXPERIMENTS = Object.freeze({
   "1500-metrics": Object.freeze({ threshold: 1500, metricsSchemaVersion: 2 }),
   "1500-clock": Object.freeze({ threshold: 1500, metricsSchemaVersion: 4 }),
   "6000-fill": Object.freeze({ threshold: 6000, metricsSchemaVersion: 5 }),
+  "6000-batch32": Object.freeze({ threshold: 6000, metricsSchemaVersion: 6 }),
 });
 
 function experimentProfile(value) {
@@ -21,6 +22,7 @@ function experimentProfile(value) {
   if (value === 1500 || value === "1500-metrics") return EXPERIMENTS["1500-metrics"];
   if (value === "1500-clock") return EXPERIMENTS["1500-clock"];
   if (value === "6000-fill") return EXPERIMENTS["6000-fill"];
+  if (value === "6000-batch32") return EXPERIMENTS["6000-batch32"];
   throw new Error(`unsupported QEMU-Wasm TCG threshold experiment: ${value}`);
 }
 
