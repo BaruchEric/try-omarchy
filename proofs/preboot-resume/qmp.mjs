@@ -114,6 +114,9 @@ function keyObjects(codes) {
 }
 
 const INPUT_TRANSITION_MILLISECONDS = 16;
+const VIRTIO_INPUT_REPORT_HOLD_MILLISECONDS = 150;
+const VIRTIO_QUEUE_INDEX_MODULUS = 0x1_0000;
+const VIRTIO_DRIVER_OK = "VIRTIO_CONFIG_S_DRIVER_OK: Driver setup and ready";
 
 function explicitKeyEvent(code, down) {
   return {
@@ -141,6 +144,141 @@ async function sendExplicitChord(client, codes) {
     codes,
     requestedInterTransitionMilliseconds: INPUT_TRANSITION_MILLISECONDS,
     transitions: evidence,
+  };
+}
+
+function queueIndexDelta(before, after) {
+  if (!Number.isInteger(before) || !Number.isInteger(after) ||
+      before < 0 || before >= VIRTIO_QUEUE_INDEX_MODULUS ||
+      after < 0 || after >= VIRTIO_QUEUE_INDEX_MODULUS) {
+    throw new Error(`invalid Virtio queue indices: before=${before} after=${after}`);
+  }
+  return (after - before + VIRTIO_QUEUE_INDEX_MODULUS) % VIRTIO_QUEUE_INDEX_MODULUS;
+}
+
+function queueProgress(before, after) {
+  return {
+    lastAvailDelta: queueIndexDelta(before["last-avail-idx"], after["last-avail-idx"]),
+    usedDelta: queueIndexDelta(before["used-idx"], after["used-idx"]),
+  };
+}
+
+function requireQueueProgress(label, progress, expected) {
+  if (progress.lastAvailDelta !== expected || progress.usedDelta !== expected) {
+    throw new Error(
+      `${label} did not consume exactly ${expected} Virtio descriptors: ${JSON.stringify(progress)}`,
+    );
+  }
+}
+
+async function queryVirtioInput(client, info) {
+  const status = await client.execute("x-query-virtio-status", { path: info.path });
+  const queue = await client.execute("x-query-virtio-queue-status", {
+    path: info.path,
+    queue: 0,
+  });
+  const statuses = status?.status?.statuses;
+  if (status?.name !== "virtio-input" || status.started !== true || status["vm-running"] !== true ||
+      status.broken !== false || status.disabled !== false ||
+      !Array.isArray(statuses) || !statuses.includes(VIRTIO_DRIVER_OK)) {
+    throw new Error(`Virtio input device is not active and DRIVER_OK: ${JSON.stringify({ info, status })}`);
+  }
+  if (queue?.name !== "virtio-input" || queue["queue-index"] !== 0 || queue["vring-num"] !== 64 ||
+      !Number.isInteger(queue["last-avail-idx"]) || !Number.isInteger(queue["used-idx"]) ||
+      !Number.isInteger(queue["vring-desc"]) || queue["vring-desc"] === 0 ||
+      !Number.isInteger(queue["vring-avail"]) || queue["vring-avail"] === 0 ||
+      !Number.isInteger(queue["vring-used"]) || queue["vring-used"] === 0) {
+    throw new Error(`Virtio input event queue is not live: ${JSON.stringify({ info, queue })}`);
+  }
+  return { path: info.path, status, queue };
+}
+
+async function sendVirtioSuperKey(client, keyCode) {
+  if (!["2", "ret", "spc"].includes(keyCode)) {
+    throw new Error(`unsupported reviewed Virtio Super chord: ${JSON.stringify(keyCode)}`);
+  }
+  const vmStatus = await client.execute("query-status");
+  if (vmStatus?.status !== "running" || vmStatus.running !== true) {
+    throw new Error(`VM is not running before Virtio input proof: ${JSON.stringify(vmStatus)}`);
+  }
+  const infos = (await client.execute("x-query-virtio"))
+    .filter((info) => info?.name === "virtio-input");
+  if (infos.length !== 2 || new Set(infos.map(({ path }) => path)).size !== 2) {
+    throw new Error(`expected exact keyboard/tablet Virtio input topology: ${JSON.stringify(infos)}`);
+  }
+  const beforeProbe = await Promise.all(infos.map((info) => queryVirtioInput(client, info)));
+  const modifierReleaseEvents = [
+    "meta_l", "meta_r", "ctrl", "ctrl_r", "alt", "alt_r", "shift", "shift_r",
+  ].map((code) => explicitKeyEvent(code, false));
+  await client.execute("input-send-event", { events: modifierReleaseEvents });
+  const afterProbe = await Promise.all(infos.map((info) => queryVirtioInput(client, info)));
+  const devices = beforeProbe.map((before, index) => ({
+    path: before.path,
+    status: before.status,
+    queueBeforeProbe: before.queue,
+    queueAfterProbe: afterProbe[index].queue,
+    probeProgress: queueProgress(before.queue, afterProbe[index].queue),
+  }));
+  const keyboardCandidates = devices.filter(({ probeProgress }) =>
+    probeProgress.lastAvailDelta === modifierReleaseEvents.length + 1 &&
+    probeProgress.usedDelta === modifierReleaseEvents.length + 1);
+  if (keyboardCandidates.length !== 1) {
+    throw new Error(`could not identify one consuming Virtio keyboard queue: ${JSON.stringify(devices)}`);
+  }
+  const keyboard = keyboardCandidates[0];
+  const tablet = devices.find(({ path }) => path !== keyboard.path);
+  requireQueueProgress("Virtio keyboard modifier-release probe", keyboard.probeProgress, 9);
+  requireQueueProgress("Virtio tablet keyboard-isolation probe", tablet.probeProgress, 0);
+  await delay(VIRTIO_INPUT_REPORT_HOLD_MILLISECONDS);
+
+  const pressEvents = [explicitKeyEvent("meta_l", true), explicitKeyEvent(keyCode, true)];
+  const releaseEvents = [explicitKeyEvent(keyCode, false), explicitKeyEvent("meta_l", false)];
+  let pressed = false;
+  let pressQueue;
+  let releaseQueue;
+  try {
+    await client.execute("input-send-event", { events: pressEvents });
+    pressed = true;
+    pressQueue = (await queryVirtioInput(client, { path: keyboard.path })).queue;
+    requireQueueProgress(
+      `Virtio keyboard Super+${keyCode} press report`,
+      queueProgress(keyboard.queueAfterProbe, pressQueue),
+      pressEvents.length + 1,
+    );
+    await delay(VIRTIO_INPUT_REPORT_HOLD_MILLISECONDS);
+    await client.execute("input-send-event", { events: releaseEvents });
+    pressed = false;
+    releaseQueue = (await queryVirtioInput(client, { path: keyboard.path })).queue;
+    requireQueueProgress(
+      `Virtio keyboard Super+${keyCode} release report`,
+      queueProgress(pressQueue, releaseQueue),
+      releaseEvents.length + 1,
+    );
+  } finally {
+    if (pressed) {
+      await client.execute("input-send-event", { events: releaseEvents }).catch(() => {});
+    }
+  }
+  return {
+    schemaVersion: 1,
+    action: keyCode === "ret" ? "virtio-super-return" : "virtio-super-key",
+    keyCode,
+    vmStatus,
+    requestedHoldMilliseconds: VIRTIO_INPUT_REPORT_HOLD_MILLISECONDS,
+    keyboardPath: keyboard.path,
+    devices,
+    press: {
+      events: pressEvents,
+      queueBefore: keyboard.queueAfterProbe,
+      queueAfter: pressQueue,
+      progress: queueProgress(keyboard.queueAfterProbe, pressQueue),
+    },
+    release: {
+      events: releaseEvents,
+      queueBefore: pressQueue,
+      queueAfter: releaseQueue,
+      progress: queueProgress(pressQueue, releaseQueue),
+    },
   };
 }
 
@@ -180,6 +318,11 @@ async function main() {
       // Match the browser input bridge: send acknowledged down/up transitions
       // separately and never rely on QEMU's synthetic simultaneous chord.
       result = await sendExplicitChord(client, ["meta_l", "ret"]);
+    } else if (action === "virtio-super-return") {
+      result = await sendVirtioSuperKey(client, "ret");
+    } else if (action === "virtio-super-key") {
+      if (values.length !== 1) throw new Error("virtio-super-key requires one reviewed qcode");
+      result = await sendVirtioSuperKey(client, values[0]);
     } else if (action === "super-w") {
       result = await sendExplicitChord(client, ["meta_l", "w"]);
     } else if (action === "release-modifiers") {

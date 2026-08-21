@@ -52,6 +52,69 @@ const canonicalize = (value) => {
 };
 const normalizedJsonDigest = (value) => digest(Buffer.from(JSON.stringify(canonicalize(value)), "utf8"));
 const oneMarker = parseUniqueDiagnosticMarker;
+const VIRTIO_QUEUE_INDEX_MODULUS = 0x1_0000;
+const VIRTIO_DRIVER_OK = "VIRTIO_CONFIG_S_DRIVER_OK: Driver setup and ready";
+const queueIndexDelta = (before, after, label) => {
+  invariant(
+    Number.isInteger(before) && before >= 0 && before < VIRTIO_QUEUE_INDEX_MODULUS &&
+      Number.isInteger(after) && after >= 0 && after < VIRTIO_QUEUE_INDEX_MODULUS,
+    `${label} contains invalid Virtio queue indices`,
+    { before, after },
+  );
+  return (after - before + VIRTIO_QUEUE_INDEX_MODULUS) % VIRTIO_QUEUE_INDEX_MODULUS;
+};
+const queueProgress = (before, after, label) => ({
+  lastAvailDelta: queueIndexDelta(before["last-avail-idx"], after["last-avail-idx"], `${label} available`),
+  usedDelta: queueIndexDelta(before["used-idx"], after["used-idx"], `${label} used`),
+});
+const assertQueueProgress = (before, after, recorded, expected, label) => {
+  exactKeys(recorded, ["lastAvailDelta", "usedDelta"], `${label} progress`);
+  const recomputed = queueProgress(before, after, label);
+  assert.deepEqual(recorded, recomputed, `${label} recorded progress differs from its queue snapshots`);
+  assert.deepEqual(recomputed, { lastAvailDelta: expected, usedDelta: expected },
+    `${label} did not consume exactly ${expected} Virtio descriptors`);
+};
+const explicitKeyEvent = (code, down) => ({
+  type: "key",
+  data: {
+    down,
+    key: { type: "qcode", data: code },
+  },
+});
+const assertLiveVirtioQueue = (queue, label) => {
+  assert.equal(queue.name, "virtio-input", `${label} name differs`);
+  assert.equal(queue["queue-index"], 0, `${label} is not the event queue`);
+  assert.equal(queue["vring-num"], 64, `${label} ring size differs`);
+  for (const field of ["last-avail-idx", "used-idx"]) {
+    invariant(
+      Number.isInteger(queue[field]) && queue[field] >= 0 && queue[field] < VIRTIO_QUEUE_INDEX_MODULUS,
+      `${label} has an invalid ${field}`,
+      queue,
+    );
+  }
+  for (const field of ["vring-desc", "vring-avail", "vring-used"]) {
+    invariant(Number.isSafeInteger(queue[field]) && queue[field] > 0,
+      `${label} has no live ${field}`, queue);
+  }
+};
+const assertLiveVirtioInput = (device) => {
+  const { status } = device;
+  invariant(typeof device.path === "string" && device.path.length > 0,
+    "Virtio input proof has an invalid device path", device);
+  assert.equal(status.name, "virtio-input");
+  assert.equal(status.started, true);
+  assert.equal(status["vm-running"], true);
+  assert.equal(status.broken, false);
+  assert.equal(status.disabled, false);
+  invariant(Array.isArray(status.status?.statuses) && status.status.statuses.includes(VIRTIO_DRIVER_OK),
+    "Virtio input device is not DRIVER_OK", { path: device.path, status });
+  for (const [label, queue] of [
+    ["before probe", device.queueBeforeProbe],
+    ["after probe", device.queueAfterProbe],
+  ]) {
+    assertLiveVirtioQueue(queue, `${device.path} ${label}`);
+  }
+};
 
 const [manifest, run, sourceLog, targetLog, sourceCommand, targetCommand] = await Promise.all([
   json("hibernate-manifest.json"),
@@ -276,6 +339,73 @@ assert.equal(change.status, "PASS");
 assert.equal(change.mode, "minimum");
 invariant(change.ratio >= 0.0005, "Foot frame change is below threshold");
 assert.equal((await json("target-running-status.json")).status, "running");
+
+const input = await json("target-virtio-super-return.json");
+exactKeys(input, [
+  "schemaVersion", "action", "keyCode", "vmStatus", "requestedHoldMilliseconds",
+  "keyboardPath", "devices", "press", "release",
+], "Virtio Super+Return proof");
+assert.equal(input.schemaVersion, 1);
+assert.equal(input.action, "virtio-super-return");
+assert.equal(input.keyCode, "ret");
+assert.equal(input.requestedHoldMilliseconds, 150);
+assert.equal(input.vmStatus.status, "running");
+assert.equal(input.vmStatus.running, true);
+invariant(Array.isArray(input.devices) && input.devices.length === 2,
+  "Virtio input proof must contain exactly keyboard and tablet", input.devices);
+assert.equal(new Set(input.devices.map(({ path: devicePath }) => devicePath)).size, 2,
+  "Virtio input proof device paths are not unique");
+for (const device of input.devices) {
+  exactKeys(device, ["path", "status", "queueBeforeProbe", "queueAfterProbe", "probeProgress"],
+    `Virtio input device ${device.path}`);
+  assertLiveVirtioInput(device);
+}
+const keyboard = input.devices.find(({ path: devicePath }) => devicePath === input.keyboardPath);
+invariant(keyboard !== undefined, "Virtio keyboard path does not identify one recorded device", input.keyboardPath);
+const nonKeyboard = input.devices.find(({ path: devicePath }) => devicePath !== input.keyboardPath);
+assertQueueProgress(
+  keyboard.queueBeforeProbe,
+  keyboard.queueAfterProbe,
+  keyboard.probeProgress,
+  9,
+  "Virtio keyboard modifier-release probe",
+);
+assertQueueProgress(
+  nonKeyboard.queueBeforeProbe,
+  nonKeyboard.queueAfterProbe,
+  nonKeyboard.probeProgress,
+  0,
+  "non-keyboard Virtio input isolation probe",
+);
+for (const [label, report, events] of [
+  ["press", input.press, [explicitKeyEvent("meta_l", true), explicitKeyEvent("ret", true)]],
+  ["release", input.release, [explicitKeyEvent("ret", false), explicitKeyEvent("meta_l", false)]],
+]) {
+  exactKeys(report, ["events", "queueBefore", "queueAfter", "progress"],
+    `Virtio Super+Return ${label}`);
+  assert.deepEqual(report.events, events, `Virtio Super+Return ${label} events differ`);
+  assertLiveVirtioQueue(report.queueBefore, `Virtio Super+Return ${label} queue before`);
+  assertLiveVirtioQueue(report.queueAfter, `Virtio Super+Return ${label} queue after`);
+  assertQueueProgress(report.queueBefore, report.queueAfter, report.progress, 3,
+    `Virtio Super+Return ${label}`);
+}
+assert.deepEqual(input.press.queueBefore, keyboard.queueAfterProbe,
+  "Virtio Super+Return press does not continue from the proven keyboard queue");
+assert.deepEqual(input.release.queueBefore, input.press.queueAfter,
+  "Virtio Super+Return release does not continue from the press queue");
+for (const field of ["vring-desc", "vring-avail", "vring-used"]) {
+  const expectedAddress = keyboard.queueBeforeProbe[field];
+  for (const [label, queue] of [
+    ["keyboard after probe", keyboard.queueAfterProbe],
+    ["press before", input.press.queueBefore],
+    ["press after", input.press.queueAfter],
+    ["release before", input.release.queueBefore],
+    ["release after", input.release.queueAfter],
+  ]) {
+    assert.equal(queue[field], expectedAddress,
+      `Virtio keyboard ${field} changed at ${label}`);
+  }
+}
 
 // The runner records an executable shell reconstruction with Bash `printf %q`.
 // Bash escapes commas in QEMU's comma-delimited option arguments, so normalize

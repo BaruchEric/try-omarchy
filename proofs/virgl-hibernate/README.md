@@ -83,6 +83,13 @@ the big-endian XWD header, exact 1600×900×32-bit layout and RGB masks before
 writing P6 PPM. Each capture metadata record binds the capture mode plus both
 stable-sample, retained XWD, and PPM SHA-256 values; all three files are also
 covered by `SHA256SUMS`. QMP remains in use for bounded input, status, and quit.
+The input gate requires the resumed VM to be running, both Virtio input devices
+to be started and `DRIVER_OK`, exactly one keyboard queue to consume the
+modifier-reset probe, and the same queue to consume exact Super+Return press and
+release reports. QMP acknowledgement without matching avail/used ring progress
+does not pass. The authenticated guest report also records read-only
+`hyprctl` device, bind, config-error, workspace, and client state so a session
+failure remains distinguishable from an emulator delivery failure.
 
 ## Static checks (safe and fast)
 
@@ -129,7 +136,8 @@ budget is 54 minutes: 20 minutes to produce the image, 10 minutes to resume,
 
 A PASS requires ordered kernel resume evidence, one exact nonce/source-boot-ID
 marker, a fresh VirGL renderer report, a new authentic guest report, two
-healthy 1600×900 frames, and visible Foot input while QEMU is still running.
+healthy 1600×900 frames, queue-audited Virtio Super+Return delivery, and visible
+Foot input while QEMU is still running.
 It deliberately records `browserAcceptance: false`; the artifacts remain
 non-promotable until the separate browser acceptance gate proves the same
 resume marker, browser WebGL2 presentation, live report, frames, and input.

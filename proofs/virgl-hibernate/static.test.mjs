@@ -274,6 +274,10 @@ test("derived initramfs defers virtio GPU and input and carries exact resume/lat
   assert.match(resume, /OMARCHY_HIBERNATION_COLD_BOOT .*resume-device-unresolved/);
   assert.doesNotMatch(resume, /< <\(/, "BusyBox ash hook must not use process substitution");
   assert.doesNotMatch(late, /\binstall -m\b/, "late hook must use BusyBox-portable cp/chmod");
+  for (const command of ["devices", "binds", "configerrors", "activeworkspace", "clients"]) {
+    assert.ok(late.includes(`["hyprctl", "${command}"`),
+      `derived guest report is missing read-only Hyprland ${command} diagnostics`);
+  }
 });
 
 test("producer hibernates directly, remains bounded, and fails closed", async () => {
@@ -388,7 +392,11 @@ test("fresh target cannot launch without an armed persistent swsusp header", asy
 });
 
 test("native PASS requires marker, live report, two frames, and real Foot input", async () => {
-  const runner = await read("run-inside-container.sh");
+  const [runner, qmp, validator] = await Promise.all([
+    read("run-inside-container.sh"),
+    readFile(path.join(proofDirectory, "../preboot-resume/qmp.mjs"), "utf8"),
+    read("validate.mjs"),
+  ]);
   const phases = [
     "fresh-target-resume",
     "resumed-authentic-report",
@@ -398,9 +406,19 @@ test("native PASS requires marker, live report, two frames, and real Foot input"
   assert.ok(phases.every((index) => index >= 0));
   assert.deepEqual([...phases].sort((a, b) => a - b), phases);
   for (const token of [
-    "report_gate", "capture_two_healthy_frames", "release-modifiers", "super-return",
+    "report_gate", "capture_two_healthy_frames", "virtio-super-return",
     "wait_for_foot_frame", "target-running-status.json", "freshPostResumeInteraction: true",
   ]) assert.ok(runner.includes(token), `acceptance gate is missing ${token}`);
+  for (const token of [
+    "x-query-virtio", "x-query-virtio-status", "x-query-virtio-queue-status",
+    "VIRTIO_CONFIG_S_DRIVER_OK", "Virtio keyboard modifier-release probe",
+    "Virtio keyboard Super+${keyCode} press report",
+  ]) assert.ok(qmp.includes(token), `queue-audited input proof is missing ${token}`);
+  for (const token of [
+    "target-virtio-super-return.json", 'input.action, "virtio-super-return"',
+    "assertLiveVirtioInput", "assertQueueProgress", "keyboard.queueAfterProbe",
+    'explicitKeyEvent("meta_l", true)', 'explicitKeyEvent("ret", false)',
+  ]) assert.ok(validator.includes(token), `input evidence validator is missing ${token}`);
   assert.match(runner, /health\.clean|frame_health/);
 });
 

@@ -561,9 +561,7 @@ capture_two_healthy_frames "$evidence_dir/resumed-desktop"
 
 set_phase resumed-foot-input
 node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  release-modifiers >"$evidence_dir/target-release-modifiers.json"
-node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
-  super-return >"$evidence_dir/target-super-return.json"
+  virtio-super-return >"$evidence_dir/target-virtio-super-return.json"
 wait_for_foot_frame \
   "$evidence_dir/resumed-desktop-2.ppm" \
   "$evidence_dir/resumed-foot.ppm"

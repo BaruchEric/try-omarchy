@@ -34,6 +34,18 @@ EOF
         "$root/usr/local/libexec/omarchy-egl-renderer-probe"
     chmod 0755 "$root/usr/local/libexec/omarchy-egl-renderer-probe"
 
+    # Keep the authenticated hibernation report self-diagnosing: these are
+    # read-only views of the live compositor's input devices, bindings, and
+    # configuration state. They do not replace or alter Omarchy behavior.
+    sed -i \
+        '/    \["hyprctl", "monitors", "-j"\],/a\
+    ["hyprctl", "devices", "-j"],\
+    ["hyprctl", "binds", "-j"],\
+    ["hyprctl", "configerrors"],\
+    ["hyprctl", "activeworkspace", "-j"],\
+    ["hyprctl", "clients", "-j"],' \
+        "$root/usr/local/bin/omarchy-web-guest-probe"
+
     # Remove the browser software-renderer force only in the derived delta.
     # The compositor starts after the resumed branch loads virtio_gpu.
     if [ -f "$root/usr/lib/environment.d/90-omarchy-web.conf" ]; then
