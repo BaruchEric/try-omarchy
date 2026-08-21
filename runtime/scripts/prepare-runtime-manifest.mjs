@@ -567,7 +567,8 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   invariant(
     experimentValue === undefined || experimentValue === "" || experimentValue === "250" ||
       experimentValue === "750" ||
-      experimentValue === "1500-metrics" || experimentValue === "1500-clock",
+      experimentValue === "1500-metrics" || experimentValue === "1500-clock" ||
+      experimentValue === "6000-fill",
     "unsupported QEMU-Wasm TCG threshold experiment",
   );
   invariant(
@@ -587,13 +588,14 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   invariant(
     !experimentValue || !graphicsExperiment ||
       ((experimentValue === "1500-metrics" || experimentValue === "750" ||
-        experimentValue === "1500-clock") &&
+        experimentValue === "1500-clock" || experimentValue === "6000-fill") &&
         graphicsExperiment === "virgl-webgl2"),
-    "only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined with VirGL/WebGL2",
+    "only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2",
   );
   const qemuWasmPath = join(resolve(outputPath, ".."), "qemu.wasm");
   const expected = experimentValue === "250" || experimentValue === "750" ||
     experimentValue === "1500-metrics" || experimentValue === "1500-clock" ||
+    experimentValue === "6000-fill" ||
     graphicsExperiment === "webgl2-present"
     ? { ...EXPECTED, browserQemuWasmSha256: (await fileRecord(qemuWasmPath)).sha256 }
     : EXPECTED;
@@ -630,6 +632,11 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   if (experimentValue === "1500-clock") {
     process.stdout.write(
       "runtime experiment: qemu-wasm-tcg-bounded-clock threshold=1500 metrics-schema=4 cache=bounded-clock-v2 promotion-eligible=false\n",
+    );
+  }
+  if (experimentValue === "6000-fill") {
+    process.stdout.write(
+      "runtime experiment: qemu-wasm-tcg-fill-only threshold=6000 metrics-schema=5 cache=fill-only-v1 active-cap=120000 promotion-eligible=false\n",
     );
   }
   if (graphicsExperiment === "virgl-webgl2") {

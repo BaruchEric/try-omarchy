@@ -51,6 +51,29 @@ const tcgExperimentProfiles = Object.freeze({
       "patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch",
       "patches/qemu-wasm-tcg-bounded-clock-cache.patch",
     ],
+    cachePolicyMarker:
+      "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 retained-cap=64096 " +
+      "gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 " +
+      "gc-pressure-hold=next-task",
+  }),
+  "6000-fill": Object.freeze({
+    kind: "qemu-wasm-tcg-fill-only",
+    instantiateThreshold: 6000,
+    metricsSchemaVersion: 5,
+    cachePolicy: Object.freeze({
+      kind: "fill-only-v1",
+      activeCap: 120000,
+      retainedCap: 120000,
+      eviction: "disabled",
+      gcPressure: "disabled",
+    }),
+    patches: [
+      "patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch",
+      "patches/qemu-wasm-tcg-fill-only-120k.patch",
+    ],
+    cachePolicyMarker:
+      "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
+      "eviction=disabled gc-pressure=disabled",
   }),
 });
 const tcgExperimentProfile = tcgExperimentProfiles[tcgExperiment] ?? null;
@@ -62,8 +85,8 @@ if (graphicsExperiment !== undefined && graphicsExperiment !== "" &&
   throw new Error(`unsupported QEMU-Wasm graphics experiment: ${graphicsExperiment}`);
 }
 if (tcgExperimentProfile !== null && graphicsExperiment === "virgl-webgl2" &&
-    ![750, 1500].includes(tcgExperimentProfile.instantiateThreshold)) {
-  throw new Error("only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined with VirGL/WebGL2");
+    ![750, 1500, 6000].includes(tcgExperimentProfile.instantiateThreshold)) {
+  throw new Error("only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2");
 }
 if (vcpuExperiment !== undefined && vcpuExperiment !== "" && vcpuExperiment !== "4") {
   throw new Error(`unsupported browser vCPU experiment: ${vcpuExperiment}`);
@@ -134,17 +157,7 @@ if (tcgExperimentProfile !== null) {
       (tcgExperimentProfile.cachePolicy !== undefined &&
         (verification?.wasm?.tcgExperiment?.kind !== tcgExperimentProfile.kind ||
           JSON.stringify(verification?.wasm?.tcgExperiment?.cachePolicy) !==
-            JSON.stringify({
-              kind: tcgExperimentProfile.cachePolicy.kind,
-              activeCap: tcgExperimentProfile.cachePolicy.activeCap,
-              replacementCredit: tcgExperimentProfile.cachePolicy.replacementCredit,
-              retainedCap: tcgExperimentProfile.cachePolicy.retainedCap,
-              gcPressureBytes: tcgExperimentProfile.cachePolicy.gcPressureBytes,
-              gcPressureInterval: tcgExperimentProfile.cachePolicy.gcPressureInterval,
-              gcPressureRetryMilliseconds:
-                tcgExperimentProfile.cachePolicy.gcPressureRetryMilliseconds,
-              gcPressureHold: tcgExperimentProfile.cachePolicy.gcPressureHold,
-            }))) ||
+            JSON.stringify(tcgExperimentProfile.cachePolicy))) ||
       verification?.wasm?.tcgExperimentArtifactSha256 !== wasmArtifact?.sha256) {
     throw new Error("TCG experiment build metadata is not backed by verified QEMU Wasm bytes");
   }
@@ -210,8 +223,8 @@ const tcgExperimentMetadata = tcgExperimentProfile === null ? null : {
   diagnosticMarkers: [
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=${tcgExperimentProfile.instantiateThreshold} metrics-schema=${tcgExperimentProfile.metricsSchemaVersion}`,
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics schema=${tcgExperimentProfile.metricsSchemaVersion} threshold=${tcgExperimentProfile.instantiateThreshold}`,
-    ...(tcgExperimentProfile.cachePolicy !== undefined
-      ? ["cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 retained-cap=64096 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task"]
+    ...(tcgExperimentProfile.cachePolicyMarker !== undefined
+      ? [tcgExperimentProfile.cachePolicyMarker]
       : []),
   ],
 };

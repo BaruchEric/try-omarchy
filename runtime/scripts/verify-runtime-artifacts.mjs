@@ -41,15 +41,30 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
       gcPressureRetryMilliseconds: 1000,
       gcPressureHold: "next-task",
     }),
+    cachePolicyMarker:
+      "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 " +
+      "retained-cap=64096 gc-pressure-bytes=4194304 gc-pressure-interval=64 " +
+      "gc-pressure-retry-ms=1000 gc-pressure-hold=next-task",
+  }),
+  "6000-fill": Object.freeze({
+    kind: "qemu-wasm-tcg-fill-only",
+    instantiateThreshold: 6000,
+    metricsSchemaVersion: 5,
+    cachePolicy: Object.freeze({
+      kind: "fill-only-v1",
+      activeCap: 120000,
+      retainedCap: 120000,
+      eviction: "disabled",
+      gcPressure: "disabled",
+    }),
+    cachePolicyMarker:
+      "cache=fill-only-v1 active-cap=120000 retained-cap=120000 " +
+      "eviction=disabled gc-pressure=disabled",
   }),
 });
 const TCG_EXPERIMENT_MARKER_PREFIX =
   "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=";
 const TCG_METRICS_MARKER = "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics ";
-const TCG_BOUNDED_CLOCK_MARKER =
-  "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 " +
-  "retained-cap=64096 gc-pressure-bytes=4194304 gc-pressure-interval=64 " +
-  "gc-pressure-retry-ms=1000 gc-pressure-hold=next-task";
 const VIRGL_GRAPHICS_EXPERIMENT = "virgl-webgl2";
 const WEBGL2_PRESENT_EXPERIMENT = "webgl2-present";
 const HIBERNATION_MODE = "guest-hibernation-resume";
@@ -315,9 +330,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
   const graphics = hibernation ? VIRGL_GRAPHICS_EXPERIMENT : requestedGraphics;
   assert.ok(
     tcgExperiment === null || graphics === null ||
-      ([750, 1500].includes(tcgExperiment.instantiateThreshold) &&
+      ([750, 1500, 6000].includes(tcgExperiment.instantiateThreshold) &&
         graphics === VIRGL_GRAPHICS_EXPERIMENT),
-    "only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined with VirGL/WebGL2",
+    "only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2",
   );
   assert.ok(
     vcpus === null ||
@@ -380,10 +395,10 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
       wasm.includes(Buffer.from(TCG_METRICS_MARKER)),
       "linked QEMU binary does not include bounded TCG performance metrics",
     );
-    if (tcgExperiment.cachePolicy !== undefined) {
+    if (tcgExperiment.cachePolicyMarker !== undefined) {
       assert.ok(
-        wasm.includes(Buffer.from(TCG_BOUNDED_CLOCK_MARKER)),
-        "linked QEMU binary does not include the requested bounded CLOCK policy",
+        wasm.includes(Buffer.from(tcgExperiment.cachePolicyMarker)),
+        "linked QEMU binary does not include the requested TCG cache policy",
       );
     }
   } else {
@@ -442,9 +457,13 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
     nestedTcgModuleLayoutGuard:
       moduleSource.includes("OMARCHY_TCG_MODULE_LAYOUT_INVALID") &&
       moduleSource.includes("OMARCHY_TCG_MODULE_MAGIC_INVALID"),
-    ...(tcgExperiment?.cachePolicy !== undefined ? {
+    ...(tcgExperiment?.cachePolicy?.kind === "bounded-clock-v2" ? {
       tcgGcPressureNextTask:
         moduleSource.includes("gc_pressure=pressure;setTimeout(") &&
+        !moduleSource.includes("gc_pressure=pressure;queueMicrotask("),
+    } : tcgExperiment?.cachePolicy?.kind === "fill-only-v1" ? {
+      tcgFillOnlyNoGcPressure:
+        !moduleSource.includes("gc_pressure=pressure;setTimeout(") &&
         !moduleSource.includes("gc_pressure=pressure;queueMicrotask("),
     } : {}),
   };

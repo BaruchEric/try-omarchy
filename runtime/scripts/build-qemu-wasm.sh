@@ -24,7 +24,8 @@ elif [[ "$tcg_experiment" == "750" ]]; then
   default_build_volume+=-tcg-threshold-750
 elif [[ "$tcg_experiment" == "1500-metrics" ]]; then
   default_build_volume+=-tcg-baseline-1500-metrics
-elif [[ "$tcg_experiment" == "1500-clock" ]]; then
+elif [[ "$tcg_experiment" == "1500-clock" || "$tcg_experiment" == "6000-fill" ]]; then
+  # Reuse the isolated VirGL performance A/B cache; Ninja tracks the overlay.
   default_build_volume+=-tcg-bounded-clock-v2
 fi
 
@@ -55,7 +56,8 @@ command -v node >/dev/null 2>&1 || { printf 'node is required\n' >&2; exit 1; }
 [[ -d "$qemu_source" ]] || { printf 'QEMU-Wasm source not found: %s\n' "$qemu_source" >&2; exit 1; }
 [[ "$jobs" =~ ^[1-9][0-9]*$ ]] || { printf 'jobs must be a positive integer\n' >&2; exit 2; }
 [[ -z "$tcg_experiment" || "$tcg_experiment" == "250" || "$tcg_experiment" == "750" ||
-   "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "1500-clock" ]] || {
+   "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "1500-clock" ||
+   "$tcg_experiment" == "6000-fill" ]] || {
   printf 'unsupported QEMU-Wasm TCG threshold experiment: %s\n' "$tcg_experiment" >&2
   exit 2
 }
@@ -74,9 +76,9 @@ command -v node >/dev/null 2>&1 || { printf 'node is required\n' >&2; exit 1; }
 }
 [[ -z "$tcg_experiment" || -z "$graphics_experiment" ||
    ( ( "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "750" ||
-       "$tcg_experiment" == "1500-clock" ) &&
+       "$tcg_experiment" == "1500-clock" || "$tcg_experiment" == "6000-fill" ) &&
      "$graphics_experiment" == "virgl-webgl2" ) ]] || {
-  printf 'only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined with VirGL/WebGL2\n' >&2
+  printf 'only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2\n' >&2
   exit 2
 }
 
@@ -244,6 +246,11 @@ elif [[ "$tcg_experiment" == "1500-clock" ]]; then
     < "$runtime_dir/patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch"
   patch --quiet --directory "$source_overlay" --strip=1 \
     < "$runtime_dir/patches/qemu-wasm-tcg-bounded-clock-cache.patch"
+elif [[ "$tcg_experiment" == "6000-fill" ]]; then
+  patch --quiet --directory "$source_overlay" --strip=1 \
+    < "$runtime_dir/patches/qemu-wasm-tcg-baseline-threshold-1500-metrics.patch"
+  patch --quiet --directory "$source_overlay" --strip=1 \
+    < "$runtime_dir/patches/qemu-wasm-tcg-fill-only-120k.patch"
 fi
 if [[ -n "$webgl_build" ]]; then
   patch --quiet --directory "$source_overlay" --strip=1 \

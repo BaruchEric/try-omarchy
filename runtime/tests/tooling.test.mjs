@@ -911,7 +911,7 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   assert.match(packageScript, /"1500-metrics" \|\| "\$tcg_experiment" == "750"/);
   assert.match(
     verifier,
-    /only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined/,
+    /only an instrumented VirGL-compatible TCG profile may be combined/,
   );
 });
 

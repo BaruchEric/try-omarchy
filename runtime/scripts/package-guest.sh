@@ -62,7 +62,8 @@ if (( hibernation_artifact_count > 0 )); then
   boot_mode_label="guest-hibernation-resume"
 fi
 [[ -z "$tcg_experiment" || "$tcg_experiment" == "250" || "$tcg_experiment" == "750" ||
-   "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "1500-clock" ]] || {
+   "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "1500-clock" ||
+   "$tcg_experiment" == "6000-fill" ]] || {
   printf 'unsupported QEMU-Wasm TCG threshold experiment: %s\n' "$tcg_experiment" >&2
   exit 2
 }
@@ -82,9 +83,9 @@ fi
 }
 [[ -z "$tcg_experiment" || -z "$graphics_experiment" ||
    ( ( "$tcg_experiment" == "1500-metrics" || "$tcg_experiment" == "750" ||
-       "$tcg_experiment" == "1500-clock" ) &&
+       "$tcg_experiment" == "1500-clock" || "$tcg_experiment" == "6000-fill" ) &&
      "$graphics_experiment" == "virgl-webgl2" ) ]] || {
-  printf 'only the instrumented 750, 1500-metrics, or 1500-clock TCG profiles may be combined with VirGL/WebGL2\n' >&2
+  printf 'only an instrumented VirGL-compatible TCG profile may be combined with VirGL/WebGL2\n' >&2
   exit 2
 }
 

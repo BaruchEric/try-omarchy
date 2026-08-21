@@ -230,7 +230,7 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   assert.match(verifier, /gcPressureRetryMilliseconds: 1000/);
   assert.match(verifier, /gcPressureHold: "next-task"/);
   assert.match(verifier, /gc_pressure=pressure;setTimeout/);
-  assert.match(verifier, /TCG_BOUNDED_CLOCK_MARKER/);
+  assert.match(verifier, /cachePolicyMarker/);
   assert.match(metadataScript, /patches\/qemu-wasm-tcg-bounded-clock-cache\.patch/);
   assert.match(metadataScript, /gcPressureInterval: 64/);
   assert.match(metadataScript, /gcPressureRetryMilliseconds: 1000/);
