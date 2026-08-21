@@ -202,6 +202,10 @@ python3 "$guest_dir/scripts/resolve-package-lock.py" \
 # remain under $work across failed staging roots and are still signature-checked.
 pacstrap -c -P -C "$pacman_config" -K -M "$root" "${packages[@]}"
 
+# Fail before image packing if the repository's prebuilt Quickshell and the
+# reviewed Qt private ABI set cannot actually load together.
+arch-chroot "$root" /usr/bin/quickshell --version >/dev/null
+
 # pacstrap creates a target-side mirror of every configured cache directory,
 # even in host-cache mode. It must be empty; remove only that staged mirror and
 # any empty parents it introduced, never the persistent cache itself.

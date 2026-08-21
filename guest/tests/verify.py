@@ -93,6 +93,12 @@ def test_static() -> None:
         and guest_build.find('[omarchy-web-pinned-cache]') < guest_build.find('pacman -Syy'),
         "signed cache repository is fail-closed and precedes upstream resolution",
     )
+    check(
+        'arch-chroot "$root" /usr/bin/quickshell --version' in guest_build
+        and guest_build.find('/usr/bin/quickshell --version')
+        < guest_build.find('scripts/materialize-omarchy.sh'),
+        "Quickshell and Qt ABI compatibility is executed before image packing",
+    )
 
     for key in ("maskedSystemServices", "maskedUserServices"):
         units = entries(GUEST / SPEC["inputs"][key])
