@@ -920,7 +920,7 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
   );
   assert.match(
     verifier,
-    /split\(`\$\{vcpus\},sockets=1,cores=\$\{vcpus\},threads=1`\)\.length - 1 === 3/,
+    /split\(`\$\{vcpus\},sockets=1,cores=\$\{vcpus\},threads=1`\)\.length - 1 ===[\s\S]+vcpus === 1 \? 4 : 3/,
   );
 });
 
