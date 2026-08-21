@@ -169,8 +169,8 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   ]);
   assert.match(header, /OMARCHY_WASM_TCG_HOT_THRESHOLD 1500/);
   assert.match(header, /OMARCHY_WASM_TCG_METRICS_SCHEMA 4/);
-  assert.match(source, /MAX_INSTANCE_ACTIVE 15000/);
-  assert.match(source, /MAX_INSTANCE_REPLACEMENT_CREDIT 256/);
+  assert.match(source, /MAX_INSTANCE_ACTIVE 60000/);
+  assert.match(source, /MAX_INSTANCE_REPLACEMENT_CREDIT 4096/);
   assert.match(source, /MAX_INSTANCE_RETAINED \\\n+\s+\(MAX_INSTANCE_ACTIVE \+ MAX_INSTANCE_REPLACEMENT_CREDIT\)/);
   assert.match(source, /CLOCK_GC_PRESSURE_INTERVAL 64/);
   assert.match(source, /CLOCK_GC_PRESSURE_BYTES \(4 \* 1024 \* 1024\)/);
@@ -186,13 +186,13 @@ test("bounded CLOCK patch applies after the 1500 baseline and has hard caps", as
   assert.match(source, /new Uint8Array\(bytes\)/);
   assert.match(source, /setTimeout\(\(\) => \{/);
   assert.doesNotMatch(source, /queueMicrotask/);
-  assert.match(source, /_Static_assert\(MAX_INSTANCE_ACTIVE == 15000/);
+  assert.match(source, /_Static_assert\(MAX_INSTANCE_ACTIVE == 60000/);
   assert.match(source, /_Static_assert\(CLOCK_GC_PRESSURE_INTERVAL == 64/);
   assert.match(source, /__thread double instance_gc_pressure_retry_after_ms/);
   assert.match(source, /now < instance_gc_pressure_retry_after_ms/);
   assert.match(source, /instance_pending_gc_global\) >=\s+MAX_INSTANCE_REPLACEMENT_CREDIT/);
   assert.match(source, /omarchy_wasm_tcg_request_gc_pressure\(true\)/);
-  assert.match(source, /cache=bounded-clock-v2 active-cap=15000 replacement-credit=256/);
+  assert.match(source, /cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096/);
   assert.match(source, /gc-pressure-interval=64 gc-pressure-retry-ms=1000/);
   assert.match(source, /gc-pressure-hold=next-task/);
   for (const metric of [
@@ -302,9 +302,9 @@ test("bounded CLOCK preserves hard caps and recovers turnover after saturation G
   assert.equal(model.pending, 8);
 });
 
-test("CLOCK pressure lifetime stays inside the measured 132 MiB headroom envelope", () => {
-  const activeCap = 15_000;
-  const replacementCredit = 256;
+test("CLOCK pressure leaves a bounded retained-wrapper budget", () => {
+  const activeCap = 60_000;
+  const replacementCredit = 4_096;
   const vcpus = 4;
   const pressureBytes = vcpus * 4 * 1024 * 1024;
   const rawSourceBytes = replacementCredit * 1011.9017333333334;
@@ -314,11 +314,11 @@ test("CLOCK pressure lifetime stays inside the measured 132 MiB headroom envelop
   const measuredHeadroom = 132 * 1024 * 1024;
   const wrapperBudget = measuredHeadroom - pressureBytes - rawSourceBytes + cBytesSaved;
 
-  assert.equal(cBytesSaved, 559_984);
+  assert.equal(cBytesSaved, -160_016);
   assert.equal(pressureBytes, 16 * 1024 * 1024);
-  assert.ok(rawSourceBytes < 0.25 * 1024 * 1024);
-  assert.ok(wrapperBudget > 116 * 1024 * 1024);
-  assert.ok(wrapperBudget / replacementCredit > 465 * 1024);
+  assert.ok(rawSourceBytes < 4 * 1024 * 1024);
+  assert.ok(wrapperBudget > 111 * 1024 * 1024);
+  assert.ok(wrapperBudget / replacementCredit > 27 * 1024);
 });
 
 test("bounded CLOCK build metadata is exact and non-promotable", async (context) => {
@@ -351,9 +351,9 @@ test("bounded CLOCK build metadata is exact and non-promotable", async (context)
         metricsSchemaVersion: 4,
         cachePolicy: {
           kind: "bounded-clock-v2",
-          activeCap: 15000,
-          replacementCredit: 256,
-          retainedCap: 15256,
+          activeCap: 60000,
+          replacementCredit: 4096,
+          retainedCap: 64096,
           gcPressureBytes: 4 * 1024 * 1024,
           gcPressureInterval: 64,
           gcPressureRetryMilliseconds: 1000,
@@ -385,9 +385,9 @@ test("bounded CLOCK build metadata is exact and non-promotable", async (context)
   );
   assert.deepEqual(clock.cachePolicy, {
     kind: "bounded-clock-v2",
-    activeCap: 15000,
-    replacementCredit: 256,
-    retainedCap: 15256,
+    activeCap: 60000,
+    replacementCredit: 4096,
+    retainedCap: 64096,
     gcPressureBytes: 4 * 1024 * 1024,
     gcPressureInterval: 64,
     gcPressureRetryMilliseconds: 1000,

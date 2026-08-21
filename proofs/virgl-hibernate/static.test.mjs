@@ -45,9 +45,9 @@ async function writeCandidateFixture(
   const metricsSchemaVersion = clockVersion === 2 ? 4 : 3;
   const cachePolicy = clockVersion === 2 ? {
     kind: "bounded-clock-v2",
-    activeCap: 15000,
-    replacementCredit: 256,
-    retainedCap: 15256,
+    activeCap: 60000,
+    replacementCredit: 4096,
+    retainedCap: 64096,
     gcPressureBytes: 4 * 1024 * 1024,
     gcPressureInterval: 64,
     gcPressureRetryMilliseconds: 1000,
@@ -65,7 +65,7 @@ async function writeCandidateFixture(
     "virgl",
     `OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=1500 metrics-schema=${metricsSchemaVersion}`,
     clockVersion === 2
-      ? "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task"
+      ? "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 retained-cap=64096 gc-pressure-bytes=4194304 gc-pressure-interval=64 gc-pressure-retry-ms=1000 gc-pressure-hold=next-task"
       : "cache=bounded-clock-v1 active-cap=%d replacement-credit=%d retained-cap=%d gc-pressure-bytes=%d core=%d",
   ] : ["arbitrary-software-wasm"]);
   const wasmSha256 = createHash("sha256").update(wasm).digest("hex");

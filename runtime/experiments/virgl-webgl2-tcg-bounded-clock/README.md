@@ -29,37 +29,41 @@ live hibernation trace exposed a liveness trap: 566 retirements produced 310
 finalizers, leaving the retained and pending counts pinned at 15,256 and 256.
 Because v1 requested pressure only after a successful retirement, exhausting
 the retirement credits also stopped the pressure needed to recover them.
-Schema-4 bounded-CLOCK-v2 instead:
+Schema-4 bounded-CLOCK-v2 instead. A later real-Quattro browser trace reached
+15,000 active modules while roughly 988 million post-threshold executions fell
+back to TCI and about 128,000 TBs had crossed the 1,500-entry threshold. The
+larger-cap candidate therefore keeps the same bounded policy but raises its
+experimental working-set envelope:
 
 - gives referenced TBs a second chance and retires only one TB per capacity
   miss;
-- caps callable modules at 15,000, pending replacements at 256, and retained
-  wrappers at 15,256 with atomic reservation and rollback;
+- caps callable modules at 60,000, pending replacements at 4,096, and retained
+  wrappers at 64,096 with atomic reservation and rollback;
 - clears and verifies both Emscripten table roots synchronously;
 - requests best-effort GC pressure with a touched 4 MiB allocation at
   retirement 1 and every 64 retirements, with all requests limited to one per
   worker per second;
-- while all 256 credits are pending, retries that pressure independently in
+- while all 4,096 credits are pending, retries that pressure independently in
   each worker from the existing amortized yield path, holds the allocation
   until the next task, yields, and checks finalizer callbacks;
-- stops retiring when all 256 credits are pending. Without any finalization,
-  unseen TBs fall back to TCI but the remaining 15,000-entry active cache is
+- stops retiring when all 4,096 credits are pending. Without any finalization,
+  unseen TBs fall back to TCI but the remaining 60,000-entry active cache is
   preserved instead of being halved; pressure retries do not spend another
   retirement credit.
 
 The wall-clock limiter plus the mandatory yield keeps at most one 4 MiB
 pressure allocation live per worker: 8 MiB for the two-vCPU hibernation profile
-and 16 MiB at four vCPUs. The 256 replacements add about 0.247 MiB of measured
-raw TB source.
-Shrinking the per-vCPU removal queue from 50,000 entries to one offsets the
-reference-bit expansion and saves about 0.534 MiB of C/TLS storage at four
-vCPUs. That leaves more than 116 MiB of the measured 132 MiB non-Wasm headroom
-for browser-specific compiled-code and wrapper overhead, but browser process
-memory remains a required acceptance gate.
+and 16 MiB at four vCPUs. The 4,096 replacements add less than 4 MiB of
+measured raw TB source. At the 60,000-entry cap, shrinking the per-vCPU removal
+queue from 50,000 entries to one leaves the reference-bit cache with about
+0.153 MiB of net additional C/TLS storage at four vCPUs. More than 111 MiB of
+the measured 132 MiB non-Wasm headroom remains for pending compiled-code and
+wrapper overhead, but the much larger active cache makes browser process memory
+a mandatory acceptance gate rather than a proven property.
 
 Promotion requires a fresh exact VirGL-compatible checkpoint and a browser run
 showing all of the following: active/retained caps hold; no table-root
-assertion; after the first 256-pending saturation, finalizer and replacement
+assertion; after the first 4,096-pending saturation, finalizer and replacement
 counters resume increasing while pending drops; fallback-TCI slope falls;
 post-cap nested-Wasm coverage does not collapse; process memory stays inside
 the existing headroom; and unique-frame/input latency materially improves. A

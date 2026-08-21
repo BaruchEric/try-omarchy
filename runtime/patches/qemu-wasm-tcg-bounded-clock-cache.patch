@@ -50,8 +50,8 @@
  
 -#define MAX_INSTANCE_ALIVE 15000
 -#define INSTANCE_RUNNING_LEN MAX_INSTANCE_ALIVE
-+#define MAX_INSTANCE_ACTIVE 15000
-+#define MAX_INSTANCE_REPLACEMENT_CREDIT 256
++#define MAX_INSTANCE_ACTIVE 60000
++#define MAX_INSTANCE_REPLACEMENT_CREDIT 4096
 +#define MAX_INSTANCE_RETAINED \
 +    (MAX_INSTANCE_ACTIVE + MAX_INSTANCE_REPLACEMENT_CREDIT)
 +#define INSTANCE_RUNNING_LEN MAX_INSTANCE_ACTIVE
@@ -59,14 +59,14 @@
 +#define CLOCK_GC_PRESSURE_BYTES (4 * 1024 * 1024)
 +#define CLOCK_GC_PRESSURE_RETRY_MS 1000
 +#define OMARCHY_WASM_TCG_CLOCK_POLICY_MARKER \
-+    "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 " \
-+    "retained-cap=15256 gc-pressure-bytes=4194304 " \
++    "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 " \
++    "retained-cap=64096 gc-pressure-bytes=4194304 " \
 +    "gc-pressure-interval=64 gc-pressure-retry-ms=1000 " \
 +    "gc-pressure-hold=next-task"
-+_Static_assert(MAX_INSTANCE_ACTIVE == 15000, "bounded CLOCK active cap drifted");
-+_Static_assert(MAX_INSTANCE_REPLACEMENT_CREDIT == 256,
++_Static_assert(MAX_INSTANCE_ACTIVE == 60000, "bounded CLOCK active cap drifted");
++_Static_assert(MAX_INSTANCE_REPLACEMENT_CREDIT == 4096,
 +               "bounded CLOCK replacement credit drifted");
-+_Static_assert(MAX_INSTANCE_RETAINED == 15256, "bounded CLOCK retained cap drifted");
++_Static_assert(MAX_INSTANCE_RETAINED == 64096, "bounded CLOCK retained cap drifted");
 +_Static_assert(CLOCK_GC_PRESSURE_BYTES == 4194304, "bounded CLOCK pressure size drifted");
 +_Static_assert(CLOCK_GC_PRESSURE_INTERVAL == 64, "bounded CLOCK pressure interval drifted");
 +_Static_assert(CLOCK_GC_PRESSURE_RETRY_MS == 1000, "bounded CLOCK pressure retry drifted");

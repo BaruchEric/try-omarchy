@@ -33,9 +33,9 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
     metricsSchemaVersion: 4,
     cachePolicy: Object.freeze({
       kind: "bounded-clock-v2",
-      activeCap: 15000,
-      replacementCredit: 256,
-      retainedCap: 15256,
+      activeCap: 60000,
+      replacementCredit: 4096,
+      retainedCap: 64096,
       gcPressureBytes: 4 * 1024 * 1024,
       gcPressureInterval: 64,
       gcPressureRetryMilliseconds: 1000,
@@ -47,8 +47,8 @@ const TCG_EXPERIMENT_MARKER_PREFIX =
   "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-experiment threshold=";
 const TCG_METRICS_MARKER = "OMARCHY_RUNTIME_DIAGNOSTIC wasm32-tcg-metrics ";
 const TCG_BOUNDED_CLOCK_MARKER =
-  "cache=bounded-clock-v2 active-cap=15000 replacement-credit=256 " +
-  "retained-cap=15256 gc-pressure-bytes=4194304 gc-pressure-interval=64 " +
+  "cache=bounded-clock-v2 active-cap=60000 replacement-credit=4096 " +
+  "retained-cap=64096 gc-pressure-bytes=4194304 gc-pressure-interval=64 " +
   "gc-pressure-retry-ms=1000 gc-pressure-hold=next-task";
 const VIRGL_GRAPHICS_EXPERIMENT = "virgl-webgl2";
 const WEBGL2_PRESENT_EXPERIMENT = "webgl2-present";
