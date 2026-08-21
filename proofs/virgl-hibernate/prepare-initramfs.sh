@@ -48,6 +48,7 @@ for required in \
   etc/modprobe.d/90-omarchy-hibernate-virtio-gpu.conf \
   hooks/resume \
   hooks/omarchy_hibernate_stage \
+  usr/local/libexec/omarchy-hibernate-input-observer \
   usr/local/libexec/omarchy-egl-renderer-probe; do
   tail -c "+$((source_bytes + 1))" "$output_image" \
     | zstd -dc 2>/dev/null \
@@ -55,7 +56,11 @@ for required in \
     | grep -Fxq "$required" \
     || fail "derived initramfs is missing $required"
 done
-for required in config hooks/resume hooks/omarchy_hibernate_stage; do
+for required in \
+  config \
+  hooks/resume \
+  hooks/omarchy_hibernate_stage \
+  usr/local/libexec/omarchy-hibernate-input-observer; do
   tail -c "+$((source_bytes + 1))" "$output_image" \
     | zstd -dc 2>/dev/null \
     | cpio -i --to-stdout "$required" 2>/dev/null \

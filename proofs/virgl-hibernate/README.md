@@ -87,9 +87,14 @@ The input gate requires the resumed VM to be running, both Virtio input devices
 to be started and `DRIVER_OK`, exactly one keyboard queue to consume the
 modifier-reset probe, and the same queue to consume exact Super+Return press and
 release reports. QMP acknowledgement without matching avail/used ring progress
-does not pass. The authenticated guest report also records read-only
-`hyprctl` device, bind, config-error, workspace, and client state so a session
-failure remains distinguishable from an emulator delivery failure.
+does not pass. A proof-only root observer opens the identified `QEMU Virtio
+Keyboard` event node read-only and without `EVIOCGRAB`; PASS also requires its
+udev keyboard classification and the exact Linux `KEY_LEFTMETA`/`KEY_ENTER`
+press-release sequence. The authenticated guest report records read-only
+`hyprctl` device, bind, config-error, workspace, window, submap, layer, and
+client state so a session failure remains distinguishable from an emulator or
+evdev delivery failure. The observer is diagnostic scaffolding for this
+non-promotable proof and must be removed before a release artifact is promoted.
 
 ## Static checks (safe and fast)
 

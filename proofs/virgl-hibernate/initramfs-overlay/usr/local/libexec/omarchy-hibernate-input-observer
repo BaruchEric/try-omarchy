@@ -1,0 +1,220 @@
+#!/usr/bin/python3
+"""Observe the proof VM's real Virtio keyboard without grabbing the device."""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import pathlib
+import select
+import stat
+import struct
+import subprocess
+import time
+
+
+DEVICE_NAME = "QEMU Virtio Keyboard"
+DEVICE_PREFIX = "OMARCHY_INPUT_DEVICE_REPORT "
+EVENT_PREFIX = "OMARCHY_INPUT_EVENT_REPORT "
+FAILURE_PREFIX = "OMARCHY_INPUT_OBSERVER_FAILURE "
+DIAGNOSTIC_PATHS = (
+    pathlib.Path("/dev/virtio-ports/omarchy.web.diagnostics"),
+    pathlib.Path("/dev/ttyS0"),
+)
+EVENT_STRUCT = struct.Struct("@llHHi")
+EV_SYN = 0
+EV_KEY = 1
+KEY_ENTER = 28
+KEY_LEFTMETA = 125
+MAX_RECORDS = 32
+DEVICE_TIMEOUT_SECONDS = 120
+EVENT_TIMEOUT_SECONDS = 1800
+PROPERTY_KEYS = frozenset(
+    {
+        "CURRENT_TAGS",
+        "DEVNAME",
+        "ID_INPUT",
+        "ID_INPUT_KEY",
+        "ID_INPUT_KEYBOARD",
+        "ID_SEAT",
+        "TAGS",
+        "WL_SEAT",
+    }
+)
+EXPECTED_SEQUENCE = (
+    (KEY_LEFTMETA, 1),
+    (KEY_ENTER, 1),
+    (KEY_ENTER, 0),
+    (KEY_LEFTMETA, 0),
+)
+
+
+def emit(prefix: str, payload: dict[str, object]) -> None:
+    encoded = (
+        "\n"
+        + prefix
+        + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode()
+    if len(encoded) > 4096:
+        raise RuntimeError("input observer marker exceeds one bounded write")
+    for candidate in DIAGNOSTIC_PATHS:
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                candidate,
+                os.O_WRONLY | os.O_NONBLOCK | os.O_CLOEXEC,
+            )
+            offset = 0
+            deadline = time.monotonic() + 10
+            while offset < len(encoded):
+                try:
+                    written = os.write(descriptor, encoded[offset:])
+                except BlockingIOError:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    select.select([], [descriptor], [], remaining)
+                    continue
+                if written <= 0:
+                    break
+                offset += written
+            if offset == len(encoded):
+                return
+        except OSError:
+            continue
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    raise RuntimeError("no diagnostics device accepted the input observer marker")
+
+
+def find_keyboard() -> tuple[pathlib.Path, pathlib.Path]:
+    deadline = time.monotonic() + DEVICE_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        for raw_event in sorted(glob.glob("/sys/class/input/event*")):
+            event = pathlib.Path(raw_event)
+            try:
+                name = (event / "device/name").read_text().strip()
+            except OSError:
+                continue
+            device = pathlib.Path("/dev/input") / event.name
+            if name == DEVICE_NAME and device.exists():
+                return event, device
+        time.sleep(0.1)
+    raise RuntimeError("QEMU Virtio Keyboard event device did not appear")
+
+
+def udev_properties(device: pathlib.Path) -> dict[str, str]:
+    result = subprocess.run(
+        ["/usr/bin/udevadm", "info", "--query=property", f"--name={device}"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"udevadm info failed with {result.returncode}")
+    properties: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in PROPERTY_KEYS:
+            properties[key] = value
+    return dict(sorted(properties.items()))
+
+
+def device_report(sysfs_event: pathlib.Path, device: pathlib.Path) -> dict[str, object]:
+    metadata = device.stat()
+    return {
+        "schemaVersion": 1,
+        "deviceName": DEVICE_NAME,
+        "eventDevice": str(device),
+        "sysfsEvent": str(sysfs_event),
+        "mode": stat.filemode(metadata.st_mode),
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "udevProperties": udev_properties(device),
+        "nonExclusiveRead": True,
+    }
+
+
+def observe_events(descriptor: int, device: pathlib.Path) -> dict[str, object]:
+    deadline = time.monotonic() + EVENT_TIMEOUT_SECONDS
+    buffer = b""
+    records: list[dict[str, int]] = []
+    matched = 0
+    while time.monotonic() < deadline:
+        readable, _, _ = select.select(
+            [descriptor],
+            [],
+            [],
+            min(1.0, deadline - time.monotonic()),
+        )
+        if not readable:
+            continue
+        chunk = os.read(descriptor, 4096)
+        if not chunk:
+            raise RuntimeError("Virtio keyboard event device reached EOF")
+        buffer += chunk
+        while len(buffer) >= EVENT_STRUCT.size:
+            seconds, microseconds, event_type, code, value = EVENT_STRUCT.unpack_from(buffer)
+            buffer = buffer[EVENT_STRUCT.size :]
+            if event_type == EV_SYN or (event_type == EV_KEY and code in {KEY_ENTER, KEY_LEFTMETA}):
+                if len(records) < MAX_RECORDS:
+                    records.append(
+                        {
+                            "seconds": seconds,
+                            "microseconds": microseconds,
+                            "type": event_type,
+                            "code": code,
+                            "value": value,
+                        }
+                    )
+            if event_type != EV_KEY:
+                continue
+            candidate = (code, value)
+            if candidate == EXPECTED_SEQUENCE[matched]:
+                matched += 1
+            elif candidate == EXPECTED_SEQUENCE[0]:
+                matched = 1
+            if matched == len(EXPECTED_SEQUENCE):
+                return {
+                    "schemaVersion": 1,
+                    "status": "observed",
+                    "eventDevice": str(device),
+                    "expectedSequence": [
+                        {"code": expected_code, "value": expected_value}
+                        for expected_code, expected_value in EXPECTED_SEQUENCE
+                    ],
+                    "records": records,
+                    "nonExclusiveRead": True,
+                }
+    raise RuntimeError("timed out observing the exact Left Meta plus Enter sequence")
+
+
+def main() -> None:
+    if EVENT_STRUCT.size != 24:
+        raise RuntimeError(f"unexpected x86_64 input_event size: {EVENT_STRUCT.size}")
+    sysfs_event, device = find_keyboard()
+    descriptor = os.open(device, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        emit(DEVICE_PREFIX, device_report(sysfs_event, device))
+        emit(EVENT_PREFIX, observe_events(descriptor, device))
+    finally:
+        os.close(descriptor)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as error:
+        emit(
+            FAILURE_PREFIX,
+            {
+                "schemaVersion": 1,
+                "errorType": type(error).__name__,
+                "message": str(error)[:512],
+            },
+        )
+        raise

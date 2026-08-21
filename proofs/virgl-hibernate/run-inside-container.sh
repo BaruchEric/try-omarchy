@@ -10,6 +10,7 @@ frame_health=/repo/proofs/preboot-resume/frame-health.mjs
 frame_change=/repo/proofs/preboot-resume/frame-change.mjs
 report_gate=/repo/proofs/preboot-resume/report-gate.mjs
 marker_parser=/repo/scripts/verification/diagnostic-markers.mjs
+input_observer_validator=/proof/validate-input-observer.mjs
 xwd_converter=/proof/xwd-to-ppm.mjs
 browser_qemu_wasm=${BROWSER_QEMU_WASM_PATH:?BROWSER_QEMU_WASM_PATH is required}
 browser_qemu_wasm_expected_sha256=${BROWSER_QEMU_WASM_EXPECTED_SHA256:?BROWSER_QEMU_WASM_EXPECTED_SHA256 is required}
@@ -174,7 +175,9 @@ cleanup() {
   rm -f \
     "$source_socket" \
     "$target_socket" \
-    "$evidence_dir/.omarchy-hibernate-page0.bin"
+    "$evidence_dir/.omarchy-hibernate-page0.bin" \
+    "$evidence_dir/target-input-device-report.json.tmp" \
+    "$evidence_dir/target-input-event-report.json.tmp"
   if [[ $phase != complete ]]; then
     printf '%s\n' "$phase" >"$evidence_dir/final-phase.txt"
     printf '%s\n' "$status" >"$evidence_dir/script-exit-status.txt"
@@ -222,6 +225,30 @@ wait_for_resume_marker() {
     sleep 1
   done
   fail "fresh target did not emit the resumed marker within ${target_timeout} seconds"
+}
+
+wait_for_diagnostic_marker() {
+  local pid=$1
+  local log=$2
+  local prefix=$3
+  local output=$4
+  local timeout=$5
+  local label=$6
+  local candidate="$output.tmp"
+  local deadline=$((SECONDS + timeout))
+  while (( SECONDS < deadline )); do
+    if grep -Fq 'OMARCHY_INPUT_OBSERVER_FAILURE ' "$log"; then
+      fail "input observer failed before $label"
+    fi
+    if node "$marker_parser" "$log" "$prefix" >"$candidate" 2>/dev/null; then
+      mv "$candidate" "$output"
+      return 0
+    fi
+    kill -0 "$pid" 2>/dev/null || fail "fresh target exited before $label"
+    sleep 0.25
+  done
+  rm -f "$candidate"
+  fail "fresh target did not emit $label within ${timeout} seconds"
 }
 
 assert_no_uwsm_failure() {
@@ -555,6 +582,13 @@ done
 node "$report_gate" "$evidence_dir/target-diagnostics.log" /guest/guest-manifest.json \
   >"$evidence_dir/target-report-validation.json" \
   || fail "resumed target guest report failed authenticity/monitor verification"
+wait_for_diagnostic_marker \
+  "$target_pid" \
+  "$evidence_dir/target-diagnostics.log" \
+  "OMARCHY_INPUT_DEVICE_REPORT " \
+  "$evidence_dir/target-input-device-report.json" \
+  60 \
+  "the non-exclusive Virtio keyboard device report"
 
 set_phase resumed-healthy-frames
 capture_two_healthy_frames "$evidence_dir/resumed-desktop"
@@ -562,6 +596,18 @@ capture_two_healthy_frames "$evidence_dir/resumed-desktop"
 set_phase resumed-foot-input
 node "$qmp_client" "$target_socket" "$evidence_dir/target-qmp.jsonl" \
   virtio-super-return >"$evidence_dir/target-virtio-super-return.json"
+wait_for_diagnostic_marker \
+  "$target_pid" \
+  "$evidence_dir/target-diagnostics.log" \
+  "OMARCHY_INPUT_EVENT_REPORT " \
+  "$evidence_dir/target-input-event-report.json" \
+  30 \
+  "the exact evdev Left Meta plus Enter report"
+node "$input_observer_validator" \
+  "$evidence_dir/target-input-device-report.json" \
+  "$evidence_dir/target-input-event-report.json" \
+  >"$evidence_dir/target-input-observer-validation.json" \
+  || fail "non-exclusive evdev input evidence failed validation"
 wait_for_foot_frame \
   "$evidence_dir/resumed-desktop-2.ppm" \
   "$evidence_dir/resumed-foot.ppm"

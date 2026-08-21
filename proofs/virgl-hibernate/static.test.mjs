@@ -176,8 +176,14 @@ test("all scripts are syntactically valid without running a VM", async () => {
     execFileSync("sh", ["-n", path.join(proofDirectory, name)]);
   }
   execFileSync(process.execPath, ["--check", path.join(proofDirectory, "validate.mjs")]);
+  execFileSync(process.execPath, ["--check", path.join(proofDirectory, "validate-input-observer.mjs")]);
   execFileSync(process.execPath, ["--check", path.join(proofDirectory, "validate-browser-candidate.mjs")]);
   execFileSync(process.execPath, ["--check", path.join(proofDirectory, "xwd-to-ppm.mjs")]);
+  execFileSync("python3", [
+    "-c",
+    "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())",
+    path.join(proofDirectory, "initramfs-overlay/usr/local/libexec/omarchy-hibernate-input-observer"),
+  ]);
 });
 
 test("browser candidate gate accepts only hash-bound VirGL plus bounded CLOCK", async (context) => {
@@ -265,6 +271,7 @@ test("derived initramfs defers virtio GPU and input and carries exact resume/lat
   for (const token of [
     "cmp -n", "zstd -dc", "cpio -it", "hooks/resume",
     "hooks/omarchy_hibernate_stage", "omarchy-egl-renderer-probe",
+    "omarchy-hibernate-input-observer",
     "derived initramfs exceeds 64 MiB",
   ]) assert.ok(prepare.includes(token), `initramfs preparation is missing ${token}`);
   assert.match(prepare, /cpio -i --to-stdout "\$required"/);
@@ -274,7 +281,9 @@ test("derived initramfs defers virtio GPU and input and carries exact resume/lat
   assert.match(resume, /OMARCHY_HIBERNATION_COLD_BOOT .*resume-device-unresolved/);
   assert.doesNotMatch(resume, /< <\(/, "BusyBox ash hook must not use process substitution");
   assert.doesNotMatch(late, /\binstall -m\b/, "late hook must use BusyBox-portable cp/chmod");
-  for (const command of ["devices", "binds", "configerrors", "activeworkspace", "clients"]) {
+  for (const command of [
+    "devices", "binds", "configerrors", "activeworkspace", "activewindow", "submap", "layers", "clients",
+  ]) {
     assert.ok(late.includes(`["hyprctl", "${command}"`),
       `derived guest report is missing read-only Hyprland ${command} diagnostics`);
   }
@@ -299,6 +308,8 @@ test("producer hibernates directly, remains bounded, and fails closed", async ()
     "OMARCHY_HIBERNATION_FAILURE",
     "OMARCHY_HIBERNATION_COLD_BOOT",
     "ConditionPathExists=/var/lib/omarchy-hibernate/armed",
+    "omarchy-hibernate-input-observer.service",
+    "systemctl is-active --quiet omarchy-hibernate-input-observer.service",
   ]) assert.ok(late.includes(token), `producer is missing ${token}`);
   assert.ok(
     late.indexOf("mkswap --force --uuid") < late.indexOf('>/sys/power/resume') &&
@@ -407,6 +418,8 @@ test("native PASS requires marker, live report, two frames, and real Foot input"
   assert.deepEqual([...phases].sort((a, b) => a - b), phases);
   for (const token of [
     "report_gate", "capture_two_healthy_frames", "virtio-super-return",
+    "OMARCHY_INPUT_DEVICE_REPORT ", "OMARCHY_INPUT_EVENT_REPORT ",
+    "target-input-observer-validation.json", "input_observer_validator",
     "wait_for_foot_frame", "target-running-status.json", "freshPostResumeInteraction: true",
   ]) assert.ok(runner.includes(token), `acceptance gate is missing ${token}`);
   for (const token of [
@@ -417,6 +430,7 @@ test("native PASS requires marker, live report, two frames, and real Foot input"
   for (const token of [
     "target-virtio-super-return.json", 'input.action, "virtio-super-return"',
     "assertLiveVirtioInput", "assertQueueProgress", "keyboard.queueAfterProbe",
+    "validateInputObserverEvidence", "target-input-device-report.json", "target-input-event-report.json",
     'explicitKeyEvent("meta_l", true)', 'explicitKeyEvent("ret", false)',
   ]) assert.ok(validator.includes(token), `input evidence validator is missing ${token}`);
   assert.match(runner, /health\.clean|frame_health/);

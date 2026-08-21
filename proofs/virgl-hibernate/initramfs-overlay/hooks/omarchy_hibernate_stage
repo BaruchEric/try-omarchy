@@ -33,6 +33,9 @@ EOF
     cp /usr/local/libexec/omarchy-egl-renderer-probe \
         "$root/usr/local/libexec/omarchy-egl-renderer-probe"
     chmod 0755 "$root/usr/local/libexec/omarchy-egl-renderer-probe"
+    cp /usr/local/libexec/omarchy-hibernate-input-observer \
+        "$root/usr/local/libexec/omarchy-hibernate-input-observer"
+    chmod 0755 "$root/usr/local/libexec/omarchy-hibernate-input-observer"
 
     # Keep the authenticated hibernation report self-diagnosing: these are
     # read-only views of the live compositor's input devices, bindings, and
@@ -43,6 +46,9 @@ EOF
     ["hyprctl", "binds", "-j"],\
     ["hyprctl", "configerrors"],\
     ["hyprctl", "activeworkspace", "-j"],\
+    ["hyprctl", "activewindow", "-j"],\
+    ["hyprctl", "submap"],\
+    ["hyprctl", "layers", "-j"],\
     ["hyprctl", "clients", "-j"],' \
         "$root/usr/local/bin/omarchy-web-guest-probe"
 
@@ -139,6 +145,16 @@ done
 (( input_device_count == 2 )) || fail_closed fresh-input-devices-missing
 udevadm trigger --subsystem-match=input --action=change
 udevadm settle --timeout=60
+systemctl start --no-block omarchy-hibernate-input-observer.service \
+  || fail_closed input-observer-start-failed
+for _attempt in $(seq 1 100); do
+  systemctl is-active --quiet omarchy-hibernate-input-observer.service && break
+  systemctl is-failed --quiet omarchy-hibernate-input-observer.service \
+    && fail_closed input-observer-failed
+  sleep 0.1
+done
+systemctl is-active --quiet omarchy-hibernate-input-observer.service \
+  || fail_closed input-observer-not-active
 modprobe virtio_gpu
 for _attempt in $(seq 1 120); do
   [[ -e /dev/dri/renderD128 ]] && break
@@ -173,6 +189,16 @@ sync
 systemctl --no-block poweroff --force --force || true
 EOF
     chmod 0755 "$root/usr/local/libexec/omarchy-hibernate-fail-closed"
+
+    cat >"$root/etc/systemd/system/omarchy-hibernate-input-observer.service" <<'EOF'
+[Unit]
+Description=Observe proof-only post-resume Virtio keyboard events
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/omarchy-hibernate-input-observer
+Restart=no
+EOF
 
     cat >"$root/etc/systemd/system/omarchy-hibernate-producer.service" <<'EOF'
 [Unit]

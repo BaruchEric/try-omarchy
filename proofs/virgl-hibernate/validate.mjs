@@ -6,6 +6,7 @@ import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { parseUniqueDiagnosticMarker } from "../../scripts/verification/diagnostic-markers.mjs";
+import { validateInputObserverEvidence } from "./validate-input-observer.mjs";
 
 const [guestDirectory, evidenceDirectory, browserQemuWasmPath] = process.argv.slice(2);
 if (!guestDirectory || !evidenceDirectory || !browserQemuWasmPath) {
@@ -232,6 +233,8 @@ const enter = oneMarker(sourceLog, "OMARCHY_HIBERNATION_ENTER ");
 const hibernation = oneMarker(targetLog, "OMARCHY_HIBERNATION_REPORT ");
 const renderer = oneMarker(targetLog, "OMARCHY_RENDERER_REPORT ");
 const guestReport = oneMarker(targetLog, "OMARCHY_GUEST_REPORT ");
+const inputDeviceMarker = oneMarker(targetLog, "OMARCHY_INPUT_DEVICE_REPORT ");
+const inputEventMarker = oneMarker(targetLog, "OMARCHY_INPUT_EVENT_REPORT ");
 exactKeys(enter, ["schemaVersion", "nonce", "sourceBootId", "swapUuid", "gpuBoundAtHibernate"], "entry marker");
 exactKeys(hibernation, ["schemaVersion", "status", "nonce", "sourceBootId", "swapUuid", "gpuDriver", "renderNode", "renderer"], "resume marker");
 exactKeys(renderer, ["schemaVersion", "renderNode", "renderer", "vendor", "version"], "renderer report");
@@ -251,6 +254,7 @@ assert.equal(renderer.renderNode, "/dev/dri/renderD128");
 assert.doesNotMatch(sourceLog, /^OMARCHY_HIBERNATION_FAILURE /m);
 assert.doesNotMatch(targetLog, /^OMARCHY_HIBERNATION_FAILURE /m);
 assert.doesNotMatch(targetLog, /^OMARCHY_HIBERNATION_COLD_BOOT /m);
+assert.doesNotMatch(targetLog, /^OMARCHY_INPUT_OBSERVER_FAILURE /m);
 
 const requiredKernelEvidence = [
   "PM: Image signature found, resuming",
@@ -406,6 +410,24 @@ for (const field of ["vring-desc", "vring-avail", "vring-used"]) {
       `Virtio keyboard ${field} changed at ${label}`);
   }
 }
+const [inputDeviceReport, inputEventReport, inputObserverValidation] = await Promise.all([
+  json("target-input-device-report.json"),
+  json("target-input-event-report.json"),
+  json("target-input-observer-validation.json"),
+]);
+assert.deepEqual(inputDeviceReport, inputDeviceMarker,
+  "saved input device report differs from the guest-originated marker");
+assert.deepEqual(inputEventReport, inputEventMarker,
+  "saved input event report differs from the guest-originated marker");
+invariant(
+  targetLog.indexOf("OMARCHY_GUEST_REPORT ") < targetLog.indexOf("OMARCHY_INPUT_EVENT_REPORT "),
+  "evdev input evidence preceded the authentic resumed guest report",
+);
+assert.deepEqual(
+  inputObserverValidation,
+  validateInputObserverEvidence(inputDeviceReport, inputEventReport),
+  "saved evdev input validation differs from independently recomputed evidence",
+);
 
 // The runner records an executable shell reconstruction with Bash `printf %q`.
 // Bash escapes commas in QEMU's comma-delimited option arguments, so normalize
