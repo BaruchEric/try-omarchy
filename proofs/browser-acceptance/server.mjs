@@ -181,6 +181,7 @@ function staticFiles(repositoryRoot) {
     ["/vm/host.mjs", "public/vm/host.mjs"],
     ["/vm/host-utils.mjs", "public/vm/host-utils.mjs"],
     ["/vm/desktop-proof.mjs", "public/vm/desktop-proof.mjs"],
+    ["/public/vm/host-utils.mjs", "public/vm/host-utils.mjs"],
     ["/public/vm/desktop-proof.mjs", "public/vm/desktop-proof.mjs"],
   ]);
   const tooling = [

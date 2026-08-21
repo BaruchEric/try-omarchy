@@ -768,6 +768,9 @@ test("artifact manifest inspection and proxy preserve exact bounded rootfs reque
     (await fetch(`${proxyOrigin}/public/vm/desktop-proof.mjs`)).status,
     200,
   );
+  const publicHostUtils = await fetch(`${proxyOrigin}/public/vm/host-utils.mjs`);
+  assert.equal(publicHostUtils.status, 200);
+  assert.match(await publicHostUtils.text(), /export const EXPECTED_UPSTREAM/);
   assert.equal(await fetch(`${base}artifact-manifest.json`).then((response) => response.text()), manifestBody.toString());
   assert.equal(await fetch(`${base}artifact-manifest.json`).then((response) => response.text()), manifestBody.toString());
 
