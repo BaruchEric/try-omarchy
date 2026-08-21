@@ -18,10 +18,10 @@ export const RELEASE_BASE_URL = `/omarchy/versions/${ACTIVE_RELEASE_ID}/`;
 export const PRODUCTION_WORKER_URL = `${RELEASE_BASE_URL}production-worker.mjs`;
 export const ACTIVE_UPSTREAM = Object.freeze({
   repository: "https://github.com/basecamp/omarchy",
-  commit: "f0020448ca87329199de7cb12f2015ebc4a3e5e7",
+  commit: "7488eaded43de68ff9d2d7e4bf50cd48e112eb0f",
   version: "4.0.0.alpha",
   treeSha256:
-    "7c053841c0b43df796cb002441f3e0cccad4a32288769f499c86b509b4f86980",
+    "2b8670686876008cfd1e675a107fddcc01edf3919b2566348308e0bc2857f692",
 });
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/i;

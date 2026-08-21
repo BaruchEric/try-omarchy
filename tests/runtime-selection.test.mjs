@@ -9,6 +9,14 @@ import {
   normalizeNativeCapability,
   probeNativeHelper,
 } from "../app/components/runtime-selection.mjs";
+import { ACTIVE_UPSTREAM } from "../app/components/vm-ui-state.mjs";
+import { EXPECTED_UPSTREAM } from "../public/vm/host-utils.mjs";
+
+test("native helper, browser VM, and guest report use one Quattro identity", () => {
+  const { channel: _channel, ...nativeUpstream } = ACTIVE_NATIVE_UPSTREAM;
+  assert.deepEqual(ACTIVE_UPSTREAM, nativeUpstream);
+  assert.deepEqual(EXPECTED_UPSTREAM, nativeUpstream);
+});
 
 const challenge = "a".repeat(64);
 const bundleIdentity = "b".repeat(64);
