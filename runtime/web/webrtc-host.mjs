@@ -153,6 +153,7 @@ async function launchNative() {
     }
     nativeSessionToken = sessionToken;
     nativeBundleIdentity = bundleIdentity;
+    stopButton.disabled = false;
     hostMetrics.children[2].querySelector("i").textContent = "native helper";
     status("Native Omarchy launched. Now share the Omarchy window.");
   } catch (error) {
@@ -431,6 +432,8 @@ function teardown({ background = false } = {}) {
     testPatternStop?.();
     testPatternStop = null;
     stopButton.disabled = true;
+    hostMetrics.children[0].querySelector("i").textContent = "closed";
+    setConnectionBadge(connectionState, "idle", "STOPPED");
     await stopNative({ background });
   })();
   return teardownPromise;
