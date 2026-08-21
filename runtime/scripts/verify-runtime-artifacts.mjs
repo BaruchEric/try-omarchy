@@ -592,7 +592,7 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         `// OMARCHY_EXPERIMENT browser-vcpus count=4 promotion-eligible=false ` +
         `qemu-wasm-sha256=${wasmSha256}\n`,
       ) && productionWorker.includes("cores: 4,") &&
-        productionWorker.split("4,sockets=1,cores=4,threads=1").length - 1 === 2 &&
+        productionWorker.split("4,sockets=1,cores=4,threads=1").length - 1 === 3 &&
         !productionWorker.includes("cores: 2,") &&
         !productionWorker.includes("2,sockets=1,cores=2,threads=1");
     }

@@ -914,6 +914,10 @@ test("VirGL/WebGL2, threshold-750, and four vCPUs combine only in isolation", as
     verifier,
     /only an instrumented VirGL-compatible TCG profile may be combined/,
   );
+  assert.match(
+    verifier,
+    /split\("4,sockets=1,cores=4,threads=1"\)\.length - 1 === 3/,
+  );
 });
 
 test("threshold-750 applies on top of measured baseline and retains bounded metrics", async (context) => {
