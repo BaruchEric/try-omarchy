@@ -57,6 +57,8 @@ a { color: var(--accent); }
 .metrics b { color: var(--muted); font-size: .64rem; letter-spacing: .08em; text-transform: uppercase; }
 .metrics i { overflow: hidden; color: var(--text); font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-stage { overflow: hidden; }
+.shortcut-bar { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
+.shortcut-bar .secondary { padding: 9px 12px; font-size: .72rem; }
 .viewer-help { margin: 0; padding: 14px 16px; border-top: 1px solid var(--line); color: var(--muted); }
 kbd { border: 1px solid #40484c; border-bottom-width: 2px; border-radius: 3px; padding: 2px 5px; color: var(--text); }
 .room-card { margin-top: 28px; padding: 22px; display: grid; gap: 16px; }

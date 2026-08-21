@@ -65,7 +65,13 @@ the viewer's ordered data-channel input to `/v1/input`.
 Every input request must contain the unpredictable token from the accepted
 launch. The loopback helper additionally binds one exact browser origin, accepts
 only bounded keyboard/pointer/wheel schemas, and posts events only to that VM
-child process. Restarting or closing the VM invalidates the token.
+child process. It refuses input unless macOS Accessibility trust is active.
+Restarting or closing the VM invalidates the token.
+
+The capture host sends a token-bound `/v1/stop` when sharing ends or the page is
+closed. The helper also terminates its VM child on `SIGINT`/`SIGTERM` and applies
+a 30-minute hard session lease, so an abandoned POC cannot consume host compute
+indefinitely.
 
 macOS may require:
 

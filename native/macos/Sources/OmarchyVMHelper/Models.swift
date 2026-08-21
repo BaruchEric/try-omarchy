@@ -138,3 +138,8 @@ struct NativeInputReceipt: Codable, Equatable {
     let accepted: Bool
     let sequence: Int
 }
+
+struct NativeStopReceipt: Codable, Equatable {
+    let schemaVersion: Int
+    let stopped: Bool
+}

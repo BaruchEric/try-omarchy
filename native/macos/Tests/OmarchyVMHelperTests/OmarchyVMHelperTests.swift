@@ -554,6 +554,23 @@ struct LocalAPITests {
         )
         #expect(inputResponse.status == 204)
         #expect(inputResponse.headers["Access-Control-Allow-Private-Network"] == "true")
+
+        let stopResponse = LocalAPI.handle(
+            LocalHTTPRequest(
+                method: "OPTIONS",
+                target: "/v1/stop",
+                headers: [
+                    "origin": origin,
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "content-type",
+                ],
+                body: Data()
+            ),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false }
+        )
+        #expect(stopResponse.status == 204)
     }
 
     @Test("input requires the launch token and an exact bounded event")
@@ -616,6 +633,43 @@ struct LocalAPITests {
         #expect(hostile.status == 400)
     }
 
+    @Test("stop requires the bound launch token")
+    func stopContract() throws {
+        let fixture = try Fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.write()
+        let bundle = try GuestBundle.load(directory: fixture.root)
+        let body = try JSONSerialization.data(withJSONObject: [
+            "schemaVersion": 1,
+            "sessionToken": challenge,
+        ], options: [.sortedKeys])
+        var stopped = false
+        let accepted = LocalAPI.handle(
+            request(method: "POST", target: "/v1/stop", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false },
+            stop: { token in
+                #expect(token == challenge)
+                stopped = true
+                return true
+            }
+        )
+        #expect(accepted.status == 202)
+        #expect(stopped)
+        #expect(try JSONDecoder().decode(NativeStopReceipt.self, from: accepted.body) ==
+            NativeStopReceipt(schemaVersion: 1, stopped: true))
+
+        let unavailable = LocalAPI.handle(
+            request(method: "POST", target: "/v1/stop", body: body),
+            allowedOrigin: origin,
+            bundle: bundle,
+            launch: { _ in false },
+            stop: { _ in false }
+        )
+        #expect(unavailable.status == 409)
+    }
+
     private func request(
         method: String,
         target: String,
@@ -661,7 +715,8 @@ struct NativeInputRelayTests {
                     event.getIntegerValueField(.keyboardEventKeycode)
                 ))
             },
-            windowBounds: { _ in CGRect(x: 100, y: 200, width: 1600, height: 900) }
+            windowBounds: { _ in CGRect(x: 100, y: 200, width: 1600, height: 900) },
+            accessibilityTrusted: { true }
         )
         #expect(relay.send(.key(sequence: 1, code: "KeyA", down: true), to: 42))
         #expect(relay.send(.pointer(sequence: 2, x: 0.5, y: 0.5, buttons: 1), to: 42))
@@ -674,5 +729,17 @@ struct NativeInputRelayTests {
         #expect(posted.contains { $0.1 == .leftMouseUp })
         #expect(posted.contains { $0.1 == .scrollWheel })
         #expect(posted.contains { $0.2 == CGPoint(x: 900, y: 650) })
+    }
+
+    @Test("relay rejects events when accessibility is unavailable")
+    func rejectsWithoutAccessibility() {
+        var posted = false
+        let relay = NativeInputRelay(
+            postEvent: { _, _ in posted = true },
+            windowBounds: { _ in CGRect(x: 0, y: 0, width: 1600, height: 900) },
+            accessibilityTrusted: { false }
+        )
+        #expect(!relay.send(.key(sequence: 1, code: "KeyA", down: true), to: 42))
+        #expect(!posted)
     }
 }

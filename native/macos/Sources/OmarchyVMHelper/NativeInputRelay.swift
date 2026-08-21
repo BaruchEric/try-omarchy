@@ -1,3 +1,4 @@
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -76,9 +77,11 @@ enum NativeRemoteInput: Equatable {
 final class NativeInputRelay: @unchecked Sendable {
     typealias PostEvent = (CGEvent, pid_t) -> Void
     typealias WindowBounds = (pid_t) -> CGRect?
+    typealias AccessibilityTrusted = () -> Bool
 
     private let postEvent: PostEvent
     private let windowBounds: WindowBounds
+    private let accessibilityTrusted: AccessibilityTrusted
     private var pressedKeys = Set<CGKeyCode>()
     private var buttons = 0
     private var lastPoint: CGPoint?
@@ -87,13 +90,21 @@ final class NativeInputRelay: @unchecked Sendable {
         postEvent: @escaping PostEvent = { event, processIdentifier in
             event.postToPid(processIdentifier)
         },
-        windowBounds: @escaping WindowBounds = NativeInputRelay.frontWindowBounds
+        windowBounds: @escaping WindowBounds = NativeInputRelay.frontWindowBounds,
+        accessibilityTrusted: @escaping AccessibilityTrusted = { AXIsProcessTrusted() }
     ) {
         self.postEvent = postEvent
         self.windowBounds = windowBounds
+        self.accessibilityTrusted = accessibilityTrusted
     }
 
     func send(_ input: NativeRemoteInput, to processIdentifier: pid_t) -> Bool {
+        if case .releaseAll = input {
+            let trusted = accessibilityTrusted()
+            releaseAll(to: processIdentifier)
+            return trusted
+        }
+        guard accessibilityTrusted() else { return false }
         switch input {
         case .key(_, let code, let down):
             guard let key = Self.virtualKey(for: code),
@@ -133,26 +144,38 @@ final class NativeInputRelay: @unchecked Sendable {
             postEvent(event, processIdentifier)
             return true
         case .releaseAll:
-            releaseAll(to: processIdentifier)
-            return true
+            return false
         }
     }
 
     func releaseAll(to processIdentifier: pid_t) {
-        for key in pressedKeys.sorted() {
-            if let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) {
-                postEvent(event, processIdentifier)
-            }
-        }
-        pressedKeys.removeAll()
-        if let point = lastPoint {
-            for bit in 0..<5 where (buttons & (1 << bit)) != 0 {
-                if let event = mouseButtonEvent(bit: bit, down: false, point: point) {
+        if accessibilityTrusted() {
+            for key in pressedKeys.sorted() {
+                if let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) {
                     postEvent(event, processIdentifier)
                 }
             }
+            if let point = lastPoint {
+                for bit in 0..<5 where (buttons & (1 << bit)) != 0 {
+                    if let event = mouseButtonEvent(bit: bit, down: false, point: point) {
+                        postEvent(event, processIdentifier)
+                    }
+                }
+            }
         }
+        reset()
+    }
+
+    func reset() {
+        pressedKeys.removeAll()
         buttons = 0
+        lastPoint = nil
+    }
+
+    @discardableResult
+    static func requestAccessibilityPermission() -> Bool {
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
     }
 
     private func postMove(to point: CGPoint, processIdentifier: pid_t) {

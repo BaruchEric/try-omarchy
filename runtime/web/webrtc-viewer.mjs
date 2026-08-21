@@ -26,12 +26,14 @@ const metricDecoded = document.getElementById("metric-decoded");
 const metricBitrate = document.getElementById("metric-bitrate");
 const metricLoss = document.getElementById("metric-loss");
 const metricInput = document.getElementById("metric-input");
+const streamSource = document.getElementById("stream-source");
 
 let peer = null;
 let inputChannel = null;
 let sequence = 0;
 let firstFrame = false;
 let frameObserverStarted = false;
+let lastFrameAt = 0;
 let frameTimes = [];
 let inputAcknowledgements = 0;
 let pendingPointer = null;
@@ -41,6 +43,11 @@ let previousStatsAt = 0;
 let previousDecoded = 0;
 const pressedKeys = new Set();
 const abortController = new AbortController();
+const SHORTCUTS = Object.freeze({
+  menu: ["MetaLeft", "Space"],
+  terminal: ["MetaLeft", "Enter"],
+  close: ["MetaLeft", "KeyW"],
+});
 
 function status(message, error = false) {
   statusElement.textContent = message;
@@ -63,7 +70,14 @@ function sendInput(event, { droppable = false } = {}) {
   return true;
 }
 
+function cancelPendingPointer() {
+  if (pointerFrame) cancelAnimationFrame(pointerFrame);
+  pointerFrame = 0;
+  pendingPointer = null;
+}
+
 function releaseAll() {
+  cancelPendingPointer();
   if (!pressedKeys.size && !canSendInput()) return;
   pressedKeys.clear();
   sendInput({ kind: "release-all" });
@@ -96,9 +110,7 @@ function queuePointer(event) {
 }
 
 function sendPointerNow(event) {
-  if (pointerFrame) cancelAnimationFrame(pointerFrame);
-  pointerFrame = 0;
-  pendingPointer = null;
+  cancelPendingPointer();
   sendInput({ kind: "pointer", ...videoPoint(event), buttons: event.buttons });
 }
 
@@ -114,6 +126,7 @@ function updateReady() {
 
 function countFrames(now) {
   firstFrame = true;
+  lastFrameAt = performance.now();
   frameTimes.push(now);
   const cutoff = now - 1000;
   frameTimes = frameTimes.filter((time) => time >= cutoff);
@@ -123,8 +136,6 @@ function countFrames(now) {
 }
 
 function observeFirstFrame() {
-  firstFrame = true;
-  updateReady();
   if (!frameObserverStarted && typeof video.requestVideoFrameCallback === "function") {
     frameObserverStarted = true;
     video.requestVideoFrameCallback(countFrames);
@@ -140,10 +151,20 @@ function bindInput(channel) {
   channel.addEventListener("open", updateReady);
   channel.addEventListener("message", (message) => {
     try {
-      const ack = JSON.parse(message.data);
-      if (ack?.type === "input-ack" && Number.isSafeInteger(ack.sequence)) {
-        inputAcknowledgements += 1;
-        metricInput.textContent = String(inputAcknowledgements);
+      const value = JSON.parse(message.data);
+      if (value?.type === "source" &&
+          ["test-pattern", "user-selected-window"].includes(value.kind) &&
+          typeof value.label === "string" && value.label.length <= 96 &&
+          Object.keys(value).length === 3) {
+        streamSource.textContent = value.label;
+      } else if (value?.type === "input-ack" && Number.isSafeInteger(value.sequence) &&
+          typeof value.delivered === "boolean" && Object.keys(value).length === 3) {
+        if (value.delivered) {
+          inputAcknowledgements += 1;
+          metricInput.textContent = String(inputAcknowledgements);
+        } else {
+          status(`Input #${value.sequence} reached the host but not the native VM.`, true);
+        }
       }
     } catch {
       // Ignore non-protocol data.
@@ -211,12 +232,22 @@ video.addEventListener("pointerup", (event) => {
   event.preventDefault();
 });
 video.addEventListener("pointercancel", releaseAll);
+video.addEventListener("lostpointercapture", releaseAll);
 video.addEventListener("wheel", (event) => {
   if (sendInput({ kind: "wheel", deltaX: event.deltaX, deltaY: event.deltaY })) {
     event.preventDefault();
   }
 }, { passive: false });
 video.addEventListener("blur", releaseAll);
+document.querySelectorAll("[data-shortcut]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const codes = SHORTCUTS[button.dataset.shortcut];
+    if (!codes || !canSendInput()) return;
+    for (const code of codes) sendInput({ kind: "key", code, down: true });
+    for (const code of [...codes].reverse()) sendInput({ kind: "key", code, down: false });
+    video.focus();
+  });
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) releaseAll();
 });
@@ -244,6 +275,13 @@ setInterval(async () => {
     metricLoss.textContent = String(report.packetsLost ?? 0);
     const now = report.timestamp ?? performance.now();
     const bytes = report.bytesReceived ?? 0;
+    if (decoded > previousDecoded) {
+      lastFrameAt = performance.now();
+      if (typeof video.requestVideoFrameCallback !== "function") {
+        firstFrame = true;
+        updateReady();
+      }
+    }
     if (previousStatsAt && now > previousStatsAt) {
       const bitsPerSecond = ((bytes - previousBytes) * 8 * 1000) / (now - previousStatsAt);
       metricBitrate.textContent = `${(bitsPerSecond / 1_000_000).toFixed(2)} Mbps`;
@@ -255,6 +293,10 @@ setInterval(async () => {
     previousBytes = bytes;
     previousStatsAt = now;
     previousDecoded = decoded;
+  }
+  if (lastFrameAt && performance.now() - lastFrameAt > 1200) {
+    frameTimes = [];
+    metricFps.textContent = "0";
   }
 }, 1000);
 

@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 
 final class NativeVMLauncher: @unchecked Sendable {
+    private static let maximumSessionSeconds: TimeInterval = 30 * 60
     private let lock = NSLock()
     private let executableURL: URL
     private let bundleDirectory: URL
@@ -26,6 +27,7 @@ final class NativeVMLauncher: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if child?.isRunning == true { return false }
+        inputRelay.reset()
 
         let process = Process()
         process.executableURL = executableURL
@@ -35,6 +37,7 @@ final class NativeVMLauncher: @unchecked Sendable {
             guard let self, let process else { return }
             self.lock.lock()
             if self.child === process {
+                self.inputRelay.reset()
                 self.child = nil
                 self.sessionToken = nil
             }
@@ -43,6 +46,12 @@ final class NativeVMLauncher: @unchecked Sendable {
         try process.run()
         child = process
         self.sessionToken = sessionToken
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + Self.maximumSessionSeconds
+        ) { [weak self, weak process] in
+            guard let process else { return }
+            self?.expire(process)
+        }
         return true
     }
 
@@ -51,6 +60,42 @@ final class NativeVMLauncher: @unchecked Sendable {
         defer { lock.unlock() }
         guard let child, child.isRunning, self.sessionToken == sessionToken else { return false }
         return inputRelay.send(event, to: child.processIdentifier)
+    }
+
+    func stop(sessionToken: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let child, child.isRunning, self.sessionToken == sessionToken else { return false }
+        inputRelay.releaseAll(to: child.processIdentifier)
+        inputRelay.reset()
+        self.sessionToken = nil
+        child.terminate()
+        return true
+    }
+
+    func stopAny() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let child, child.isRunning else {
+            inputRelay.reset()
+            self.child = nil
+            sessionToken = nil
+            return
+        }
+        inputRelay.releaseAll(to: child.processIdentifier)
+        inputRelay.reset()
+        sessionToken = nil
+        child.terminate()
+    }
+
+    private func expire(_ process: Process) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard child === process, process.isRunning else { return }
+        inputRelay.releaseAll(to: process.processIdentifier)
+        inputRelay.reset()
+        sessionToken = nil
+        process.terminate()
     }
 }
 
@@ -104,7 +149,8 @@ enum LoopbackServer {
                         allowedOrigin: allowedOrigin,
                         bundle: bundle,
                         launch: { token in try launcher.launch(sessionToken: token) },
-                        input: { token, event in launcher.sendInput(sessionToken: token, event: event) }
+                        input: { token, event in launcher.sendInput(sessionToken: token, event: event) },
+                        stop: { token in launcher.stop(sessionToken: token) }
                     )
                 } catch {
                     response = LocalHTTPResponse(

@@ -14,7 +14,7 @@
       </header>
       <section class="viewer-stage">
         <div class="display-toolbar">
-          <span>REAL QUATTRO SESSION</span>
+          <span id="stream-source">SOURCE NOT YET VERIFIED</span>
           <button class="text-button" id="fullscreen" type="button">Fullscreen</button>
         </div>
         <div class="video-frame video-frame--viewer" id="viewer-frame">
@@ -29,9 +29,14 @@
           <span><b>Decoded</b><i id="metric-decoded">0</i></span>
           <span><b>Bitrate</b><i id="metric-bitrate">0 Mbps</i></span>
           <span><b>Loss</b><i id="metric-loss">0</i></span>
-          <span><b>Input ACK</b><i id="metric-input">0</i></span>
+          <span><b>Native input</b><i id="metric-input">0</i></span>
         </div>
-        <p class="viewer-help">Click the desktop, then use keyboard, pointer, and wheel normally. <kbd>Super</kbd> + <kbd>Space</kbd> opens the Omarchy menu.</p>
+        <div class="shortcut-bar" aria-label="Omarchy shortcuts">
+          <button class="secondary" type="button" data-shortcut="menu">Open Omarchy menu</button>
+          <button class="secondary" type="button" data-shortcut="terminal">Open terminal</button>
+          <button class="secondary" type="button" data-shortcut="close">Close window</button>
+        </div>
+        <p class="viewer-help">Click the desktop, then use keyboard, pointer, and wheel normally. The buttons above bypass shortcuts reserved by the host OS.</p>
       </section>
     </main>
     <script type="module" src="/webrtc-viewer.mjs"></script>

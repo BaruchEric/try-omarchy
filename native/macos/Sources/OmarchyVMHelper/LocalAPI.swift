@@ -78,6 +78,7 @@ enum LocalAPI {
     static let capabilityPath = "/v1/capabilities"
     static let launchPath = "/v1/launch"
     static let inputPath = "/v1/input"
+    static let stopPath = "/v1/stop"
     static let challengePattern = try! NSRegularExpression(pattern: "^[0-9a-f]{64}$")
 
     static func handle(
@@ -86,7 +87,8 @@ enum LocalAPI {
         bundle: GuestBundle,
         capabilities: HelperCapabilities = HostCapabilities.report(),
         launch: (String) throws -> Bool,
-        input: (String, NativeRemoteInput) -> Bool = { _, _ in false }
+        input: (String, NativeRemoteInput) -> Bool = { _, _ in false },
+        stop: (String) -> Bool = { _ in false }
     ) -> LocalHTTPResponse {
         guard request.headers["origin"] == allowedOrigin else {
             return response(status: 403, reason: "Forbidden", body: ["error": "origin rejected"])
@@ -109,7 +111,7 @@ enum LocalAPI {
                 && URLComponents(string: "http://loopback\(request.target)")?.path == capabilityPath
                 && request.headers["access-control-request-headers"] == nil
             let launchPreflight = requestedMethod == "POST"
-                && [launchPath, inputPath].contains(request.target)
+                && [launchPath, inputPath, stopPath].contains(request.target)
                 && request.headers["access-control-request-headers"]?.lowercased() == "content-type"
             guard capabilityPreflight || launchPreflight else {
                 return response(status: 403, reason: "Forbidden", headers: cors, body: ["error": "preflight rejected"])
@@ -143,11 +145,32 @@ enum LocalAPI {
             return encodableResponse(status: 200, reason: "OK", headers: cors, value: envelope)
         }
 
+        let contentType = request.headers["content-type"]?.lowercased() ?? ""
+        let acceptedContentType = contentType == "application/json" ||
+            (request.target == stopPath && contentType.hasPrefix("text/plain"))
         guard request.method == "POST",
-              [launchPath, inputPath].contains(request.target),
-              request.headers["content-type"]?.lowercased() == "application/json",
+              [launchPath, inputPath, stopPath].contains(request.target),
+              acceptedContentType,
               let object = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
             return response(status: 400, reason: "Bad Request", headers: cors, body: ["error": "request rejected"])
+        }
+
+        if request.target == stopPath {
+            guard Set(object.keys) == Set(["schemaVersion", "sessionToken"]),
+                  object["schemaVersion"] as? Int == 1,
+                  let sessionToken = object["sessionToken"] as? String,
+                  isChallenge(sessionToken) else {
+                return response(status: 400, reason: "Bad Request", headers: cors, body: ["error": "stop request rejected"])
+            }
+            guard stop(sessionToken) else {
+                return response(status: 409, reason: "Conflict", headers: cors, body: ["error": "native VM stop unavailable"])
+            }
+            return encodableResponse(
+                status: 202,
+                reason: "Accepted",
+                headers: cors,
+                value: NativeStopReceipt(schemaVersion: 1, stopped: true)
+            )
         }
 
         if request.target == inputPath {

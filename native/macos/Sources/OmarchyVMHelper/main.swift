@@ -1,5 +1,8 @@
 import AppKit
+import Darwin
 import Foundation
+
+private var serverSignalSources: [DispatchSourceSignal] = []
 
 private func usage() -> Never {
     fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] [--stream-window] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT] [--stream-window]\n", stderr)
@@ -89,6 +92,19 @@ do {
             bundleDirectory: directory,
             streamWindow: streamWindow
         )
+        if streamWindow && !NativeInputRelay.requestAccessibilityPermission() {
+            fputs("[native] Accessibility permission is required before remote input can be accepted.\n", stderr)
+        }
+        for signalNumber in [SIGINT, SIGTERM] {
+            Darwin.signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global(qos: .userInitiated))
+            source.setEventHandler {
+                launcher.stopAny()
+                Darwin.exit(0)
+            }
+            source.resume()
+            serverSignalSources.append(source)
+        }
         try LoopbackServer.serve(port: port, allowedOrigin: allowedOrigin, bundle: bundle, launcher: launcher)
     default:
         usage()
