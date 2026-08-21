@@ -115,8 +115,7 @@ export function createWebRtcPocServer({ now = () => Date.now() } = {}) {
   }
 
   const server = createServer(async (request, response) => {
-    const origin = `http://${request.headers.host ?? "127.0.0.1"}`;
-    const url = new URL(request.url ?? "/", origin);
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
     prune();
 
     if (request.method === "GET" && url.pathname === "/api/health") {

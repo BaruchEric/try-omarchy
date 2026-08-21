@@ -506,3 +506,28 @@ the page to create a fresh canvas and disposable disk overlay.
 
 These are implementation boundaries, not reasons to replace Omarchy with a
 visual imitation.
+
+## Local WebRTC proof
+
+`make serve-webrtc-poc` starts an isolated signaling and static server on
+`http://127.0.0.1:8110/`. It has no npm or native WebRTC dependency: two browser
+peers exchange a complete, non-trickle offer and answer through bounded HTTP
+endpoints, then video and input travel directly over WebRTC.
+
+The capture host supports two sources:
+
+- A deterministic 1600×900, 60 FPS moving test pattern for transport testing.
+- A user-selected native Omarchy window from `getDisplayMedia()`.
+
+The viewer is ready only after the peer is connected, the reliable ordered
+`omarchy-input` data channel is open, and video playback has produced a frame.
+It reports decoded frames, measured FPS, bitrate, packet loss, and input
+acknowledgements. Pointer motion is coalesced once per animation frame and may be
+dropped under data-channel backpressure; key/button releases and `release-all`
+are never intentionally dropped.
+
+This first proof uses host ICE candidates only. It is suitable for loopback and
+often the same LAN, not the public internet. Public deployment requires HTTPS,
+authenticated session allocation, STUN/TURN, a server-side VM capture/encoder,
+capacity limits, and session teardown. It must not expose the native helper,
+VNC, QMP, or VM management interfaces beyond loopback/private infrastructure.

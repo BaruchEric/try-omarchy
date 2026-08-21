@@ -44,3 +44,35 @@ challenge, and launches at most one native VM child at a time:
 Use `--no-resume` only for a deliberate cold-boot proof. Save states are tied by
 Virtualization.framework to the Mac that created them and are never distributable
 release artifacts.
+
+## WebRTC capture mode
+
+The local WebRTC proof uses the same hardware-virtualized guest and host-bound
+resume state. Run the helper with the exact loopback POC origin and a borderless
+1600×900 window:
+
+```bash
+.build/release/omarchy-vm-helper --serve ../../guest/dist-aarch64 \
+  --allowed-origin http://127.0.0.1:8110 \
+  --stream-window
+```
+
+Then run `npm run stream:poc` from the repository root and open
+`http://127.0.0.1:8110/`. The capture-host page launches the VM, asks the browser
+to share the Omarchy window, sends the resulting track over WebRTC, and relays
+the viewer's ordered data-channel input to `/v1/input`.
+
+Every input request must contain the unpredictable token from the accepted
+launch. The loopback helper additionally binds one exact browser origin, accepts
+only bounded keyboard/pointer/wheel schemas, and posts events only to that VM
+child process. Restarting or closing the VM invalidates the token.
+
+macOS may require:
+
+- Screen Recording permission for the browser that captures the Omarchy window.
+- Accessibility permission for `omarchy-vm-helper` to relay remote input.
+
+The browser's manual window-selection prompt is intentional and cannot be
+bypassed by a web page. A production service replaces the capture-host tab with
+an authenticated server-side encoder and adds TURN; the viewer and input
+protocol remain applicable.

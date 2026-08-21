@@ -43,6 +43,16 @@ test("loopback WebRTC server creates an isolated offer/answer room", async (cont
   });
   assert.equal(published.status, 204);
 
+  const duplicate = await fetch(`${app.origin}/api/webrtc/sessions/${room.sessionId}/offer`, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${room.hostToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(offer),
+  });
+  assert.equal(duplicate.status, 409);
+
   const fetched = await fetch(
     `${app.origin}/api/webrtc/sessions/${room.sessionId}/offer?token=${room.viewerToken}`,
   );
@@ -67,6 +77,36 @@ test("loopback WebRTC server creates an isolated offer/answer room", async (cont
     `${app.origin}/api/webrtc/sessions/${room.sessionId}/answer?token=${room.hostToken}`,
   );
   assert.deepEqual(await hostAnswer.json(), answer);
+
+  const removed = await fetch(`${app.origin}/api/webrtc/sessions/${room.sessionId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${room.hostToken}` },
+  });
+  assert.equal(removed.status, 204);
+  assert.equal(app.server.sessionCount(), 0);
+});
+
+test("loopback WebRTC server expires abandoned rooms", async (context) => {
+  let now = 10_000;
+  const server = createWebRtcPocServer({ now: () => now });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const address = server.address();
+  const origin = `http://127.0.0.1:${address.port}`;
+  const room = await (await fetch(`${origin}/api/webrtc/sessions`, {
+    method: "POST",
+    headers: { "Content-Length": "0" },
+  })).json();
+  assert.equal(server.sessionCount(), 1);
+  now += 31 * 60 * 1000;
+  const health = await fetch(`${origin}/api/health`);
+  assert.equal(health.status, 200);
+  assert.equal(server.sessionCount(), 0);
+  const expired = await fetch(
+    `${origin}/api/webrtc/sessions/${room.sessionId}/offer?token=${room.viewerToken}`,
+  );
+  assert.equal(expired.status, 404);
 });
 
 test("loopback WebRTC server fails closed on tokens and malformed SDP", async (context) => {

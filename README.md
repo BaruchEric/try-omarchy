@@ -6,10 +6,16 @@ client-side x86_64 virtual machine. It is a short, disposable product demo: the
 browser renders QEMU's guest framebuffer, forwards keyboard and pointer input
 to the VM, and discards all changes when the session is reset or closed.
 
-The desktop is not recreated with HTML or streamed from a server. The guest is
-Arch Linux booting Hyprland, Quickshell, Omarchy's commands, configuration, and
-themes from upstream commit
+The original browser-VM path is not recreated with HTML or streamed from a
+server. The guest is Arch Linux booting Hyprland, Quickshell, Omarchy's
+commands, configuration, and themes from upstream commit
 `f0020448ca87329199de7cb12f2015ebc4a3e5e7`.
+
+An isolated WebRTC proof now provides the performance-oriented alternative: a
+real, architecture-native Omarchy VM stays on a hardware-virtualized host while
+the browser receives its video and sends keyboard, pointer, and wheel input over
+an encrypted peer connection. This POC deliberately does not replace or weaken
+the browser-VM authenticity path.
 
 ## How it works
 
@@ -63,6 +69,30 @@ npm run dev
 The launcher intentionally reports missing VM files until an immutable release
 exists at its pinned artifact path. It never substitutes a screenshot or fake
 desktop.
+
+## Run the WebRTC performance proof
+
+The WebRTC proof is dependency-free and loopback-only by default:
+
+```sh
+npm run stream:poc
+```
+
+Open `http://127.0.0.1:8110/`, create a room, open its capture-host link, and
+start the built-in 60 FPS pattern. Open the viewer link to verify WebRTC video,
+decoded FPS, bitrate, packet loss, and acknowledged keyboard/pointer input.
+
+To stream real Omarchy on Apple Silicon, first build and sign the native helper
+and ARM64 guest, then run the helper for the exact POC origin:
+
+```sh
+native/macos/.build/release/omarchy-vm-helper --serve guest/dist-aarch64 \
+  --allowed-origin http://127.0.0.1:8110 --stream-window
+```
+
+Use **Launch native Omarchy** in the capture host, then **Share Omarchy window**.
+The browser requires a deliberate window-selection click. See
+`native/macos/README.md` for build and macOS permission details.
 
 ## Build and verify the VM
 
