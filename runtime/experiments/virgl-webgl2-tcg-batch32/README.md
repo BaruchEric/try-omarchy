@@ -32,3 +32,16 @@ make -C runtime serve-full-virgl-webgl2-tcg-batch32
 The local server listens on `127.0.0.1:8102`. Compare it against the unchanged
 fill-only profile on port 8101 using the same browser, guest assets, two-vCPU
 topology, elapsed windows, and trusted `webgl2-present-cadence` telemetry.
+
+## Measured rejection
+
+The 2026-08-21 browser A/B rejected this design:
+
+- the original 128-promotion partial flush stranded hot blocks in TCI and
+  exceeded 150 million batch-wait entries;
+- a bounded 256-execution flush removed that starvation, but exact signatures
+  averaged only about 1.8 compiled blocks per module and produced no full batch;
+- cadence fell to 0.895 FPS and the guest panicked around guest time 26 seconds.
+
+The generated 14 MB runtime was removed after the run. This source remains only
+as reproducible negative evidence; it must not be used as a runtime candidate.
