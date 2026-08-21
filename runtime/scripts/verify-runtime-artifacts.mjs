@@ -629,7 +629,7 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
         tcgExperimentArtifactSha256: wasmSha256,
         tcgMetricsMarker: TCG_METRICS_MARKER,
         ...(tcgExperiment.cachePolicy !== undefined
-          ? { tcgCachePolicyMarker: TCG_BOUNDED_CLOCK_MARKER }
+          ? { tcgCachePolicyMarker: tcgExperiment.cachePolicyMarker }
           : {}),
       } : {}),
       ...(graphics !== null ? {
