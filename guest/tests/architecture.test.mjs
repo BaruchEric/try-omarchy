@@ -43,6 +43,13 @@ test("x86 and ARM specs are immutable, distinct Quattro products", () => {
   assert.deepEqual(arm.guest.virtualDisplay, x86.guest.virtualDisplay);
   assert.equal(arm.runtime.hypervisor, "apple-virtualization-framework");
   assert.equal(arm.runtime.kernelSource, "/boot/Image");
+  assert.deepEqual(x86.inputs.packageCachePins, [
+    "qt6-base",
+    "qt6-declarative",
+    "qt6-svg",
+    "qt6-translations",
+    "qt6-wayland",
+  ]);
   assert.match(arm.runtime.kernelCommandLine, /(?:^| )console=hvc0(?: |$)/);
   assert.ok(!arm.runtime.kernelCommandLine.includes("ttyS0"));
 });

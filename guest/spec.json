@@ -40,6 +40,13 @@
   "inputs": {
     "packages": "packages.x86_64.txt",
     "packageLock": "packages.x86_64.lock.json",
+    "packageCachePins": [
+      "qt6-base",
+      "qt6-declarative",
+      "qt6-svg",
+      "qt6-translations",
+      "qt6-wayland"
+    ],
     "maskedSystemServices": "services.system-mask.txt",
     "maskedUserServices": "services.user-mask.txt"
   },

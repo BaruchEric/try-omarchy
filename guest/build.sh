@@ -74,7 +74,7 @@ package_lock_file="$guest_dir/$package_lock_file"
 [[ -f $packages_file ]] || fail "package list not found: $packages_file"
 [[ -f $package_lock_file ]] || fail "package lock not found: $package_lock_file"
 (( EUID == 0 )) || fail "run as root (pacstrap and arch-chroot require it)"
-for command in pacstrap arch-chroot git python3 mke2fs zstd; do
+for command in pacstrap arch-chroot git python3 mke2fs repo-add zstd; do
   command -v "$command" >/dev/null || fail "$command is required; use the supplied Arch builder container"
 done
 
@@ -89,6 +89,7 @@ fi
 
 root=$(mktemp -d "$work/rootfs.XXXXXX")
 resolution_db=$(mktemp -d "$work/pacman-db.XXXXXX")
+pinned_repo=""
 chmod 0755 "$resolution_db"
 cleanup() {
   if (( keep_rootfs )); then
@@ -97,6 +98,9 @@ cleanup() {
     rm -rf "$root"
   fi
   rm -rf "$resolution_db"
+  if [[ -n $pinned_repo ]]; then
+    rm -rf "$pinned_repo"
+  fi
 }
 trap cleanup EXIT
 
@@ -119,11 +123,56 @@ pacman_config="$work/pacman-builder.conf"
 [[ $package_cache != *$'\n'* ]] || fail "work path cannot contain a newline"
 install -d -m 0755 "$package_cache"
 
+# Omarchy's repository may contain binaries compiled against Qt's private ABI.
+# Arch is rolling, so keep the small reviewed ABI set on the exact signed
+# versions recorded in the transaction lock even after upstream mirrors move.
+pinned_records_text=$(python3 -c '
+import json, sys
+spec = json.load(open(sys.argv[1]))
+lock = json.load(open(sys.argv[2]))["packages"]
+pins = spec["inputs"].get("packageCachePins", [])
+if pins != sorted(set(pins)):
+    raise SystemExit("packageCachePins must be sorted and unique")
+for name in pins:
+    if name not in lock:
+        raise SystemExit(f"package cache pin is absent from the transaction lock: {name}")
+    print(f"{name}|{lock[name]}")
+' "$spec" "$package_lock_file") || fail "could not read reviewed cache pins"
+pinned_records=()
+if [[ -n $pinned_records_text ]]; then
+  mapfile -t pinned_records <<<"$pinned_records_text"
+fi
+if ((${#pinned_records[@]})); then
+  pinned_repo=$(mktemp -d "$work/pinned-repo.XXXXXX")
+  for record in "${pinned_records[@]}"; do
+    IFS='|' read -r package version <<<"$record"
+    [[ -n $package && -n $version && $package != *'|'* && $version != *'|'* ]] \
+      || fail "invalid package cache pin: $record"
+    shopt -s nullglob
+    matches=("$package_cache/$package-$version-"*.pkg.tar.zst)
+    shopt -u nullglob
+    ((${#matches[@]} == 1)) \
+      || fail "expected exactly one cached archive for $package=$version, found ${#matches[@]}"
+    archive=${matches[0]}
+    [[ -f $archive.sig ]] || fail "cached package signature not found: $archive.sig"
+    ln "$archive" "$archive.sig" "$pinned_repo/"
+  done
+  repo-add "$pinned_repo/omarchy-web-pinned-cache.db.tar.gz" \
+    "$pinned_repo/"*.pkg.tar.zst >/dev/null
+fi
+
 # Preserve the pinned repository configuration exactly, adding only builder
 # options. The generated file is temporary build input; configure-rootfs later
 # installs Omarchy's unmodified pacman configuration into the guest.
 options_sections=0
+pinned_repo_inserted=0
 while IFS= read -r line || [[ -n $line ]]; do
+  if [[ -n $pinned_repo && $line =~ ^\[[^]]+\]$ && $line != "[options]" && $pinned_repo_inserted == 0 ]]; then
+    printf '[omarchy-web-pinned-cache]\n'
+    printf 'SigLevel = Required DatabaseOptional\n'
+    printf 'Server = file://%s\n\n' "$pinned_repo"
+    pinned_repo_inserted=1
+  fi
   printf '%s\n' "$line"
   if [[ $line == "[options]" ]]; then
     printf 'CacheDir = %s\n' "$package_cache"
@@ -134,6 +183,8 @@ while IFS= read -r line || [[ -n $line ]]; do
   fi
 done <"$upstream_pacman_config" >"$pacman_config"
 (( options_sections == 1 )) || fail "pinned pacman configuration must contain one [options] section"
+(( ${#pinned_records[@]} == 0 || pinned_repo_inserted == 1 )) \
+  || fail "pinned pacman configuration does not contain a repository section"
 
 # Resolve against an empty target database and require the reviewed transitive
 # version lock before any multi-gigabyte package transaction begins.

@@ -69,6 +69,30 @@ def test_static() -> None:
     check(package_lock["architecture"] == "x86_64" and package_lock["requestedFileSha256"] == package_sha, "package lock matches requested package input")
     check(lock_names == sorted(lock_names) and len(lock_names) > 500, "complete transitive package transaction is version-locked")
     check(set(packages) <= set(lock_names) and "glibc" in lock_names, "package lock covers explicit and base dependencies")
+    cache_pins = SPEC["inputs"]["packageCachePins"]
+    expected_cache_pins = [
+        "qt6-base", "qt6-declarative", "qt6-svg", "qt6-translations", "qt6-wayland",
+    ]
+    check(cache_pins == expected_cache_pins, "Quickshell private Qt ABI set is explicitly cache-pinned")
+    check(
+        {name: package_lock["packages"][name] for name in cache_pins}
+        == {
+            "qt6-base": "6.11.1-1",
+            "qt6-declarative": "6.11.1-3",
+            "qt6-svg": "6.11.1-1",
+            "qt6-translations": "6.11.1-1",
+            "qt6-wayland": "6.11.1-1",
+        },
+        "Quickshell Qt ABI versions remain exact",
+    )
+    guest_build = (GUEST / "build.sh").read_text()
+    check(
+        'SigLevel = Required DatabaseOptional' in guest_build
+        and 'expected exactly one cached archive' in guest_build
+        and 'cached package signature not found' in guest_build
+        and guest_build.find('[omarchy-web-pinned-cache]') < guest_build.find('pacman -Syy'),
+        "signed cache repository is fail-closed and precedes upstream resolution",
+    )
 
     for key in ("maskedSystemServices", "maskedUserServices"):
         units = entries(GUEST / SPEC["inputs"][key])
