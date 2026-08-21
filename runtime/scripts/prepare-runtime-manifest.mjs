@@ -577,8 +577,9 @@ if (scriptPath && scriptPath === fileURLToPath(import.meta.url)) {
   );
   invariant(
     !vcpuExperiment ||
-      (experimentValue === "750" && graphicsExperiment === "virgl-webgl2"),
-    "the four-vCPU experiment requires VirGL/WebGL2 plus the threshold-750 TCG profile",
+      ((experimentValue === "750" || experimentValue === "6000-fill") &&
+        graphicsExperiment === "virgl-webgl2"),
+    "the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
   );
   invariant(
     graphicsExperiment === undefined || graphicsExperiment === "" ||

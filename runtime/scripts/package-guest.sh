@@ -77,8 +77,9 @@ fi
   exit 2
 }
 [[ -z "$vcpu_experiment" ||
-   ( "$tcg_experiment" == "750" && "$graphics_experiment" == "virgl-webgl2" ) ]] || {
-  printf 'the four-vCPU experiment requires VirGL/WebGL2 plus the threshold-750 TCG profile\n' >&2
+   ( ( "$tcg_experiment" == "750" || "$tcg_experiment" == "6000-fill" ) &&
+     "$graphics_experiment" == "virgl-webgl2" ) ]] || {
+  printf 'the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile\n' >&2
   exit 2
 }
 [[ -z "$tcg_experiment" || -z "$graphics_experiment" ||

@@ -92,9 +92,9 @@ if (vcpuExperiment !== undefined && vcpuExperiment !== "" && vcpuExperiment !== 
   throw new Error(`unsupported browser vCPU experiment: ${vcpuExperiment}`);
 }
 if (vcpuExperiment === "4" &&
-    !(tcgExperimentProfile?.instantiateThreshold === 750 &&
+    !([750, 6000].includes(tcgExperimentProfile?.instantiateThreshold) &&
       graphicsExperiment === "virgl-webgl2")) {
-  throw new Error("the four-vCPU experiment requires VirGL/WebGL2 plus the threshold-750 TCG profile");
+  throw new Error("the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile");
 }
 
 const artifactDefinitions = [

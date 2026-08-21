@@ -336,9 +336,9 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
   );
   assert.ok(
     vcpus === null ||
-      (vcpus === 4 && tcgExperiment?.instantiateThreshold === 750 &&
+      (vcpus === 4 && [750, 6000].includes(tcgExperiment?.instantiateThreshold) &&
         graphics === VIRGL_GRAPHICS_EXPERIMENT),
-    "the four-vCPU experiment requires VirGL/WebGL2 plus the threshold-750 TCG profile",
+    "the four-vCPU experiment requires VirGL/WebGL2 plus a compatible instrumented TCG profile",
   );
   const tcgThreshold = tcgExperiment?.instantiateThreshold ?? null;
   validateRuntimeManifest(manifest, tcgThreshold, graphics, vcpus);

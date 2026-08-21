@@ -92,12 +92,21 @@ test("fill-only build, package, identity, and verifier plumbing stays isolated",
   assert.match(build, /tcg_experiment" == "6000-fill"/);
   assert.match(build, /qemu-wasm-tcg-fill-only-120k\.patch/);
   assert.match(packageScript, /"6000-fill"/);
+  assert.match(
+    packageScript,
+    /"750" \|\| "\$tcg_experiment" == "6000-fill"/,
+  );
   assert.match(manifest, /experimentValue === "6000-fill"/);
+  assert.match(
+    manifest,
+    /experimentValue === "750" \|\| experimentValue === "6000-fill"/,
+  );
   assert.match(stamp, /"6000-fill": Object\.freeze\(\{ threshold: 6000, metricsSchemaVersion: 5 \}\)/);
   for (const source of [verifier, metadata]) {
     assert.match(source, /kind: "qemu-wasm-tcg-fill-only"/);
     assert.match(source, /kind: "fill-only-v1"/);
     assert.match(source, /activeCap: 120000/);
+    assert.match(source, /\[750, 6000\]/);
     assert.match(source, /retainedCap: 120000/);
     assert.match(source, /eviction: "disabled"/);
     assert.match(source, /gcPressure: "disabled"/);

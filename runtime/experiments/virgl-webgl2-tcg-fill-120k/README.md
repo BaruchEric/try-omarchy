@@ -24,6 +24,10 @@ make -C runtime package-virgl-webgl2-tcg-fill-120k GUEST_DIR=../guest/dist
 make -C runtime serve-full-virgl-webgl2-tcg-fill-120k
 ```
 
+For the bounded four-vCPU resource-allocation diagnostic, repackage the same
+Wasm bytes with `OMARCHY_VCPU_EXPERIMENT=4`. This changes only the guest SMP
+topology and Worker identity, so it can be compared without another QEMU build.
+
 The server listens on `127.0.0.1:8101`. This profile is useful only as a
 diagnostic bridge: the durable design must batch many TBs into one Wasm module
 or ship a profile-guided/AOT hot module so module lifetime is not the cache
