@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { parseUniqueDiagnosticMarker } from "../../scripts/verification/diagnostic-markers.mjs";
 
 const [guestDirectory, evidenceDirectory, browserQemuWasmPath] = process.argv.slice(2);
 if (!guestDirectory || !evidenceDirectory || !browserQemuWasmPath) {
@@ -50,11 +51,7 @@ const canonicalize = (value) => {
   return value;
 };
 const normalizedJsonDigest = (value) => digest(Buffer.from(JSON.stringify(canonicalize(value)), "utf8"));
-const oneMarker = (log, prefix) => {
-  const matches = log.split(/\r?\n/).filter((line) => line.startsWith(prefix));
-  invariant(matches.length === 1, `${prefix} must occur exactly once`, { count: matches.length });
-  return JSON.parse(matches[0].slice(prefix.length));
-};
+const oneMarker = parseUniqueDiagnosticMarker;
 
 const [manifest, run, sourceLog, targetLog, sourceCommand, targetCommand] = await Promise.all([
   json("hibernate-manifest.json"),

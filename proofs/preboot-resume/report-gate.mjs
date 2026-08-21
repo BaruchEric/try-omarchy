@@ -7,7 +7,11 @@ import { pathToFileURL } from "node:url";
 const verificationUrl = process.env.OMARCHY_REPO_ROOT
   ? pathToFileURL(path.join(process.env.OMARCHY_REPO_ROOT, "scripts/verification/verify-guest-report.mjs"))
   : new URL("../../scripts/verification/verify-guest-report.mjs", import.meta.url);
+const markerUrl = process.env.OMARCHY_REPO_ROOT
+  ? pathToFileURL(path.join(process.env.OMARCHY_REPO_ROOT, "scripts/verification/diagnostic-markers.mjs"))
+  : new URL("../../scripts/verification/diagnostic-markers.mjs", import.meta.url);
 const { verifyGuestReport } = await import(verificationUrl);
+const { parseUniqueDiagnosticMarker } = await import(markerUrl);
 
 const [diagnosticsPath, manifestPath] = process.argv.slice(2);
 if (!diagnosticsPath || !manifestPath) throw new Error("usage: report-gate.mjs DIAGNOSTICS GUEST_MANIFEST");
@@ -16,9 +20,7 @@ const [diagnostics, manifest] = await Promise.all([
   readFile(manifestPath, "utf8").then(JSON.parse),
 ]);
 const prefix = "OMARCHY_GUEST_REPORT ";
-const lines = diagnostics.split("\n").filter((line) => line.startsWith(prefix));
-if (lines.length !== 1) throw new Error(`expected exactly one guest report, found ${lines.length}`);
-const report = JSON.parse(lines[0].slice(prefix.length));
+const report = parseUniqueDiagnosticMarker(diagnostics, prefix);
 const result = await verifyGuestReport(report, { manifest });
 if (!result.passed) throw new Error(`guest report verification failed: ${JSON.stringify(result.toJSON())}`);
 if (report.provenance?.commit !== manifest.upstream?.commit) throw new Error("guest report provenance differs from manifest");

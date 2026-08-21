@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { checkDeployment } from "../check-deployment.mjs";
+import { parseUniqueDiagnosticMarker } from "../diagnostic-markers.mjs";
 import { verifyArtifactManifest } from "../verify-artifact-manifest.mjs";
 import { verifyGuestReport } from "../verify-guest-report.mjs";
 import { verifyRuntimeReport } from "../verify-runtime-report.mjs";
@@ -18,6 +19,40 @@ const builderDigest = `sha256:${"c".repeat(64)}`;
 function digest(contents) {
   return createHash("sha256").update(contents).digest("hex");
 }
+
+test("diagnostic markers tolerate only recognized terminal-control framing", () => {
+  const prefix = "OMARCHY_RENDERER_REPORT ";
+  const payload = { schemaVersion: 1, renderer: "virgl" };
+  const encoded = JSON.stringify(payload);
+  assert.deepEqual(parseUniqueDiagnosticMarker(`${prefix}${encoded}\r\n`, prefix), payload);
+
+  const capturedPrefix = "\u001b7\u001b[32766;32766H\u001b[6n\u001b8";
+  assert.deepEqual(
+    parseUniqueDiagnosticMarker(`${capturedPrefix}${prefix}${encoded}\r\n`, prefix),
+    payload,
+  );
+  assert.deepEqual(
+    parseUniqueDiagnosticMarker(`\u001b]104\u001b\\${prefix}${encoded}\r\n`, prefix),
+    payload,
+  );
+
+  assert.throws(
+    () => parseUniqueDiagnosticMarker(`printable:${prefix}${encoded}\n`, prefix),
+    /found 0/,
+  );
+  assert.throws(
+    () => parseUniqueDiagnosticMarker(`${prefix}${encoded}\n${capturedPrefix}${prefix}${encoded}\n`, prefix),
+    /found 2/,
+  );
+  assert.throws(
+    () => parseUniqueDiagnosticMarker(`\u001b[broken${prefix}${encoded}\n`, prefix),
+    /found 0/,
+  );
+  assert.throws(
+    () => parseUniqueDiagnosticMarker(`${prefix}${encoded} trailing\n`, prefix),
+    /JSON/,
+  );
+});
 
 function baseManifest(artifacts) {
   return {

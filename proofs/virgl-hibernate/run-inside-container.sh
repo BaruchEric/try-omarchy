@@ -9,6 +9,7 @@ qmp_client=/repo/proofs/preboot-resume/qmp.mjs
 frame_health=/repo/proofs/preboot-resume/frame-health.mjs
 frame_change=/repo/proofs/preboot-resume/frame-change.mjs
 report_gate=/repo/proofs/preboot-resume/report-gate.mjs
+marker_parser=/repo/scripts/verification/diagnostic-markers.mjs
 xwd_converter=/proof/xwd-to-ppm.mjs
 browser_qemu_wasm=${BROWSER_QEMU_WASM_PATH:?BROWSER_QEMU_WASM_PATH is required}
 browser_qemu_wasm_expected_sha256=${BROWSER_QEMU_WASM_EXPECTED_SHA256:?BROWSER_QEMU_WASM_EXPECTED_SHA256 is required}
@@ -211,10 +212,12 @@ wait_for_resume_marker() {
   local log=$2
   local deadline=$((SECONDS + target_timeout))
   while (( SECONDS < deadline )); do
-    if grep -q '^OMARCHY_HIBERNATION_FAILURE ' "$log"; then
+    if grep -Fq 'OMARCHY_HIBERNATION_FAILURE ' "$log"; then
       fail "fresh target emitted a fail-closed hibernation marker"
     fi
-    grep -q '^OMARCHY_HIBERNATION_REPORT ' "$log" && return 0
+    if node "$marker_parser" "$log" "OMARCHY_HIBERNATION_REPORT " >/dev/null 2>&1; then
+      return 0
+    fi
     kill -0 "$pid" 2>/dev/null || fail "fresh target exited before the resumed marker"
     sleep 1
   done
@@ -222,7 +225,7 @@ wait_for_resume_marker() {
 }
 
 assert_no_uwsm_failure() {
-  if grep -Eq '^OMARCHY_GUEST_STAGE .*"stage":"uwsm","status":"failed"' \
+  if grep -Eq 'OMARCHY_GUEST_STAGE .*"stage":"uwsm","status":"failed"' \
       "$evidence_dir/target-diagnostics.log"; then
     fail "resumed target emitted a UWSM failure stage"
   fi
@@ -420,9 +423,12 @@ set -e
 source_pid=
 source_finished_ms=$(date +%s%3N)
 [[ $source_exit -eq 0 ]] || fail "source QEMU exited with $source_exit"
-[[ $(grep -c '^OMARCHY_HIBERNATION_ENTER ' "$evidence_dir/source-diagnostics.log") -eq 1 ]] \
-  || fail "source did not emit exactly one hibernation-entry marker"
-! grep -q '^OMARCHY_HIBERNATION_FAILURE ' "$evidence_dir/source-diagnostics.log" \
+node "$marker_parser" \
+  "$evidence_dir/source-diagnostics.log" \
+  "OMARCHY_HIBERNATION_ENTER " \
+  >"$evidence_dir/source-hibernation-enter.json" \
+  || fail "source did not emit exactly one valid hibernation-entry marker"
+! grep -Fq 'OMARCHY_HIBERNATION_FAILURE ' "$evidence_dir/source-diagnostics.log" \
   || fail "source emitted a hibernation failure marker"
 grep -Fq 'PM: hibernation: hibernation entry' "$evidence_dir/source-diagnostics.log" \
   || fail "source kernel did not enter hibernation"
@@ -508,38 +514,44 @@ grep -Fq 'PM: Image successfully loaded' "$evidence_dir/target-diagnostics.log" 
   || fail "target kernel did not authenticate a successful restore"
 grep -Fq 'PM: hibernation: hibernation exit' "$evidence_dir/target-diagnostics.log" \
   || fail "restored kernel did not exit hibernation"
-[[ $(grep -c '^OMARCHY_HIBERNATION_REPORT ' "$evidence_dir/target-diagnostics.log") -eq 1 ]] \
-  || fail "target did not emit exactly one resumed marker"
-! grep -q '^OMARCHY_HIBERNATION_FAILURE ' "$evidence_dir/target-diagnostics.log" \
+node "$marker_parser" \
+  "$evidence_dir/target-diagnostics.log" \
+  "OMARCHY_HIBERNATION_REPORT " \
+  >"$evidence_dir/target-hibernation-report.json" \
+  || fail "target did not emit exactly one valid resumed marker"
+! grep -Fq 'OMARCHY_HIBERNATION_FAILURE ' "$evidence_dir/target-diagnostics.log" \
   || fail "target emitted a fail-closed marker"
-! grep -q '^OMARCHY_HIBERNATION_COLD_BOOT ' "$evidence_dir/target-diagnostics.log" \
+! grep -Fq 'OMARCHY_HIBERNATION_COLD_BOOT ' "$evidence_dir/target-diagnostics.log" \
   || fail "target emitted a cold-fallback marker"
-[[ $(grep -c '^OMARCHY_RENDERER_REPORT ' "$evidence_dir/target-diagnostics.log") -eq 1 ]] \
-  || fail "target did not emit exactly one renderer report"
-node - "$evidence_dir/target-diagnostics.log" "$evidence_dir/renderer-probe.json" <<'EOF'
+node "$marker_parser" \
+  "$evidence_dir/target-diagnostics.log" \
+  "OMARCHY_RENDERER_REPORT " \
+  >"$evidence_dir/renderer-probe.json" \
+  || fail "target did not emit exactly one valid renderer report"
+node - "$evidence_dir/renderer-probe.json" <<'EOF'
 const fs = require("fs");
-const [input, output] = process.argv.slice(2);
-const prefix = "OMARCHY_RENDERER_REPORT ";
-const lines = fs.readFileSync(input, "utf8").split(/\r?\n/).filter((line) => line.startsWith(prefix));
-if (lines.length !== 1) throw new Error("renderer report is not unique");
-const report = JSON.parse(lines[0].slice(prefix.length));
+const report = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (report.schemaVersion !== 1 || report.renderNode !== "/dev/dri/renderD128" ||
     typeof report.renderer !== "string" || !/virgl/i.test(report.renderer)) {
   throw new Error(`fresh renderer identity is invalid: ${JSON.stringify(report)}`);
 }
-fs.writeFileSync(output, JSON.stringify(report, null, 2) + "\n");
 EOF
 
 set_phase resumed-authentic-report
 report_deadline=$((SECONDS + desktop_timeout))
 while (( SECONDS < report_deadline )); do
   assert_no_uwsm_failure
-  grep -q '^OMARCHY_GUEST_REPORT ' "$evidence_dir/target-diagnostics.log" && break
+  if node "$marker_parser" \
+      "$evidence_dir/target-diagnostics.log" \
+      "OMARCHY_GUEST_REPORT " \
+      >"$evidence_dir/target-guest-report.json" 2>/dev/null; then
+    break
+  fi
   kill -0 "$target_pid" 2>/dev/null || fail "resumed target exited before its authentic guest report"
   sleep 1
 done
-grep -q '^OMARCHY_GUEST_REPORT ' "$evidence_dir/target-diagnostics.log" \
-  || fail "resumed target did not emit an authentic guest report within ${desktop_timeout} seconds"
+[[ -s $evidence_dir/target-guest-report.json ]] \
+  || fail "resumed target did not emit one valid authentic guest report within ${desktop_timeout} seconds"
 node "$report_gate" "$evidence_dir/target-diagnostics.log" /guest/guest-manifest.json \
   >"$evidence_dir/target-report-validation.json" \
   || fail "resumed target guest report failed authenticity/monitor verification"
@@ -626,17 +638,12 @@ const canonicalize = (value) => {
   return value;
 };
 const normalizedJsonBytes = (value) => Buffer.from(JSON.stringify(canonicalize(value)), "utf8");
-const marker = (prefix, log) => {
-  const lines = log.split(/\r?\n/).filter((line) => line.startsWith(prefix));
-  if (lines.length !== 1) throw new Error(`${prefix} must occur exactly once`);
-  return JSON.parse(lines[0].slice(prefix.length));
-};
 const sourceDiagnostics = read("source-diagnostics.log");
 const targetDiagnostics = read("target-diagnostics.log");
-const enter = marker("OMARCHY_HIBERNATION_ENTER ", sourceDiagnostics);
-const hibernationReport = marker("OMARCHY_HIBERNATION_REPORT ", targetDiagnostics);
-const rendererReport = marker("OMARCHY_RENDERER_REPORT ", targetDiagnostics);
-const guestReport = marker("OMARCHY_GUEST_REPORT ", targetDiagnostics);
+const enter = JSON.parse(read("source-hibernation-enter.json"));
+const hibernationReport = JSON.parse(read("target-hibernation-report.json"));
+const rendererReport = JSON.parse(read("renderer-probe.json"));
+const guestReport = JSON.parse(read("target-guest-report.json"));
 if (enter.nonce !== nonce || hibernationReport.nonce !== nonce ||
     enter.sourceBootId !== hibernationReport.sourceBootId) {
   throw new Error("source/target hibernation identity differs");
