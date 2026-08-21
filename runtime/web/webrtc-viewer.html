@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Omarchy stream</title>
+    <link rel="stylesheet" href="/webrtc-poc.css" />
+  </head>
+  <body>
+    <main class="poc-shell poc-shell--viewer">
+      <header class="poc-header">
+        <div><span class="brand">OMARCHY</span><span class="role">LIVE STREAM</span></div>
+        <span class="connection" id="connection-state" data-state="idle">IDLE</span>
+      </header>
+      <section class="viewer-stage">
+        <div class="display-toolbar">
+          <span>REAL QUATTRO SESSION</span>
+          <button class="text-button" id="fullscreen" type="button">Fullscreen</button>
+        </div>
+        <div class="video-frame video-frame--viewer" id="viewer-frame">
+          <video id="remote-video" autoplay muted playsinline tabindex="0" aria-label="Interactive Omarchy stream"></video>
+          <div class="video-placeholder" id="video-placeholder">
+            <button class="primary" id="connect" type="button">Connect to stream</button>
+            <span id="viewer-status" role="status">Waiting for the capture host.</span>
+          </div>
+        </div>
+        <div class="metrics" id="viewer-metrics">
+          <span><b>Visible FPS</b><i id="metric-fps">0</i></span>
+          <span><b>Decoded</b><i id="metric-decoded">0</i></span>
+          <span><b>Bitrate</b><i id="metric-bitrate">0 Mbps</i></span>
+          <span><b>Loss</b><i id="metric-loss">0</i></span>
+          <span><b>Input ACK</b><i id="metric-input">0</i></span>
+        </div>
+        <p class="viewer-help">Click the desktop, then use keyboard, pointer, and wheel normally. <kbd>Super</kbd> + <kbd>Space</kbd> opens the Omarchy menu.</p>
+      </section>
+    </main>
+    <script type="module" src="/webrtc-viewer.mjs"></script>
+  </body>
+</html>
