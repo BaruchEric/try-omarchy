@@ -14,7 +14,7 @@ ignored `.build/` and `evidence/` directories.
 ## Safety and topology contract
 
 The producer and target both use QEMU 8.2.0 at source commit
-`0ef7b4e2814b231705d8371dd7997f5b72e70baf`, `pc-q35-8.2`, `qemu64`, 1024 MiB,
+`0ef7b4e2814b231705d8371dd7997f5b72e70baf`, `pc-q35-8.2,i8042=off`, `qemu64`, 1024 MiB,
 two vCPUs, and `tcg,tb-size=128,thread=multi`. Their ordered block devices are:
 
 1. `omarchy-hibernate-root` → `virtio-blk-pci` serial `omarchy-root`, backed by

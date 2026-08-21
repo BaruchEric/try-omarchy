@@ -141,7 +141,7 @@ async function writeCandidateFixture(
       memoryMiB: 1024,
       cores: 2,
       arguments: [
-        "-machine", "pc-q35-8.2",
+        "-machine", "pc-q35-8.2,i8042=off",
         "-m", "1024M",
         "-accel", "tcg,tb-size=128,thread=multi",
         "-smp", "2,sockets=1,cores=2,threads=1",
@@ -344,7 +344,7 @@ test("resumed branch explicitly proves a fresh guest VirGL context before deskto
 test("source and fresh target use exact ordered device topology without migration", async () => {
   const runner = await read("run-inside-container.sh");
   for (const token of [
-    "pc-q35-8.2", "qemu64", "1024M", "tcg,tb-size=128,thread=multi",
+    "pc-q35-8.2,i8042=off", "qemu64", "1024M", "tcg,tb-size=128,thread=multi",
     "2,sockets=1,cores=2,threads=1", "sdl,gl=on,show-cursor=on,full-screen=on",
     "virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
     "ignore_loglevel hibernate.compressor=lzo",

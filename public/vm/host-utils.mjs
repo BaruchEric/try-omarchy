@@ -489,7 +489,7 @@ function validatedHibernationCheckpoint(checkpoint) {
     fail("Runtime hibernation identity is invalid.");
   }
   const expectedProducerMachine = {
-    type: "pc-q35-8.2",
+    type: "pc-q35-8.2,i8042=off",
     memoryMiB: 1024,
     smp: "2,sockets=1,cores=2,threads=1",
     accel: "tcg,tb-size=128,thread=multi",

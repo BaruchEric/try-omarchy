@@ -325,7 +325,10 @@ minutes for the ordered kernel/renderer/nonce resume evidence and fifteen
 minutes for the fresh live guest report. These bounds accommodate measured
 browser slow-TCG restore and desktop startup without treating a timeout as a
 successful cold fallback; browser performance acceptance remains a separate,
-strict latency and frame-cadence decision.
+strict latency and frame-cadence decision. Its exact machine argument is
+`pc-q35-8.2,i8042=off`, leaving the browser-fed Virtio keyboard as the only
+guest keyboard and preventing a legacy PS/2 device from becoming Hyprland's
+primary input after resume.
 
 The checkpoint is captured after the producer has authenticated the unique
 guest report and healthy 1600x900 source frame. QEMU does not replay that serial

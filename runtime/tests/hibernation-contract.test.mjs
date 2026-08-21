@@ -147,7 +147,7 @@ function hibernationProfile({
         version: "8.2.0",
       },
       producerMachine: {
-        type: "pc-q35-8.2",
+        type: "pc-q35-8.2,i8042=off",
         memoryMiB: 1024,
         smp: "2,sockets=1,cores=2,threads=1",
         accel: "tcg,tb-size=128,thread=multi",
@@ -160,7 +160,7 @@ function hibernationProfile({
         ],
       },
       runtimeMachine: {
-        type: "pc-q35-8.2",
+        type: "pc-q35-8.2,i8042=off",
         memoryMiB: 1024,
         smp: "2,sockets=1,cores=2,threads=1",
         accel: "tcg,tb-size=128,thread=multi",
@@ -195,6 +195,8 @@ function hibernationProfile({
 
 function hibernationManifest(profile = hibernationProfile()) {
   const manifest = structuredClone(CANONICAL_PRODUCTION_MANIFEST);
+  manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-machine") + 1] =
+    profile.identity.runtimeMachine.type;
   const display = manifest.qemu.arguments.indexOf("-display");
   manifest.qemu.arguments[display + 1] = profile.identity.runtimeMachine.display;
   const device = manifest.qemu.arguments.indexOf("virtio-vga,max_outputs=1,xres=1600,yres=900");

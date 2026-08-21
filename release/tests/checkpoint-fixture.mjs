@@ -238,7 +238,7 @@ export function hibernationProfile({
         version: "8.2.0",
       },
       producerMachine: {
-        type: "pc-q35-8.2",
+        type: "pc-q35-8.2,i8042=off",
         memoryMiB: 1024,
         smp: "2,sockets=1,cores=2,threads=1",
         accel: "tcg,tb-size=128,thread=multi",
@@ -264,7 +264,7 @@ export function hibernationProfile({
         ],
       },
       runtimeMachine: {
-        type: "pc-q35-8.2",
+        type: "pc-q35-8.2,i8042=off",
         memoryMiB: 1024,
         smp: "2,sockets=1,cores=2,threads=1",
         accel: "tcg,tb-size=128,thread=multi",
@@ -322,6 +322,8 @@ export function hibernationRuntimeManifest(baseManifest, profile) {
     mountPath: profile.derivedInitramfs.mountPath,
   };
   const argumentsList = manifest.qemu.arguments;
+  argumentsList[argumentsList.indexOf("-machine") + 1] =
+    profile.identity.runtimeMachine.type;
   argumentsList.splice(6, 0, "-cpu", profile.identity.runtimeMachine.cpu);
   argumentsList[argumentsList.indexOf("-display") + 1] =
     profile.restoreContract.runtimeDisplay;

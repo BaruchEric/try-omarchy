@@ -251,7 +251,7 @@ export const CANONICAL_CHECKPOINT_ARGUMENTS = deepFreeze([
 ]);
 
 export const CANONICAL_HIBERNATION_PRODUCER_MACHINE = deepFreeze({
-  type: "pc-q35-8.2",
+  type: "pc-q35-8.2,i8042=off",
   memoryMiB: 1024,
   smp: "2,sockets=1,cores=2,threads=1",
   accel: "tcg,tb-size=128,thread=multi",
@@ -1639,6 +1639,20 @@ export function validateProductionManifest(manifest) {
     const canonicalAppend = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-append");
     coldProfile.qemu.arguments[appendIndexes[0] + 1] =
       CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[canonicalAppend + 1];
+
+    const machineIndexes = coldProfile.qemu.arguments.flatMap((value, index) =>
+      value === "-machine" ? [index] : []);
+    if (machineIndexes.length !== 1 ||
+        coldProfile.qemu.arguments[machineIndexes[0] + 1] !== runtimeMachine.type) {
+      exactProfileMismatch(
+        "manifest.qemu.arguments hibernation machine",
+        runtimeMachine.type,
+        machineIndexes.length === 1 ? coldProfile.qemu.arguments[machineIndexes[0] + 1] : machineIndexes,
+      );
+    }
+    const canonicalMachine = CANONICAL_PRODUCTION_MANIFEST.qemu.arguments.indexOf("-machine");
+    coldProfile.qemu.arguments[machineIndexes[0] + 1] =
+      CANONICAL_PRODUCTION_MANIFEST.qemu.arguments[canonicalMachine + 1];
 
     const cpuIndexes = coldProfile.qemu.arguments.flatMap((value, index) => value === "-cpu" ? [index] : []);
     if (cpuIndexes.length !== 1 || coldProfile.qemu.arguments[cpuIndexes[0] + 1] !== runtimeMachine.cpu) {

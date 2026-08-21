@@ -377,7 +377,7 @@ target_kernel_command_line="$base_kernel_command_line omarchy.hibernate_target=1
 
 common_args=(
   -L "$firmware_dir"
-  -machine pc-q35-8.2
+  -machine pc-q35-8.2,i8042=off
   -cpu qemu64
   -m 1024M
   -accel tcg,tb-size=128,thread=multi
@@ -692,7 +692,7 @@ const blockDevices = [
   },
 ];
 const machineCommon = {
-  type: "pc-q35-8.2",
+  type: "pc-q35-8.2,i8042=off",
   cpu: "qemu64",
   memoryMiB: 1024,
   smp: "2,sockets=1,cores=2,threads=1",

@@ -428,6 +428,7 @@ export async function buildRuntimeManifest({
         `hibernation base manifest ${label} is invalid`);
       return indexes[0];
     };
+    exactArgument("-machine", checkpoint.identity.runtimeMachine.type, "machine type");
     exactArgument("-display", checkpoint.restoreContract.runtimeDisplay, "runtime display");
     const displayDeviceIndexes = arguments_.flatMap((value, index) =>
       value === "-device" && arguments_[index + 1] === checkpoint.identity.runtimeMachine.displayDevice ? [index] : []);

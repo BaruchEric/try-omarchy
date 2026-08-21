@@ -94,7 +94,7 @@ const blockDevices = [
   { driveId: "omarchy-hibernate-swap", device: "virtio-blk-pci", serial: "omarchy-resume", role: "resume", format: "qcow2" },
 ];
 const machineCommon = {
-  type: "pc-q35-8.2",
+  type: "pc-q35-8.2,i8042=off",
   cpu: "qemu64",
   memoryMiB: 1024,
   smp: "2,sockets=1,cores=2,threads=1",
@@ -285,7 +285,7 @@ const normalizedTargetCommand = targetCommand.replaceAll("\\,", ",");
 for (const command of [normalizedSourceCommand, normalizedTargetCommand]) {
   for (const token of [
     "SDL_VIDEO_X11_WINDOW_VISUALID=0x3b7",
-    "-machine pc-q35-8.2", "-cpu qemu64", "-m 1024M",
+    "-machine pc-q35-8.2,i8042=off", "-cpu qemu64", "-m 1024M",
     "-accel tcg,tb-size=128,thread=multi", "-smp 2,sockets=1,cores=2,threads=1",
     "-display sdl,gl=on,show-cursor=on,full-screen=on",
     "-device virtio-vga-gl,max_outputs=1,xres=1600,yres=900",
