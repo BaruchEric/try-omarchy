@@ -76,6 +76,7 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
       kind: "exact-signature-v1",
       batchSize: 32,
       partialFlushPromotions: 128,
+      partialFlushWaits: 256,
       tableEntriesPerBatch: 1,
     }),
     cachePolicyMarker:
@@ -83,7 +84,7 @@ const EXPECTED_TCG_EXPERIMENTS = Object.freeze({
       "eviction=disabled gc-pressure=disabled",
     batchPolicyMarker:
       "batch=exact-signature-v1 batch-size=32 partial-flush-promotions=128 " +
-      "dispatchers=one-per-module",
+      "partial-flush-waits=256 dispatchers=one-per-module",
   }),
 });
 const TCG_EXPERIMENT_MARKER_PREFIX =

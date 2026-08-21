@@ -40,6 +40,9 @@ test("exact-signature batch32 applies in production patch order", async (context
   assert.match(source, /EM_JS\(int, instantiate_wasm_batch/);
   assert.match(source, /BATCH_SIZE = 32/);
   assert.match(source, /PARTIAL_FLUSH_AFTER = 128/);
+  assert.match(source, /OMARCHY_WASM_TCG_BATCH_WAIT_EXECUTIONS 256/);
+  assert.match(source, /OMARCHY_WASM_TCG_BATCH_FLUSH_COUNTER/);
+  assert.match(source, /queued Wasm batch candidate is missing/);
   assert.match(source, /generated exact-signature Wasm batch is invalid/);
   assert.match(source, /dispatchers=one-per-module/);
   assert.match(source, /OMARCHY_TCG_MODULE_LAYOUT_INVALID/);
@@ -81,6 +84,7 @@ test("batch32 build and verification plumbing is isolated", async () => {
     assert.match(source, /kind: "exact-signature-v1"/);
     assert.match(source, /batchSize: 32/);
     assert.match(source, /partialFlushPromotions: 128/);
+    assert.match(source, /partialFlushWaits: 256/);
     assert.match(source, /tableEntriesPerBatch: 1/);
   }
 });

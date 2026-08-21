@@ -13,6 +13,8 @@ The only structural change is hot-block batching:
 - expose one dispatcher, consuming one Emscripten table entry per batch;
 - flush the oldest partial group after 128 new promotions so uncommon signatures
   cannot wait forever;
+- flush a currently executing queued group after 256 interpreted executions so
+  a hot partial group cannot starve while waiting for unrelated promotions;
 - retain unmatched or waiting blocks on the existing TCI path;
 - emit batch occupancy, pending-block, compile, and execution telemetry.
 
