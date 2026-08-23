@@ -140,32 +140,8 @@ _qps_assert_safe_root_path() {
 _qps_write_root_marker() {
   local qps_marker=$1
 
-  python3 - "$qps_marker" "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" <<'PY'
-import errno
-import os
-import sys
-
-path, marker = sys.argv[1:]
-payload = (marker + "\n").encode("ascii")
-flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-if hasattr(os, "O_CLOEXEC"):
-    flags |= os.O_CLOEXEC
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-try:
-    descriptor = os.open(path, flags, 0o600)
-except OSError as error:
-    if error.errno == errno.EEXIST:
-        raise SystemExit(17)
-    raise
-try:
-    offset = 0
-    while offset < len(payload):
-        offset += os.write(descriptor, payload[offset:])
-    os.fsync(descriptor)
-finally:
-    os.close(descriptor)
-PY
+  (umask 077; set -o noclobber; printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$qps_marker") \
+    2>/dev/null
 }
 
 _qps_validate_root_marker() {
@@ -192,7 +168,7 @@ _qps_prepare_state_root() {
       _qps_fail 'HOME is unavailable; cannot locate Application Support'
       return 1
     }
-    qps_configured_root="$HOME/Library/Application Support/OmarchyVMHelper/QEMU/v1"
+    qps_configured_root="$HOME/Library/Application Support/Omarchy/QEMU/v1"
   fi
   _qps_assert_safe_root_path "$qps_configured_root" || return 1
 
@@ -214,7 +190,7 @@ _qps_prepare_state_root() {
       :
     else
       qps_marker_status=$?
-      [[ $qps_marker_status == 17 ]] || {
+      [[ -e $qps_marker || -L $qps_marker ]] || {
         _qps_fail "cannot initialize state-root marker: $qps_marker"
         return 1
       }
@@ -245,20 +221,9 @@ _qps_lock_fd_is_open() {
 }
 
 _qps_lock_fd_matches_path() {
-  python3 - "$1" <<'PY'
-import os
-import stat
-import sys
-
-descriptor_info = os.fstat(9)
-path_info = os.lstat(sys.argv[1])
-if not stat.S_ISREG(descriptor_info.st_mode) or not stat.S_ISREG(path_info.st_mode):
-    raise SystemExit(1)
-if descriptor_info.st_uid != os.geteuid() or path_info.st_uid != os.geteuid():
-    raise SystemExit(1)
-if (descriptor_info.st_dev, descriptor_info.st_ino) != (path_info.st_dev, path_info.st_ino):
-    raise SystemExit(1)
-PY
+  local qps_path=$1
+  [[ $(stat -f '%HT:%u:%i' /dev/fd/9 2>/dev/null) == \
+     "Regular File:$(id -u):$(_qps_file_identity "$qps_path" | sed 's/^.*://')" ]]
 }
 
 _qps_acquire_lock() {
@@ -317,45 +282,13 @@ _qps_write_metadata() {
   local qps_source_sha=$3
   local qps_source_bytes=$4
 
-  python3 - \
-    "$qps_path" \
-    "$QEMU_PERSISTENT_STORAGE_SCHEMA" \
-    "$QEMU_PERSISTENT_STORAGE_KIND" \
+  (umask 077; set -o noclobber; printf \
+    '{"bundleIdentity":"%s","kind":"%s","schemaVersion":%s,"sourceRootfs":{"bytes":%s,"sha256":"%s"}}\n' \
     "$qps_identity" \
-    "$qps_source_sha" \
-    "$qps_source_bytes" <<'PY'
-import json
-import os
-import sys
-
-path, schema, kind, identity, source_sha, source_bytes = sys.argv[1:]
-payload = json.dumps(
-    {
-        "bundleIdentity": identity,
-        "kind": kind,
-        "schemaVersion": int(schema),
-        "sourceRootfs": {
-            "bytes": int(source_bytes),
-            "sha256": source_sha,
-        },
-    },
-    sort_keys=True,
-    separators=(",", ":"),
-).encode("ascii") + b"\n"
-flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-if hasattr(os, "O_CLOEXEC"):
-    flags |= os.O_CLOEXEC
-if hasattr(os, "O_NOFOLLOW"):
-    flags |= os.O_NOFOLLOW
-descriptor = os.open(path, flags, 0o600)
-try:
-    offset = 0
-    while offset < len(payload):
-        offset += os.write(descriptor, payload[offset:])
-    os.fsync(descriptor)
-finally:
-    os.close(descriptor)
-PY
+    "$QEMU_PERSISTENT_STORAGE_KIND" \
+    "$QEMU_PERSISTENT_STORAGE_SCHEMA" \
+    "$qps_source_bytes" \
+    "$qps_source_sha" >"$qps_path") 2>/dev/null
 }
 
 _qps_validate_metadata() {
@@ -364,56 +297,48 @@ _qps_validate_metadata() {
   local qps_source_sha=$3
   local qps_source_bytes=$4
 
+  local qps_expected=''
   _qps_assert_private_regular_file "$qps_path" 'persistent-disk metadata' || return 1
-  python3 - \
-    "$qps_path" \
-    "$QEMU_PERSISTENT_STORAGE_SCHEMA" \
-    "$QEMU_PERSISTENT_STORAGE_KIND" \
+  [[ $(_qps_size "$qps_path") -le 16384 ]] || return 1
+  printf -v qps_expected \
+    '{"bundleIdentity":"%s","kind":"%s","schemaVersion":%s,"sourceRootfs":{"bytes":%s,"sha256":"%s"}}' \
     "$qps_identity" \
-    "$qps_source_sha" \
-    "$qps_source_bytes" <<'PY'
-import json
-import sys
-
-path, schema, kind, identity, source_sha, source_bytes = sys.argv[1:]
-expected = {
-    "bundleIdentity": identity,
-    "kind": kind,
-    "schemaVersion": int(schema),
-    "sourceRootfs": {
-        "bytes": int(source_bytes),
-        "sha256": source_sha,
-    },
-}
-try:
-    with open(path, "rb") as handle:
-        raw = handle.read(16 * 1024 + 1)
-    if len(raw) > 16 * 1024:
-        raise ValueError("metadata is oversized")
-    actual = json.loads(raw)
-except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
-    raise SystemExit(f"invalid metadata: {error}")
-if actual != expected:
-    raise SystemExit("metadata does not match the selected guest bundle")
-PY
+    "$QEMU_PERSISTENT_STORAGE_KIND" \
+    "$QEMU_PERSISTENT_STORAGE_SCHEMA" \
+    "$qps_source_bytes" \
+    "$qps_source_sha"
+  [[ $(<"$qps_path") == "$qps_expected" ]] || {
+    _qps_fail 'metadata does not match the selected guest bundle'
+    return 1
+  }
 }
 
-_qps_has_only_store_contents() {
+_qps_has_only_store_contents() (
   local qps_directory=$1
   local qps_allow_missing_disk=$2
 
-  python3 - "$qps_directory" "$qps_allow_missing_disk" <<'PY'
-import os
-import sys
+  local qps_entry=''
+  local qps_has_metadata=0
+  local qps_has_disk=0
+  local qps_count=0
 
-directory, allow_missing_disk = sys.argv[1:]
-actual = set(os.listdir(directory))
-complete = {"metadata.json", "rootfs.ext4"}
-allowed = [complete, {"metadata.json"}] if allow_missing_disk == "1" else [complete]
-if actual not in allowed:
-    raise SystemExit(1)
-PY
-}
+  shopt -s nullglob dotglob
+  for qps_entry in "$qps_directory"/*; do
+    ((qps_count += 1))
+    case ${qps_entry##*/} in
+      metadata.json) qps_has_metadata=1 ;;
+      rootfs.ext4) qps_has_disk=1 ;;
+      *) return 1 ;;
+    esac
+  done
+  shopt -u nullglob dotglob
+  ((qps_has_metadata == 1)) || return 1
+  if [[ $qps_allow_missing_disk == 1 ]]; then
+    ((qps_count == 1 || (qps_count == 2 && qps_has_disk == 1)))
+  else
+    ((qps_count == 2 && qps_has_disk == 1))
+  fi
+)
 
 _qps_validate_store_directory() {
   local qps_directory=$1
@@ -448,20 +373,7 @@ _qps_validate_store_directory() {
 }
 
 _qps_fsync() {
-  python3 - "$@" <<'PY'
-import os
-import sys
-
-for path in sys.argv[1:]:
-    flags = os.O_RDONLY
-    if os.path.isdir(path) and hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    descriptor = os.open(path, flags)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-PY
+  /bin/sync
 }
 
 _qps_clone_disk() {

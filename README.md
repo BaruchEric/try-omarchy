@@ -52,43 +52,58 @@ The loopback process only verifies and serves local artifacts with the required
 COOP/COEP headers; VM execution, display, input, and temporary writes remain on
 the client.
 
-## Native Mac VM
+## Native Mac app
 
-The native runtime requires Apple Silicon, macOS 15 or newer, and the exact
-Homebrew build dependencies checked by the preparation script. Build and sign
-the pinned QEMU/VirGL runtime and the **Omarchy Quattro** launcher app once:
+The downloadable **Omarchy Quattro** app is a self-contained Apple Silicon
+virtual Mac for macOS 15 or newer. Open its DMG, drag the app to Applications,
+and launch it like any other Mac app. It does not require Homebrew, Python,
+QEMU, a container runtime, or an existing Omarchy installation.
+
+The first launch expands the signed factory image, then boots directly into
+Quattro's real owner setup. Keyboard, account, hostname, timezone, packages,
+files, and every later setting persist across app relaunches. A small native
+startup window remains visible while the first image is prepared.
+
+Developers need the exact Homebrew build dependencies checked by the
+preparation script. Build the pinned runtime and self-contained app:
 
 ```sh
 npm run omarchy:native:prepare
 ```
 
-Launch the persistent guest:
+Launch the built app:
 
 ```sh
 npm run omarchy:native
 ```
 
-The guest cold-boots on every launch. Its verified root disk persists, so files,
-installed software, and settings survive closing and reopening the app; there
-is no claim of instant memory-snapshot resume. For a throwaway boot or a reset
-to the current verified image:
+Create the standard drag-to-Applications DMG:
+
+```sh
+npm run omarchy:native:package
+```
+
+The guest cold-boots on every launch. Its manifest-keyed, sparse 24 GiB root
+disk persists, so files, installed software, and settings survive closing and
+reopening the app; there is no claim of instant memory-snapshot resume. The
+repo-local developer launcher also supports a throwaway boot or reset:
 
 ```sh
 npm run omarchy:native:ephemeral
 npm run omarchy:native:reset
 ```
 
-To evaluate an untouched factory-state image, build the separate
-`guest/dist-aarch64-unprovisioned` bundle and run:
+The distributed app uses `guest/dist-aarch64-unprovisioned` by default. The
+repo-local comparison command remains available and intentionally disposable:
 
 ```sh
 npm run omarchy:native:factory
 ```
 
-That command always uses a disposable disk and starts Quattro's own first-boot
-owner setup. It has no preset account, theme, demo menu, welcome notification,
-or completed setup markers. It is still a normal cold boot—not a restored RAM
-snapshot—and it does not modify the normal persistent VM.
+The app's copy starts Quattro's own first-boot owner setup with no preset
+account, theme, demo menu, welcome notification, or completed setup markers.
+Unlike the comparison command, the app keeps the completed setup and all later
+changes.
 
 The Cocoa window starts fullscreen and can switch to a freely resizable window
 with Control-Option-F. The patched display path reports backing-pixel size,

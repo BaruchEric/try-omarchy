@@ -1,7 +1,7 @@
 # Native Mac VM
 
-This is Try Omarchy's accelerated Apple Silicon runtime. It boots the real
-ARM64 Quattro guest from `guest/dist-aarch64` in QEMU with:
+This is Try Omarchy's downloadable Apple Silicon app. It boots the real
+unprovisioned ARM64 Quattro guest in a self-contained QEMU runtime with:
 
 - HVF hardware virtualization and the host ARM CPU;
 - Virtio GPU rendering through VirGL, ANGLE, and Metal;
@@ -10,7 +10,8 @@ ARM64 Quattro guest from `guest/dist-aarch64` in QEMU with:
 - an unprivileged SLIRP network behind a Virtio Ethernet adapter;
 - SDL speaker and microphone I/O behind a duplex virtual HDA device;
 - live host audio-device mirroring in Omarchy's own PipeWire panel;
-- a manifest-keyed persistent APFS disk clone; and
+- a compressed signed factory image and manifest-keyed persistent APFS clone;
+- a normal drag-to-Applications DMG with a native startup state; and
 - a signed app that owns microphone permission and maps focused Mac Command to
   guest Super.
 
@@ -18,27 +19,48 @@ This runtime is distinct from the fully client-side x86_64 QEMU/WebAssembly
 Browser VM. It is a local Mac app, optimized for the closest practical native
 Omarchy experience.
 
-## Requirements
+## End-user requirements
 
 - Apple Silicon (`arm64`)
 - macOS 15 or newer
+- enough free space for the 1.1 GiB download and roughly 6 GiB initial guest
+  data; the 24 GiB virtual disk is sparse and grows as Omarchy uses it
+
+The installed app has no Homebrew, Python, QEMU, Docker, or command-line-tools
+dependency. QEMU, VirGL/ANGLE/Metal, SDL, SLIRP, GLib, Pixman, Zstandard, and
+their non-system dynamic-library closure are signed inside the app.
+
+## Install and first launch
+
+Open the DMG, drag **Omarchy Quattro** to Applications, and open it. The first
+launch shows a small preparation window while the signed compressed factory
+image is expanded and verified. Omarchy then presents its own owner setup for
+keyboard, account, hostname, timezone, and the rest of the normal setup flow.
+
+Closing the QEMU window ends the current cold-boot session. Opening the app
+again boots the same disk: the owner account, settings, files, installed
+packages, and completed setup all remain.
+
+## Developer requirements
+
 - Homebrew with the exact `libslirp` 4.9.2 and SDL2 2.32.10 development files,
-  plus GLib and Pixman
-- a complete verified `guest/dist-aarch64` bundle
+  plus GLib, Pixman, and Zstandard
+- a complete verified `guest/dist-aarch64-unprovisioned` bundle
 
 The preparation script sets `HOMEBREW_NO_AUTO_UPDATE=1`. It checks dependencies
 but does not tap, install, link, upgrade, or auto-update Homebrew formulae.
 
 ## Prepare and run
 
-Build the pinned QEMU/VirGL stack, apply the dynamic-display patch, stage its
-runtime, build the Swift launcher, and ad-hoc sign both pieces:
+Build the pinned QEMU/VirGL stack, apply the patches, bundle every non-system
+runtime dependency and the compressed factory guest, build the Swift launcher,
+and ad-hoc sign the local app:
 
 ```sh
 npm run omarchy:native:prepare
 ```
 
-Launch the normal persistent VM:
+Launch it:
 
 ```sh
 npm run omarchy:native
@@ -66,8 +88,26 @@ CoreAudio hardware appears, disappears, or changes, and choosing a route takes
 effect without restarting Omarchy. Selections retain stable CoreAudio identities
 and survive app relaunches and guest-storage resets.
 
-For an intentionally throwaway disk or a clean clone of the current verified
-ARM image:
+Create a compressed DMG with an Applications shortcut:
+
+```sh
+npm run omarchy:native:package
+```
+
+For a public build, pass a Developer ID Application identity and a configured
+`notarytool` keychain profile directly to `build-app.sh`:
+
+```sh
+native/macos/build-app.sh \
+  --sign-identity 'Developer ID Application: Example (TEAMID)' \
+  --notarize-profile omarchy-release
+```
+
+The script signs nested libraries and executables inside-out with the hardened
+runtime, notarizes and staples the app, then notarizes and staples the DMG.
+
+The repo-local developer launcher still supports an intentionally throwaway
+disk or reset:
 
 ```sh
 npm run omarchy:native:ephemeral
@@ -83,13 +123,11 @@ For the separate factory-state comparison image:
 npm run omarchy:native:factory
 ```
 
-This command requires `guest/dist-aarch64-unprovisioned` and always launches
-it ephemerally. The bundle contains the real pinned Quattro tree and its own
-first-boot owner provisioner, but no preset user, selected theme, demo menu,
-welcome notification, or completed setup markers. Closing it discards choices
-made during that comparison; the normal persistent VM is unaffected. Its 6 GiB
-source disk is sparsely extended to 24 GiB only after the disposable clone is
-created, and ext4 grows during boot so setup and the updater have working room.
+That comparison command remains ephemeral. The distributed app uses the same
+factory artifact persistently: it stores the completed owner setup and all
+later work. Its 6 GiB verified source is APFS-cloned and sparsely extended to
+24 GiB before the first boot, so setup and the updater have working room without
+making the download or initial physical allocation 24 GiB.
 
 ## Boot and persistence model
 
@@ -98,18 +136,19 @@ restore a memory snapshot, so it must not be described as sub-second resume.
 Performance after boot comes from executing ARM code through HVF and rendering
 through Metal rather than emulating x86 instructions.
 
-By default, the launcher APFS-clones the verified `rootfs.ext4` on first use and
-then reopens that clone on later runs. Guest files, settings, packages, and user
-work therefore survive close/reopen. Persistent data lives under:
+The app ships `rootfs.ext4.zst`, not the 6 GiB raw disk. On first use it expands
+and SHA-256-verifies one private immutable source, APFS-clones that source into
+a 24 GiB sparse workspace, and reopens the workspace on later runs. Guest
+files, settings, packages, and user work therefore survive close/reopen.
+Persistent data lives under:
 
 ```text
-~/Library/Application Support/OmarchyVMHelper/QEMU/v1/disks/<manifest-sha256>
+~/Library/Application Support/Omarchy/QEMU/v1/disks/<manifest-sha256>
 ```
 
-The normal persistent source image is 6 GiB logically, but an APFS clone
-normally consumes little additional physical space until blocks change. The
-factory source also stays 6 GiB and expands only its ephemeral working clone.
-The directory identity binds the
+The immutable source is 6 GiB logically. Its APFS clone normally shares those
+blocks until the guest changes them; sparse expansion does not allocate 24 GiB
+up front. The directory identity binds the
 exact `guest-manifest.json` digest, source-disk digest and size, and storage
 schema. A changed guest bundle receives a separate disk instead of silently
 migrating an older one.
@@ -197,8 +236,9 @@ than leaving an unmodified Command path behind.
 VirGL/ANGLE patches plus this repo's Cocoa dynamic-display and direction-aware
 SDL audio patches, and validates the resulting capabilities. QEMU is
 ARM64/HVF-only and includes Cocoa/VirGL, SLIRP, and SDL audio. VirGL, ANGLE, and
-libepoxy dylibs are isolated in the staged runtime; the checked Homebrew core
-dependencies remain locally linked.
+libepoxy dylibs are isolated in the staged developer runtime. The app packaging
+step copies and relocates the complete non-system dependency closure, so the
+installed app has no Homebrew paths.
 
 All downloaded archives and build wheels are immutable and SHA-256 pinned.
 They are copied into private scratch space and verified before extraction.
@@ -207,15 +247,11 @@ is atomic. An optional local archive cache can be passed directly to the build
 script for an offline replay; cache contents are still re-verified.
 
 `build-app.sh` compiles the Swift launcher, creates
-`native/macos/.build/Omarchy Quattro.app`, installs its Info.plist, and ad-hoc
-signs it with the microphone entitlement. Runtime preparation separately signs
-QEMU with the Hypervisor and audio-input entitlements. Both signatures are
-strictly verified before launch.
-
-These are repo-local developer artifacts, not a notarized downloadable app.
-Ad-hoc signing is appropriate for this local experiment but a distributed build
-should use a stable Developer ID, hardened runtime, dependency bundling, and
-notarization.
+`native/macos/.build/Omarchy Quattro.app`, embeds the launch contract, icon,
+factory guest, QEMU runtime, decoder, scripts, and full non-system dylib closure,
+then signs nested code inside-out. Local builds use ad-hoc signing. Release
+builds support a stable Developer ID, hardened runtime, notarization, stapling,
+and a compressed DMG.
 
 ## Verification
 
@@ -241,7 +277,7 @@ the guest and runtime before creating the QEMU process.
 
 ## Troubleshooting
 
-- If the launcher reports a missing staged runtime or app, run
+- If a developer build reports a missing staged runtime or app, run
   `npm run omarchy:native:prepare`.
 - If Command shortcuts reach macOS, grant Accessibility access to **Omarchy
   Quattro**, quit the VM, and run `npm run omarchy:native` again.

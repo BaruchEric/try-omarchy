@@ -69,6 +69,14 @@ guest_dir=$(cd "$guest_dir" && pwd -P)
   echo "build-app: dependency bundler is missing or unsafe" >&2
   exit 1
 }
+[[ -f $native_dir/Omarchy.icns && ! -L $native_dir/Omarchy.icns ]] || {
+  echo "build-app: Omarchy.icns is missing or unsafe" >&2
+  exit 1
+}
+if [[ -n $notarize_profile && $sign_identity == - ]]; then
+  echo "build-app: notarization requires --sign-identity with a Developer ID Application identity" >&2
+  exit 1
+fi
 [[ -n $zstd_bin && -f $zstd_bin && -x $zstd_bin ]] || {
   echo "build-app: zstd is required to create the self-contained app" >&2
   exit 1
@@ -88,6 +96,7 @@ mkdir -p \
   "$contents/Resources/scripts"
 install -m 0755 "$helper" "$contents/MacOS/omarchy-vm-helper"
 install -m 0644 "$native_dir/Info.plist" "$contents/Info.plist"
+install -m 0644 "$native_dir/Omarchy.icns" "$contents/Resources/Omarchy.icns"
 ditto "$runtime_source" "$contents/Resources/runtime"
 install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$native_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"
@@ -126,6 +135,19 @@ codesign "${sign_options[@]}" \
 codesign "${sign_options[@]}" \
   --entitlements "$native_dir/omarchy-vm-helper.entitlements" \
   "$contents/MacOS/omarchy-vm-helper"
+
+launch_record=$(OMARCHY_QEMU_GPU_INSPECT_ONLY=1 \
+  "$contents/Resources/scripts/run-qemu-gpu.sh")
+IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes \
+  compressed_disk_bytes working_disk_bytes kernel_command_line <<<"$launch_record"
+launch_configuration="$contents/Resources/guest/launch.plist"
+/usr/bin/plutil -create xml1 "$launch_configuration"
+/usr/bin/plutil -insert bundleIdentity -string "$bundle_identity" "$launch_configuration"
+/usr/bin/plutil -insert sourceDiskSHA256 -string "$source_disk_sha" "$launch_configuration"
+/usr/bin/plutil -insert sourceDiskBytes -integer "$source_disk_bytes" "$launch_configuration"
+/usr/bin/plutil -insert compressedDiskBytes -integer "$compressed_disk_bytes" "$launch_configuration"
+/usr/bin/plutil -insert workingDiskBytes -integer "$working_disk_bytes" "$launch_configuration"
+/usr/bin/plutil -insert kernelCommandLine -string "$kernel_command_line" "$launch_configuration"
 
 codesign "${sign_options[@]}" \
   --entitlements "$native_dir/omarchy-vm-helper.entitlements" \

@@ -10,6 +10,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
+    private let launchStatusWindow = LaunchStatusWindow()
 
     private var lifecycle = VMRunLifecycle()
     private var childRunning = false
@@ -34,6 +35,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        launchStatusWindow.show()
         do {
             try launch(arguments: initialArguments)
         } catch {
@@ -73,7 +75,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         try supervisor.start(
             executableURL: launcherURL,
             arguments: arguments,
-            environment: configuration.environment
+            environment: configuration.environment,
+            launchEvent: { [weak self] event in
+                if event == .virtualMachineStarting {
+                    self?.launchStatusWindow.dismiss()
+                }
+            }
         ) { [weak self] status in
             self?.childDidExit(status: status)
         }
@@ -85,15 +92,31 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         childRunning = false
 
         lifecycle.childExited()
+        launchStatusWindow.dismiss()
         if applicationTerminationPending {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
+            if status != 0 {
+                let alert = NSAlert()
+                alert.alertStyle = .critical
+                alert.messageText = "Omarchy couldn’t start"
+                alert.informativeText = "The app’s virtual machine stopped during startup. Reinstall the latest Omarchy app and try again."
+                alert.addButton(withTitle: "Close")
+                alert.runModal()
+            }
             finish(status: status)
         }
     }
 
     private func failLaunch(_ error: Error) {
         fputs("omarchy-vm-helper: \(error.localizedDescription)\n", stderr)
+        launchStatusWindow.dismiss()
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Omarchy couldn’t start"
+        alert.informativeText = error.localizedDescription
+        alert.addButton(withTitle: "Close")
+        alert.runModal()
         finish(status: 1)
     }
 

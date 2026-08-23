@@ -169,22 +169,44 @@ enum MicrophonePreflight {
 }
 
 final class QEMUGPUProcessSupervisor: @unchecked Sendable {
+    enum LaunchEvent: Equatable {
+        case virtualMachineStarting
+    }
+
     private let lock = NSLock()
     private var child: Process?
+    private var errorPipe: Pipe?
+    private var errorBuffer = ""
+    private var didReportVirtualMachineStart = false
 
     func start(
         executableURL: URL,
         arguments: [String],
         environment: [String: String],
+        launchEvent: @escaping @MainActor @Sendable (LaunchEvent) -> Void = { _ in },
         completion: @escaping @MainActor @Sendable (Int32) -> Void
     ) throws {
         let process = Process()
+        let pipe = Pipe()
         process.executableURL = executableURL
         process.arguments = arguments
         process.environment = environment
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
-        process.standardError = FileHandle.standardError
+        process.standardError = pipe
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            try? FileHandle.standardError.write(contentsOf: data)
+            if self?.recordStandardError(data) == true {
+                DispatchQueue.main.async {
+                    launchEvent(.virtualMachineStarting)
+                }
+            }
+        }
         process.terminationHandler = { [weak self] process in
             self?.clear(process)
             let status = Self.status(for: process)
@@ -202,6 +224,9 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             throw HelperError.io("QEMU launcher process is already running")
         }
         child = process
+        errorPipe = pipe
+        errorBuffer = ""
+        didReportVirtualMachineStart = false
         lock.unlock()
 
         do {
@@ -227,8 +252,25 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
 
     private func clear(_ process: Process) {
         lock.lock()
-        if child === process { child = nil }
+        if child === process {
+            child = nil
+            errorPipe?.fileHandleForReading.readabilityHandler = nil
+            errorPipe = nil
+        }
         lock.unlock()
+    }
+
+    private func recordStandardError(_ data: Data) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        errorBuffer += String(decoding: data, as: UTF8.self)
+        if errorBuffer.count > 4_096 {
+            errorBuffer = String(errorBuffer.suffix(4_096))
+        }
+        guard !didReportVirtualMachineStart,
+              errorBuffer.contains("[qemu-gpu] Starting") else { return false }
+        didReportVirtualMachineStart = true
+        return true
     }
 
     private static func status(for process: Process) -> Int32 {

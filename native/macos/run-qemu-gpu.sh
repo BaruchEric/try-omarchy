@@ -29,6 +29,7 @@ esac
 script_dir=$(cd "$(dirname "$0")" && pwd -P)
 resources_dir=$(cd "$script_dir/.." && pwd -P)
 contents_dir=$(cd "$resources_dir/.." && pwd -P)
+app_bundle=$(cd "$contents_dir/.." && pwd -P)
 guest_input=${1:-"$resources_dir/guest"}
 qemu_bin="$resources_dir/runtime/bin/qemu-system-aarch64"
 input_bridge="$contents_dir/MacOS/omarchy-vm-helper"
@@ -45,9 +46,15 @@ source "$storage_library"
 [[ -d $guest_input && ! -L $guest_input ]] || fail "ARM guest directory is missing or unsafe: $guest_input"
 guest_dir=$(cd "$guest_input" && pwd -P)
 
-for command in codesign file getconf id mktemp ps python3 stat sysctl; do
+for command in codesign file getconf id mktemp ps stat sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
+
+if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} != 1 ]]; then
+  codesign --verify --deep --strict "$app_bundle" >/dev/null 2>&1 || {
+    fail "the installed app is damaged or has an invalid code signature"
+  }
+fi
 
 [[ -f $qemu_bin && -x $qemu_bin ]] || {
   fail "missing bundled GPU QEMU runtime at $qemu_bin"
@@ -131,9 +138,28 @@ if [[ $gpu_help == *'romfile=<str>'* ]]; then
   gpu_device+=',romfile='
 fi
 
-# Emit one trusted tab-delimited record on stdout. All validation failures go
-# to stderr so command substitution cannot accidentally become launch data.
-bundle_validation=$(python3 - "$guest_dir" <<'PY'
+# Release apps carry the output of this strict validator in their signed
+# resources, so a clean Mac does not need Python. Repo-local development
+# bundles can still validate directly when no launch configuration is present.
+launch_configuration="$guest_dir/launch.plist"
+if [[ -f $launch_configuration && ! -L $launch_configuration ]]; then
+  plist_read() {
+    /usr/libexec/PlistBuddy -c "Print :$1" "$launch_configuration" 2>/dev/null
+  }
+  bundle_validation=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
+    "$(plist_read bundleIdentity)" \
+    "$(plist_read sourceDiskSHA256)" \
+    "$(plist_read sourceDiskBytes)" \
+    "$(plist_read compressedDiskBytes)" \
+    "$(plist_read workingDiskBytes)" \
+    "$(plist_read kernelCommandLine)")
+else
+  command -v python3 >/dev/null 2>&1 || {
+    fail "bundled launch configuration is missing and Python is unavailable for development validation"
+  }
+  # Emit one trusted tab-delimited record on stdout. All validation failures
+  # go to stderr so command substitution cannot become launch data.
+  bundle_validation=$(python3 - "$guest_dir" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -551,7 +577,8 @@ sys.stdout.write(
     )
 )
 PY
-)
+  )
+fi
 IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_disk_bytes \
   expanded_disk_bytes kernel_command_line \
   <<<"$bundle_validation"
@@ -562,6 +589,14 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
+case ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} in
+  1)
+    printf '%s\n' "$bundle_validation"
+    exit 0
+    ;;
+  0) ;;
+  *) fail "OMARCHY_QEMU_GPU_INSPECT_ONLY must be 0 or 1" ;;
+esac
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
