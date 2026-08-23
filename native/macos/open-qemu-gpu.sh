@@ -76,9 +76,6 @@ microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescripti
 exec /usr/bin/open \
   -n \
   -W \
-  --stdin /dev/stdin \
-  --stdout /dev/stdout \
-  --stderr /dev/stderr \
   "$app" \
   --args \
   --run-qemu \
