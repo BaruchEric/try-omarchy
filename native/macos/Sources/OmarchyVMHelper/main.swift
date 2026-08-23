@@ -55,7 +55,12 @@ do {
         )
         for signalNumber in [SIGINT, SIGTERM] {
             Darwin.signal(signalNumber, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+            // `run()` blocks while reading the virtio channel, so signal
+            // delivery must not depend on the main queue being serviced.
+            let source = DispatchSource.makeSignalSource(
+                signal: signalNumber,
+                queue: .global(qos: .userInitiated)
+            )
             source.setEventHandler { bridge.stop() }
             source.resume()
             terminationSignalSources.append(source)

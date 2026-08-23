@@ -171,6 +171,7 @@ final class NativeAudioBridge {
     private let routeStore: NativeAudioRouteFileStore
     private let stateQueue = DispatchQueue(label: "dev.tryomarchy.native.audio-bridge-state")
     private let writeQueue = DispatchQueue(label: "dev.tryomarchy.native.audio-bridge-writes")
+    private let stopLock = NSLock()
     private var monitor: CoreAudioDeviceChangeMonitor?
     private var stopped = false
 
@@ -201,7 +202,7 @@ final class NativeAudioBridge {
     func run() throws {
         try publishEffectiveRoutesAndCatalog()
         var line = Data()
-        while !stopped {
+        while true {
             var byte: UInt8 = 0
             let count = Darwin.read(descriptor, &byte, 1)
             if count == 1 {
@@ -223,8 +224,13 @@ final class NativeAudioBridge {
     }
 
     func stop() {
-        guard !stopped else { return }
+        stopLock.lock()
+        guard !stopped else {
+            stopLock.unlock()
+            return
+        }
         stopped = true
+        stopLock.unlock()
         monitor = nil
         Darwin.shutdown(descriptor, SHUT_RDWR)
         Darwin.close(descriptor)
@@ -265,7 +271,7 @@ final class NativeAudioBridge {
 
     private func catalogDidChange() {
         stateQueue.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.hasStopped() else { return }
             do {
                 try self.publishEffectiveRoutesAndCatalog()
             } catch {
@@ -273,6 +279,12 @@ final class NativeAudioBridge {
                 self.stop()
             }
         }
+    }
+
+    private func hasStopped() -> Bool {
+        stopLock.lock()
+        defer { stopLock.unlock() }
+        return stopped
     }
 
     private func publishEffectiveRoutesAndCatalog() throws {
