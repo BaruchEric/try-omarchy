@@ -1903,7 +1903,6 @@ export class OmarchyProductionWorkerHost {
           artifactManifestSha256,
           runtimeManifestSha256: runtimeManifestArtifact.sha256,
           guestDescriptorSha256: guestDescriptorArtifact.sha256,
-          hibernateDescriptorSha256: null,
         }),
         clock: this.#scope.performance,
         cryptoScope: this.#scope.crypto,

@@ -1,9 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 
 import { evaluateBrowserPerformanceTrace } from "../../proofs/browser-performance/gate.mjs";
@@ -25,7 +21,6 @@ function identity() {
     artifactManifestSha256: sha256("artifact-manifest"),
     runtimeManifestSha256: sha256("runtime-manifest"),
     guestDescriptorSha256: sha256("guest-manifest"),
-    hibernateDescriptorSha256: null,
   });
 }
 

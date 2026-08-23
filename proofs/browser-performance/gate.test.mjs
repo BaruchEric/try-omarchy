@@ -118,7 +118,6 @@ function makeTrace({
       artifactManifestSha256: sha256("artifact-manifest"),
       runtimeManifestSha256: sha256("runtime-manifest"),
       guestDescriptorSha256: sha256("guest-descriptor"),
-      hibernateDescriptorSha256: sha256("hibernate-descriptor"),
     },
     clock: "performance.now",
     telemetry: {

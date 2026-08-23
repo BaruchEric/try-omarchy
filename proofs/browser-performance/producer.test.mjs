@@ -20,7 +20,6 @@ function identity() {
     artifactManifestSha256: sha256("artifact-manifest"),
     runtimeManifestSha256: sha256("runtime-manifest"),
     guestDescriptorSha256: sha256("guest-descriptor"),
-    hibernateDescriptorSha256: sha256("hibernate-descriptor"),
   };
 }
 
@@ -326,7 +325,7 @@ test("public guestframes, present diagnostics, and Worker queue acknowledgements
   producer.observeExposedRuntimeMessage({
     type: "serial",
     stream: "stderr",
-    line: "OMARCHY_RUNTIME_DIAGNOSTIC webgl2-frame-presented sequence=1 monotonic-ms=1.000 width=1600 height=900 running=1",
+    line: "OMARCHY_RUNTIME_DIAGNOSTIC sdl-frame-presented sequence=1 monotonic-ms=1.000 width=1600 height=900 running=1",
   });
   producer.observeExposedRuntimeMessage({
     type: "runtimediagnostic",
@@ -349,8 +348,7 @@ test("public guestframes, present diagnostics, and Worker queue acknowledgements
         publicGuestFrames: 2,
         publicInputAcceptances: 1,
         runtimeDiagnostics: 2,
-        webglPresentDiagnostics: 1,
-        sdlPresentDiagnostics: 0,
+        sdlPresentDiagnostics: 1,
         sdlInputProcessedDiagnostics: 1,
         internalScanoutAvailable: false,
         inputDeliveryAcknowledgementAvailable: false,

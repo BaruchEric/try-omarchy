@@ -46,13 +46,11 @@ function validIdentity(identity) {
     "artifactManifestSha256",
     "runtimeManifestSha256",
     "guestDescriptorSha256",
-    "hibernateDescriptorSha256",
   ]) &&
     nonZeroSha256(identity.artifactManifestSha256) &&
     nonZeroSha256(identity.runtimeManifestSha256) &&
-    [identity.guestDescriptorSha256, identity.hibernateDescriptorSha256].every(
-      (value) => value === null || nonZeroSha256(value),
-    );
+    (identity.guestDescriptorSha256 === null ||
+      nonZeroSha256(identity.guestDescriptorSha256));
 }
 
 function deepFreeze(value) {
@@ -168,7 +166,6 @@ export class ExposedRuntimeTelemetryAudit {
     publicGuestFrames: 0,
     publicInputAcceptances: 0,
     runtimeDiagnostics: 0,
-    webglPresentDiagnostics: 0,
     sdlPresentDiagnostics: 0,
     sdlInputProcessedDiagnostics: 0,
   };
@@ -187,9 +184,6 @@ export class ExposedRuntimeTelemetryAudit {
     const line = diagnosticLine(message);
     if (line !== null) {
       this.#counts.runtimeDiagnostics += 1;
-      if (/\bwebgl2-frame-presented\b/.test(line)) {
-        this.#counts.webglPresentDiagnostics += 1;
-      }
       if (/\bsdl-frame-presented\b/.test(line)) {
         this.#counts.sdlPresentDiagnostics += 1;
       }
@@ -207,7 +201,7 @@ export class ExposedRuntimeTelemetryAudit {
       internalScanoutAvailable: false,
       inputDeliveryAcknowledgementAvailable: false,
       reasons: [
-        "Public guestframe and SDL/WebGL present diagnostics expose no uncapped virtio-gpu scanout epoch or fixed content sample.",
+        "Public guestframe and SDL present diagnostics expose no uncapped virtio-gpu scanout epoch or fixed content sample.",
         "Public inputaccepted and SDL processed diagnostics stop before the virtio-input ring or an authenticated guest acknowledgement.",
       ],
     });

@@ -159,6 +159,5 @@ test("runtime source tree contains no alternate browser runtime profiles", async
   ]);
   const joined = [makefile, builder, packager, manifestBuilder].join("\n");
   assert.doesNotMatch(joined, /virgl|webgl2|hibernate|tcg[_-](?:threshold|experiment)|vcpu[_-]experiment/i);
-  assert.match(worker, /hibernateDescriptorSha256: null/);
   assert.doesNotMatch(worker, /hibernate-manifest|hibernate-root-overlay|omarchy-hibernate/i);
 });

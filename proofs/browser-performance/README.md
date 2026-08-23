@@ -26,7 +26,7 @@ target cannot be lowered below 24.
 `scanoutEpoch` is an uncapped internal QEMU virtio-gpu scanout/damage epoch. It
 must advance only when a guest SET_SCANOUT/resource-flush/damage operation
 produces a new framebuffer-content candidate. It is not an SDL present count,
-WebGL swap count, animation-frame callback, or public `guestframe.sequence`.
+browser canvas paint, animation-frame callback, or public `guestframe.sequence`.
 
 Several host presents may carry the same `scanoutEpoch`. They are retained in
 the raw trace and reported as `duplicatePresents`, but count zero toward FPS.
@@ -93,14 +93,13 @@ Each trace carries this exact artifact identity:
 {
   "artifactManifestSha256": "<64 lowercase hex characters>",
   "runtimeManifestSha256": "<64 lowercase hex characters>",
-  "guestDescriptorSha256": "<64 lowercase hex characters or null>",
-  "hibernateDescriptorSha256": "<64 lowercase hex characters or null>"
+  "guestDescriptorSha256": "<64 lowercase hex characters or null>"
 }
 ```
 
-The first two digests are mandatory and non-zero. Guest and hibernate
-descriptor digests are mandatory when the runner knows them; otherwise their
-fields remain explicitly `null`. The gate compares all four fields with the
+The first two digests are mandatory and non-zero. The guest descriptor digest
+is mandatory when the runner knows it; otherwise its field remains explicitly
+`null`. The gate compares all three fields with the
 independently supplied expected identity. Missing, malformed, or mismatched
 identity fails closed, preventing a passing trace from another build from
 being replayed against the candidate. Evidence preserves the trace identity at
@@ -173,7 +172,7 @@ const { trace, traceSha256 } = await producer.exportCapture();
 `Uint32Array` of 24-bit RGB values captured at the uncapped QEMU
 virtio-gpu damage boundary. A present is exactly
 `{ sourceSequence, candidateId }`. The producer clones samples immediately,
-encodes each 24-bit value as R, G, B in the existing 32×18 GL-readback order,
+encodes each 24-bit value as R, G, B in the fixed 32×18 row-major order,
 computes SHA-256 and pixel deltas itself, mints `scanoutEpoch` and
 `presentSequence`, and freezes an epoch's `latestGuestInputSequence` before
 any presents. Therefore a later input acknowledgement cannot mutate a
@@ -203,8 +202,8 @@ deliberately never converts it into trace events:
 - public `guestframe` is sampled at about 250 ms and contains a public
   sequence, dimensions, sample count, and non-black count, but no internal
   scanout epoch, content sample/digest, exact delta, or causal input sequence;
-- `webgl2-frame-presented` and `sdl-frame-presented` diagnostics count host
-  presentation and are bounded/sampled diagnostics, not guest damage epochs;
+- `sdl-frame-presented` diagnostics count host presentation and are
+  bounded/sampled diagnostics, not guest damage epochs;
 - public `inputaccepted` means the production Worker accepted/queued the
   event; `input-key-processed` is at the SDL handler and is also bounded. Both
   precede the virtio-input event ring.
@@ -220,13 +219,12 @@ unmodified isolated full-guest runtime.
 No runtime files are changed by this proof directory. The minimum follow-up to
 make the real isolated guest produce a trace is:
 
-1. In QEMU's `hw/display/virtio-gpu-virgl.c`, mint a monotonically increasing
-   candidate ID only for a matched `virgl_cmd_resource_flush`/SET_SCANOUT
-   update before `dpy_gl_update`. Propagate that ID to `ui/sdl2-gl.c`.
-   `sdl2_gl_scanout_flush` may then use the existing 32×18 readback in
-   `runtime/patches/qemu-wasm-sdl-webgl-frame-proof.patch` for every armed
-   candidate, call the private producer `candidate` hook before commit, and
-   call `present` after `emscripten_webgl_commit_frame`. A redraw with no new
+1. In QEMU's software virtio-gpu path, mint a monotonically increasing
+   candidate ID only when `hw/display/virtio-gpu.c::virtio_gpu_resource_flush`
+   updates the active scanout before `dpy_gfx_update`. Propagate that ID to
+   `ui/sdl2-2d.c::sdl2_2d_update`, capture the fixed 32×18 sample from its
+   `DisplaySurface`, call the private producer `candidate` hook before
+   `SDL_RenderPresent`, and call `present` afterward. A redraw with no new
    armed candidate may only present the prior ID; it must not mint an epoch.
 2. In QEMU's `hw/input/virtio-input.c::virtio_input_send`, acknowledge a bound
    input receipt only after all events through `SYN_REPORT` have obtained
@@ -242,11 +240,7 @@ make the real isolated guest produce a trace is:
    Worker/host message rather than relabeling existing public messages.
 
 Existing diagnostic formats identify why none can substitute for those
-hooks. `runtime/patches/qemu-wasm-sdl-webgl-frame-proof.patch` emits
-`webgl2-frame-presented sequence=… monotonic-ms=… width=… height=… running=…`
-only for the first 16/powers of two, plus five-second
-`webgl2-present-cadence` aggregates. The 2D path in
-`runtime/patches/qemu-wasm-runstate-guard.patch` similarly emits
+hooks. `runtime/patches/qemu-wasm-runstate-guard.patch` emits
 `sdl-frame-presented sequence=…` for the first 16/powers of two, while the
 same patch emits `input-key-queued` and `input-key-processed` at the SDL
 queue/handler. `runtime/web/production-worker.mjs` posts ordinary

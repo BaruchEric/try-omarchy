@@ -59,23 +59,21 @@ function validIdentity(identity) {
     "artifactManifestSha256",
     "runtimeManifestSha256",
     "guestDescriptorSha256",
-    "hibernateDescriptorSha256",
   ]) &&
     SHA256.test(identity.artifactManifestSha256) &&
     !/^0{64}$/.test(identity.artifactManifestSha256) &&
     SHA256.test(identity.runtimeManifestSha256) &&
     !/^0{64}$/.test(identity.runtimeManifestSha256) &&
-    [identity.guestDescriptorSha256, identity.hibernateDescriptorSha256].every(
-      (value) => value === null || (SHA256.test(value) && !/^0{64}$/.test(value)),
-    );
+    (identity.guestDescriptorSha256 === null ||
+      (SHA256.test(identity.guestDescriptorSha256) &&
+        !/^0{64}$/.test(identity.guestDescriptorSha256)));
 }
 
 function identitiesMatch(actual, expected) {
   return validIdentity(actual) && validIdentity(expected) &&
     actual.artifactManifestSha256 === expected.artifactManifestSha256 &&
     actual.runtimeManifestSha256 === expected.runtimeManifestSha256 &&
-    actual.guestDescriptorSha256 === expected.guestDescriptorSha256 &&
-    actual.hibernateDescriptorSha256 === expected.hibernateDescriptorSha256;
+    actual.guestDescriptorSha256 === expected.guestDescriptorSha256;
 }
 
 function percentile(values, fraction) {

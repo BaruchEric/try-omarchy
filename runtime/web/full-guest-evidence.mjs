@@ -109,14 +109,11 @@ export async function verifyFullGuestBrowserPerformanceCapture(
       trace.clock !== "performance.now" || !isRecord(identity) ||
       !hasOnlyKeys(identity, new Set([
         "artifactManifestSha256", "runtimeManifestSha256", "guestDescriptorSha256",
-        "hibernateDescriptorSha256",
       ])) || identity.artifactManifestSha256 !== artifactManifestSha256 ||
       !SHA256.test(identity.artifactManifestSha256 ?? "") ||
       !SHA256.test(identity.runtimeManifestSha256 ?? "") ||
       (identity.guestDescriptorSha256 !== null &&
         !SHA256.test(identity.guestDescriptorSha256 ?? "")) ||
-      (identity.hibernateDescriptorSha256 !== null &&
-        !SHA256.test(identity.hibernateDescriptorSha256 ?? "")) ||
       !isRecord(telemetry) || !hasOnlyKeys(telemetry, new Set([
         "source", "cadence", "exportMode",
       ])) || telemetry.source !== "qemu-virtio-gpu-scanout" ||
