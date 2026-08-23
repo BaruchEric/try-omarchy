@@ -97,6 +97,7 @@ if [[ $architecture == x86_64 ]]; then
   cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 elif [[ $architecture == aarch64 ]]; then
   cp -a "$guest_dir/native-overlay/." "$root/"
+  chmod 0755 "$root/usr/local/bin/omarchy-native-audio-bridge"
   mkdir -p "$root/etc/systemd/user/default.target.wants"
   ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
     "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"

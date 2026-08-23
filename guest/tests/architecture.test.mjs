@@ -343,6 +343,7 @@ test("native ARM audio devices are mirrored into Omarchy's live audio panel", ()
   );
 
   assert.match(configure, /elif \[\[ \$architecture == aarch64 \]\]; then\n\s+cp -a "\$guest_dir\/native-overlay\/\."/);
+  assert.match(configure, /chmod 0755 "\$root\/usr\/local\/bin\/omarchy-native-audio-bridge"/);
   assert.match(configure, /omarchy-native-audio-bridge\.service/);
   assert.match(bridge, /module-null-sink/);
   assert.match(bridge, /module-loopback/);

@@ -122,6 +122,8 @@ def test_static() -> None:
         except SyntaxError:
             valid = False
         check(valid, f"python syntax: {script.relative_to(GUEST)}")
+    native_audio_bridge = GUEST / "native-overlay/usr/local/bin/omarchy-native-audio-bridge"
+    check(os.access(native_audio_bridge, os.X_OK), "native ARM audio bridge executable")
 
     extension = (GUEST / "overlay/etc/skel/.config/omarchy/extensions/omarchy-menu.jsonc").read_text()
     extension_json = re.sub(r"^\s*//.*$", "", extension, flags=re.MULTILINE)
