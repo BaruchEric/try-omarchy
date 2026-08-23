@@ -51,14 +51,35 @@ esac
 [[ -n $spec ]] || spec="$guest_dir/spec.json"
 [[ -f $spec ]] || fail "guest spec not found: $spec"
 
+architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"]["architecture"])' "$spec")
+profile=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"].get("profile", "demo"))' "$spec")
+[[ $profile == demo || $profile == factory ]] || fail "unsupported guest profile: $profile"
+[[ $profile != factory || $architecture == aarch64 ]] || fail "factory profile currently supports only aarch64"
+
 mkdir -p "$root/etc" "$root/etc/skel" "$root/usr/share/omarchy-web"
-cp -a "$guest_dir/overlay/." "$root/"
+if [[ $profile == demo ]]; then
+  cp -a "$guest_dir/overlay/." "$root/"
+else
+  # A factory guest must not inherit the demo's autologin, welcome, Chromium
+  # policy, menu restrictions, web-app stubs, completion markers, or service
+  # masks. Install only the virtual-hardware compatibility files that are
+  # needed before the real upstream first-boot owner flow can run.
+  while IFS='|' read -r mode relative; do
+    mkdir -p "$(dirname "$root/$relative")"
+    install -m "$mode" "$guest_dir/overlay/$relative" "$root/$relative"
+  done <<'FACTORY_VM_FILES'
+0644|etc/mkinitcpio.conf.d/90-omarchy-web.conf
+0644|usr/lib/environment.d/90-omarchy-web.conf
+0755|usr/local/bin/xdg-terminal-exec
+FACTORY_VM_FILES
+  mkdir -p "$root/usr/local/bin"
+  install -m 0755 "$guest_dir/compat/ttfx-arm64" "$root/usr/local/bin/ttfx"
+fi
 
 # Quattro's authentic configuration remains installed byte-for-byte. The x86
 # browser uses a bounded user config because the hundreds of Lua bridge calls
 # in the full physical-desktop profile exceed Hyprland's reload budget under
 # TCG. ARM/native keeps the exact Quattro user bootstrap.
-architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["image"]["architecture"])' "$spec")
 if [[ $architecture == x86_64 ]]; then
   hyprland_user_config="$root/etc/skel/.config/hypr/hyprland.lua"
   install -m 0644 "$guest_dir/fragments/hypr-x86-web.lua" "$hyprland_user_config"
@@ -76,7 +97,9 @@ if [[ $architecture == x86_64 ]]; then
   cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 elif [[ $architecture == aarch64 ]]; then
   cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
-  cat "$guest_dir/fragments/hypr-autostart-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
+  if [[ $profile == demo ]]; then
+    cat "$guest_dir/fragments/hypr-autostart-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
+  fi
 fi
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")
@@ -90,7 +113,13 @@ EOF
 printf 'en_US.UTF-8 UTF-8\n' >"$root/etc/locale.gen"
 printf 'LANG=en_US.UTF-8\n' >"$root/etc/locale.conf"
 printf 'KEYMAP=us\n' >"$root/etc/vconsole.conf"
-printf '%s\n' "${commit:0:32}" >"$root/etc/machine-id"
+if [[ $profile == factory ]]; then
+  # An unprovisioned machine receives a new identity from systemd on its first
+  # boot. Do not stamp it with the deterministic demo identity.
+  : >"$root/etc/machine-id"
+else
+  printf '%s\n' "${commit:0:32}" >"$root/etc/machine-id"
+fi
 ln -sfn /usr/share/zoneinfo/UTC "$root/etc/localtime"
 
 # Keep the exact architecture-appropriate package/mirror configuration in the
@@ -114,15 +143,24 @@ mask_unit() {
   ln -s /dev/null "$scope/$unit"
 }
 
-while IFS= read -r unit; do
-  [[ -n $unit && $unit != \#* ]] || continue
-  mask_unit "$root/etc/systemd/system" "$unit"
-done <"$guest_dir/services.system-mask.txt"
+if [[ $profile == demo ]]; then
+  while IFS= read -r unit; do
+    [[ -n $unit && $unit != \#* ]] || continue
+    mask_unit "$root/etc/systemd/system" "$unit"
+  done <"$guest_dir/services.system-mask.txt"
 
-while IFS= read -r unit; do
-  [[ -n $unit && $unit != \#* ]] || continue
-  mask_unit "$root/etc/skel/.config/systemd/user" "$unit"
-done <"$guest_dir/services.user-mask.txt"
+  while IFS= read -r unit; do
+    [[ -n $unit && $unit != \#* ]] || continue
+    mask_unit "$root/etc/skel/.config/systemd/user" "$unit"
+  done <"$guest_dir/services.user-mask.txt"
+else
+  provision_unit="$root/usr/share/omarchy/install/provisioning/omarchy-provision-owner.service"
+  [[ -f $provision_unit ]] || fail "pinned upstream owner-provisioning service is missing"
+  mkdir -p "$root/etc/systemd/system" "$root/var/lib/omarchy/provisioning"
+  install -m 0644 "$provision_unit" "$root/etc/systemd/system/omarchy-provision-owner.service"
+  : >"$root/var/lib/omarchy/provisioning/pending"
+  printf '%s\n' audio input users video >"$root/var/lib/omarchy/provisioning/groups"
+fi
 
 # The tty1 login starts the observer before executing Omarchy's exact UWSM
 # command. It deliberately is not ordered after graphical-session.target: that
@@ -146,4 +184,4 @@ python3 "$guest_dir/scripts/write-provenance.py" \
   --spec "$spec" \
   --output "$root/usr/share/omarchy-web/provenance.json"
 
-echo "Configured disposable Omarchy web profile in $root"
+echo "Configured Omarchy $profile profile in $root"

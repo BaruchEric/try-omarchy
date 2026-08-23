@@ -728,6 +728,27 @@ def test_static() -> None:
     )
     check('rmdir "$staged_package_cache"' in build and 'rm -rf "$package_cache"' not in build and 'rm -f "$package_cache"' not in build, "persistent package cache is never deleted by the build")
 
+    with tempfile.TemporaryDirectory(prefix="omarchy-guest-manifest.") as temporary:
+        artifacts = pathlib.Path(temporary)
+        (artifacts / "provenance.json").write_text('{"normalizedUpstreamTree": null}\n')
+        writer = GUEST / "scripts/write-guest-manifest.py"
+        demo_manifest = run(writer, "--directory", artifacts, "--spec", GUEST / "spec.aarch64.json")
+        demo_payload = json.loads((artifacts / "guest-manifest.json").read_text()) if demo_manifest.returncode == 0 else {}
+        factory_manifest = run(
+            writer,
+            "--directory", artifacts,
+            "--spec", GUEST / "spec.aarch64-unprovisioned.json",
+        )
+        factory_payload = json.loads((artifacts / "guest-manifest.json").read_text()) if factory_manifest.returncode == 0 else {}
+        check(
+            demo_manifest.returncode == 0
+            and "profile" not in demo_payload.get("guest", {})
+            and factory_manifest.returncode == 0
+            and factory_payload.get("guest", {}).get("profile") == "factory"
+            and factory_payload.get("guest", {}).get("username") is None,
+            "factory manifest adds explicit profile and null owner without changing the demo manifest shape",
+        )
+
     resolver_link = 'ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"'
     resolver_index = build.find(resolver_link)
     check(resolver_link not in finalize and build.count(resolver_link) == 1, "resolver symlink is materialized outside the chroot")

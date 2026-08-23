@@ -7,6 +7,8 @@ Omarchy:
   Browser VM.
 - `guest/dist-aarch64`: ARM64 Arch Linux for the hardware-accelerated QEMU/HVF
   Native Mac VM.
+- `guest/dist-aarch64-unprovisioned`: a separate ARM64 factory image which
+  enters Quattro's real first-boot owner setup with no pre-created user.
 
 These are real Omarchy guests, not a desktop recreated in HTML. Both contain
 Hyprland, Quickshell, Omarchy commands, configuration, themes, and applications
@@ -19,6 +21,12 @@ virtual hardware contracts, filesystem identities, and artifact manifests.
 Native Mac VM contract and additionally pins the Omarchy ARM package-builder
 and Arch Linux ARM packaging revisions. Updating one architecture never
 silently changes the other architecture's released bundle.
+
+`spec.aarch64-unprovisioned.json` is an evaluation-only factory contract with a
+different filesystem identity and an ephemeral storage mode. It is not a RAM
+snapshot or checkpoint: the kernel, initramfs, and installed root disk cold
+boot normally. The speedup over browser emulation comes from native ARM code,
+HVF CPU virtualization, and VirGL/Metal graphics acceleration.
 
 ## Supported VM profile
 
@@ -40,6 +48,24 @@ configuration layers:
 The x86 profile is a constrained distribution of Omarchy for an emulated
 browser CPU, not a different UI implementation. The ARM profile belongs only
 to the Native Mac VM.
+
+The separate ARM factory profile keeps the pinned upstream `/usr/share/omarchy`
+payload and `/etc/skel` defaults, but does not create an account, choose a
+theme, enable tty autologin, install demo menu/welcome/browser overrides, write
+first-run completion markers, or apply demo service masks. It arms the pinned
+upstream `omarchy-provision-owner` service, which asks the owner for keyboard,
+account, hostname, and timezone on tty1 before SDDM starts. Its only local
+files are the Virtio initramfs/environment integration, the ARM QEMU host-cursor
+fragment, the ARM `xdg-terminal-exec` compatibility command, and a no-op
+`ttfx` compatibility command that leaves the upstream wizard's already-painted
+static splash intact because no reviewed ARM64 `ttfx` package exists.
+
+The reviewed ARM repositories also do not currently publish `tzupdate` or
+`mise`. The upstream timezone form already falls back to its manual picker when
+`tzupdate` is absent. User finalization applies the core theme, browser, Git,
+and XCompose setup before reaching `mise`; it then reports the upstream warning
+and proceeds to SDDM rather than pretending developer-tool installation
+succeeded.
 
 ## Guest identity and readiness evidence
 
@@ -161,6 +187,31 @@ The complete image build is intentionally outside the fast test suite. Build
 it only when the guest spec or package transaction changes; native runtime
 iterations can reuse the verified `guest/dist-aarch64` bundle and its separate
 persistent user disk.
+
+### Build the unprovisioned ARM64 comparison image
+
+The factory transaction adds SDDM and therefore has its own reviewed lock.
+Resolve it first without assembling a root filesystem:
+
+```sh
+./guest/build-arm64-container.sh \
+  --spec "$PWD/guest/spec.aarch64-unprovisioned.json" \
+  --refresh-package-lock /tmp/packages.aarch64-unprovisioned.lock.json
+```
+
+Inspect that file, then install it as
+`guest/packages.aarch64-unprovisioned.lock.json`. Build the separate artifact:
+
+```sh
+./guest/build-arm64-container.sh \
+  --spec "$PWD/guest/spec.aarch64-unprovisioned.json"
+```
+
+With no explicit output, the factory spec writes only to
+`guest/dist-aarch64-unprovisioned`; it never overwrites the configured native
+bundle. Launch it ephemerally so every evaluation starts at the owner wizard.
+Completing that wizard is a real first boot, not preconfiguration performed by
+the image builder.
 
 ## Build gates and output contract
 

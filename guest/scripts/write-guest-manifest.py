@@ -54,6 +54,15 @@ def main() -> None:
 
     source_tree = json.loads((args.directory / "provenance.json").read_text()).get("normalizedUpstreamTree")
     epoch = spec["image"]["sourceDateEpoch"]
+    guest = {
+        "architecture": spec["image"]["architecture"],
+        "distribution": "Arch Linux",
+        "username": spec["guest"]["username"],
+        "display": spec["guest"]["virtualDisplay"],
+        "kernelCommandLine": spec["runtime"]["kernelCommandLine"],
+    }
+    if "profile" in spec["guest"]:
+        guest["profile"] = spec["guest"]["profile"]
     payload = {
         "schemaVersion": 1,
         "kind": "omarchy-web-guest-artifacts",
@@ -64,13 +73,7 @@ def main() -> None:
             "sourceDateEpoch": epoch,
             "builderImageDigest": os.environ.get("OMARCHY_BUILDER_IMAGE_DIGEST"),
         },
-        "guest": {
-            "architecture": spec["image"]["architecture"],
-            "distribution": "Arch Linux",
-            "username": spec["guest"]["username"],
-            "display": spec["guest"]["virtualDisplay"],
-            "kernelCommandLine": spec["runtime"]["kernelCommandLine"],
-        },
+        "guest": guest,
         "artifacts": artifacts,
     }
     (args.directory / "guest-manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")

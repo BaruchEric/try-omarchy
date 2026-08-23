@@ -10,27 +10,50 @@ read_spec() {
   python3 -c "import json; print(json.load(open('$spec'))$1)"
 }
 
-username=$(read_spec '["guest"]["username"]')
-uid=$(read_spec '["guest"]["uid"]')
-theme=$(read_spec '["guest"]["defaultTheme"]')
+profile=$(read_spec '["guest"].get("profile", "demo")')
+[[ $profile == demo || $profile == factory ]] || { echo "Unsupported guest profile: $profile" >&2; exit 1; }
 
 locale-gen
 
-if ! id "$username" >/dev/null 2>&1; then
-  useradd --create-home --uid "$uid" --shell /bin/bash --groups audio,input,users,video,wheel "$username"
-fi
-
 passwd --lock root >/dev/null
-passwd --lock "$username" >/dev/null
-chown -R "$username:$username" "/home/$username"
-
-systemctl enable getty@tty1.service
 systemctl enable NetworkManager.service
 systemctl enable systemd-resolved.service
 # Setting the default target is exactly this forced symlink. Creating it
 # directly avoids a systemctl introspection path that crashes under common
 # x86-on-ARM container emulators after it has already written the link.
 ln -sfn /usr/lib/systemd/system/graphical.target /etc/systemd/system/default.target
+
+if [[ $profile == factory ]]; then
+  # Leave account, password, theme, and per-user state entirely to the pinned
+  # Quattro owner-provisioning program. Its oneshot owns tty1 and deliberately
+  # orders the display manager behind the setup flow.
+  [[ -x /usr/bin/omarchy-provision-owner ]] || { echo "Missing upstream owner provisioner" >&2; exit 1; }
+  [[ -f /var/lib/omarchy/provisioning/pending ]] || { echo "Factory provisioning is not armed" >&2; exit 1; }
+  systemctl enable omarchy-provision-owner.service
+  systemctl enable sddm.service
+
+  fc-cache -f
+  update-desktop-database /usr/share/applications || true
+
+  # The runtime supplies the virtual devices, so never let mkinitcpio's host
+  # autodetection remove virtio block/input/graphics drivers.
+  mkinitcpio -P
+  echo "Finalized unprovisioned Omarchy factory guest"
+  exit 0
+fi
+
+username=$(read_spec '["guest"]["username"]')
+uid=$(read_spec '["guest"]["uid"]')
+theme=$(read_spec '["guest"]["defaultTheme"]')
+
+if ! id "$username" >/dev/null 2>&1; then
+  useradd --create-home --uid "$uid" --shell /bin/bash --groups audio,input,users,video,wheel "$username"
+fi
+
+passwd --lock "$username" >/dev/null
+chown -R "$username:$username" "/home/$username"
+
+systemctl enable getty@tty1.service
 
 # Generate the same current-theme state a normal headless Omarchy install
 # creates. Only session notifications/restarts are skipped.

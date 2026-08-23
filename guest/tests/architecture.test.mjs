@@ -124,6 +124,48 @@ test("ARM dependency transaction is architecture-matched and fully locked", () =
   }
 });
 
+test("ARM factory contract is unprovisioned, ephemeral, and isolated", () => {
+  const demo = json("spec.aarch64.json");
+  const factory = json("spec.aarch64-unprovisioned.json");
+  const demoPackages = packageNames(demo.inputs.packages);
+  const factoryPackages = packageNames(factory.inputs.packages);
+  const factoryLock = json(factory.inputs.packageLock);
+
+  assert.deepEqual(factory.upstream, demo.upstream);
+  assert.equal(factory.image.architecture, "aarch64");
+  assert.equal(factory.image.filesystemLabel, "omarchy-factory");
+  assert.equal(factory.image.filesystemUuid, "89054943-1f4e-4f14-b934-d6db3fba4254");
+  assert.notEqual(factory.image.filesystemUuid, demo.image.filesystemUuid);
+  assert.deepEqual(factory.guest, {
+    profile: "factory",
+    hostname: "omarchy-factory",
+    username: null,
+    uid: null,
+    defaultTheme: null,
+    virtualDisplay: demo.guest.virtualDisplay,
+  });
+  assert.equal(factory.runtime.storage.mode, "ephemeral");
+  assert.ok(!factory.runtime.kernelCommandLine.includes("omarchy.web_demo=1"));
+  assert.deepEqual(factoryPackages, [...new Set(factoryPackages)].sort());
+  assert.deepEqual(factoryPackages, [...demoPackages, "sddm"].sort());
+  assert.equal(factoryLock.architecture, "aarch64");
+  assert.equal(factoryLock.requestedFileSha256, sha256(text(factory.inputs.packages)));
+  assert.equal(typeof factoryLock.packages.sddm, "string");
+  assert.ok(Object.keys(factoryLock.packages).length > 500);
+  for (const unavailable of ["mise", "mise-bin", "ttfx", "ttfx-bin", "tzupdate", "tzupdate-bin"]) {
+    assert.ok(!factoryPackages.includes(unavailable));
+  }
+  for (const requiredPath of [
+    "bin/omarchy-provision-owner",
+    "bin/omarchy-provision-user",
+    "install/provisioning/omarchy-provision-owner.service",
+    "install/provisioning/setup-form.sh",
+    "install/user/all.sh",
+  ]) {
+    assert.ok(factory.authenticity.requiredPaths.includes(requiredPath));
+  }
+});
+
 test("ARM bootstrap and package repository inputs are commit and digest pinned", () => {
   const spec = json("spec.aarch64.json");
   const container = text("Containerfile.aarch64");
@@ -142,8 +184,9 @@ test("ARM bootstrap and package repository inputs are commit and digest pinned",
 });
 
 test("ARM wrapper selects native arm64 Docker and an isolated output", () => {
+  const wrapper = fileURLToPath(new URL("build-arm64-container.sh", guest));
   const output = execFileSync(
-    fileURLToPath(new URL("build-arm64-container.sh", guest)),
+    wrapper,
     ["--dry-run"],
     { encoding: "utf8" },
   );
@@ -151,6 +194,44 @@ test("ARM wrapper selects native arm64 Docker and an isolated output", () => {
   assert.match(output, /^platform=linux\/arm64$/m);
   assert.match(output, /guest\/dist-aarch64$/m);
   assert.match(output, /^work-volume=omarchy-arm64-guest-work-[0-9]+$/m);
+
+  const factory = execFileSync(
+    wrapper,
+    ["--dry-run", "--spec", fileURLToPath(new URL("spec.aarch64-unprovisioned.json", guest))],
+    { encoding: "utf8" },
+  );
+  assert.match(factory, /^profile=factory$/m);
+  assert.match(factory, /guest\/dist-aarch64-unprovisioned$/m);
+  assert.match(factory, /^mode=build$/m);
+
+  const lock = execFileSync(
+    wrapper,
+    [
+      "--dry-run",
+      "--spec", fileURLToPath(new URL("spec.aarch64-unprovisioned.json", guest)),
+      "--refresh-package-lock", "/tmp/packages.aarch64-unprovisioned.lock.json",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.match(lock, /^mode=refresh-package-lock$/m);
+  assert.match(lock, /^package-lock-output=\/tmp\/packages\.aarch64-unprovisioned\.lock\.json$/m);
+});
+
+test("factory profile excludes every demo customization", () => {
+  const configure = text("scripts/configure-rootfs.sh");
+  const finalize = text("scripts/finalize-rootfs.sh");
+  const ttfx = text("compat/ttfx-arm64");
+  const manifest = text("scripts/write-guest-manifest.py");
+
+  assert.match(configure, /if \[\[ \$profile == demo \]\]; then\n\s+cp -a "\$guest_dir\/overlay\/\."/);
+  assert.match(configure, /if \[\[ \$profile == demo \]\]; then[\s\S]*hypr-autostart-arm-qemu\.append\.lua/);
+  assert.match(configure, /var\/lib\/omarchy\/provisioning\/pending/);
+  assert.match(configure, /omarchy-provision-owner\.service/);
+  assert.match(finalize, /systemctl enable omarchy-provision-owner\.service/);
+  assert.match(finalize, /systemctl enable sddm\.service/);
+  assert.match(finalize, /if \[\[ \$profile == factory \]\]; then[\s\S]*exit 0[\s\S]*username=\$\(read_spec/);
+  assert.doesNotMatch(ttfx, /curl|wget|exec|eval|source /);
+  assert.match(manifest, /if "profile" in spec\["guest"\]:/);
 });
 
 test("guest identity and initramfs support both runtime device sets", () => {
