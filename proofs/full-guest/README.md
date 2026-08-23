@@ -1,8 +1,8 @@
 # Exact full-guest native boot gate
 
-This gate boots the finished files in `guest/dist` directly. It does not use
-the smaller guest assembled by `graphics/`, rebuild the image, mount or modify
-the ext4 filesystem, or substitute a mock desktop.
+This gate boots the finished files in `guest/dist` directly. It does not
+rebuild the image, mount or modify the ext4 filesystem, or substitute a mock
+desktop.
 
 The runner first streams and verifies every artifact against both
 `guest-manifest.json` and `SHA256SUMS`. Native QEMU then launches the exact

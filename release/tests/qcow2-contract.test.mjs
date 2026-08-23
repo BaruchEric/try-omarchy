@@ -4,15 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import {
-  validateQcow2BackingFile,
-  validateStandaloneQcow2Image,
-} from "../qcow2-contract.mjs";
-import {
-  HIBERNATION_SWAP_VIRTUAL_BYTES,
-  qcow2Fixture,
-  standaloneQcow2Fixture,
-} from "./checkpoint-fixture.mjs";
+import { validateQcow2BackingFile } from "../qcow2-contract.mjs";
+import { qcow2Fixture } from "./checkpoint-fixture.mjs";
 
 async function withFixture(t, bytes) {
   const root = await mkdtemp(path.join(os.tmpdir(), "omarchy-qcow2-contract-"));
@@ -78,31 +71,4 @@ test("qcow2 backing validation rejects hostile headers without unbounded reads",
       }), expected);
     });
   }
-});
-
-test("hibernation swap qcow2 is standalone and exact-sized", async (t) => {
-  const bytes = standaloneQcow2Fixture();
-  const filePath = await withFixture(t, bytes);
-  assert.deepEqual(await validateStandaloneQcow2Image(filePath, {
-    expectedBytes: bytes.byteLength,
-    expectedVirtualBytes: HIBERNATION_SWAP_VIRTUAL_BYTES,
-    label: "hibernation swap image",
-  }), {
-    version: 3,
-    backingFilename: null,
-    virtualBytes: HIBERNATION_SWAP_VIRTUAL_BYTES,
-  });
-
-  const withBacking = standaloneQcow2Fixture();
-  withBacking.writeBigUInt64BE(104n, 8);
-  withBacking.writeUInt32BE(4, 16);
-  await writeFile(filePath, withBacking);
-  await assert.rejects(
-    validateStandaloneQcow2Image(filePath, {
-      expectedBytes: withBacking.byteLength,
-      expectedVirtualBytes: HIBERNATION_SWAP_VIRTUAL_BYTES,
-      label: "hibernation swap image",
-    }),
-    /must not declare a backing file/,
-  );
 });

@@ -14,13 +14,9 @@ import {
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
-  validateQcow2BackingFile,
-  validateStandaloneQcow2Image,
-} from "./qcow2-contract.mjs";
+import { validateQcow2BackingFile } from "./qcow2-contract.mjs";
 import {
   checkpointArtifactRecords,
-  isGuestHibernationProfile,
   validateCheckpointGuestManifestDocument,
   validateCheckpointProducerDocument,
   validateExactProductionRuntimeProfile,
@@ -231,15 +227,12 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
   await readCheckpointProducer(runtimeManifest, guestDirectory, guestFragment.upstream);
   if (Object.hasOwn(runtimeManifest, "checkpoint")) {
     validateCheckpointGuestManifestDocument(guestFragment, runtimeManifest.checkpoint);
-    const hibernation = isGuestHibernationProfile(runtimeManifest.checkpoint);
     const rootfsRecords = guestFragment.artifacts.filter(
       ({ path: artifactPath }) =>
         artifactPath === runtimeManifest.guest.rootfs.artifactPath,
     );
     invariant(rootfsRecords.length === 1, "checkpoint backing rootfs must be recorded exactly once");
-    const delta = hibernation
-      ? runtimeManifest.checkpoint.rootDelta
-      : runtimeManifest.checkpoint.bootDelta;
+    const delta = runtimeManifest.checkpoint.bootDelta;
     await validateQcow2BackingFile(
       path.join(guestDirectory, delta.artifactPath),
       {
@@ -249,20 +242,6 @@ export async function assembleRelease(config, { configRoot = process.cwd() } = {
         expectedVirtualBytes: rootfsRecords[0].bytes,
       },
     );
-    if (hibernation) {
-      await validateStandaloneQcow2Image(
-        path.join(
-          guestDirectory,
-          runtimeManifest.checkpoint.swapImage.artifactPath,
-        ),
-        {
-          expectedBytes: runtimeManifest.checkpoint.swapImage.bytes,
-          expectedVirtualBytes:
-            runtimeManifest.checkpoint.swapImage.virtualBytes,
-          label: "hibernation swap image",
-        },
-      );
-    }
   }
 
   invariant(runtimeBuild.component?.name === "QEMU-Wasm", "runtime fragment is not QEMU-Wasm");

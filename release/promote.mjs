@@ -16,13 +16,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { verifyReleaseApprovals } from "./approvals.mjs";
-import {
-  validateQcow2BackingFile,
-  validateStandaloneQcow2Image,
-} from "./qcow2-contract.mjs";
+import { validateQcow2BackingFile } from "./qcow2-contract.mjs";
 import { R2S3Store } from "./r2-s3-store.mjs";
 import {
-  isGuestHibernationProfile,
   validateCheckpointGuestManifestDocument,
   validateCheckpointProducerDocument,
   validateExactProductionRuntimeProfile,
@@ -266,10 +262,7 @@ async function validateVerifiedCheckpointProducer(runtimeManifest, artifacts) {
 
 async function validateVerifiedCheckpointQcow2(runtimeManifest, artifacts) {
   if (!Object.hasOwn(runtimeManifest, "checkpoint")) return;
-  const hibernation = isGuestHibernationProfile(runtimeManifest.checkpoint);
-  const descriptor = hibernation
-    ? runtimeManifest.checkpoint.rootDelta
-    : runtimeManifest.checkpoint.bootDelta;
+  const descriptor = runtimeManifest.checkpoint.bootDelta;
   const item = artifacts.find(({ path: artifactPath }) => artifactPath === descriptor.artifactPath);
   const rootfs = artifacts.find(
     ({ path: artifactPath }) => artifactPath === runtimeManifest.guest.rootfs.artifactPath,
@@ -282,19 +275,6 @@ async function validateVerifiedCheckpointQcow2(runtimeManifest, artifacts) {
     expectedBytes: descriptor.bytes,
     expectedVirtualBytes: rootfs.bytes,
   });
-  if (hibernation) {
-    const swapDescriptor = runtimeManifest.checkpoint.swapImage;
-    const swapItem = artifacts.find(
-      ({ path: artifactPath }) =>
-        artifactPath === swapDescriptor.artifactPath,
-    );
-    invariant(swapItem, "hibernation swap image is not packaged");
-    await validateStandaloneQcow2Image(swapItem.filePath, {
-      expectedBytes: swapDescriptor.bytes,
-      expectedVirtualBytes: swapDescriptor.virtualBytes,
-      label: "hibernation swap image",
-    });
-  }
 }
 
 function metadataFor(item) {
@@ -402,22 +382,11 @@ export async function verifyDeployedRelease(
   invariant(rootfs.length === 1, "release must have exactly one guest root filesystem");
   const checkpointPaged = items.filter((item) =>
     item.role === "preboot-vmstate" || item.role === "preboot-disk-delta");
-  const hibernationPaged = items.filter((item) =>
-    item.role === "hibernation-root-delta" ||
-    item.role === "hibernation-swap-image");
   invariant(
     checkpointPaged.length === 0 || checkpointPaged.length === 2,
     "deployed checkpoint range artifacts are partial",
   );
-  invariant(
-    hibernationPaged.length === 0 || hibernationPaged.length === 2,
-    "deployed hibernation range artifacts are partial",
-  );
-  invariant(
-    checkpointPaged.length === 0 || hibernationPaged.length === 0,
-    "deployed release mixes migration and hibernation range artifacts",
-  );
-  for (const item of [...rootfs, ...checkpointPaged, ...hibernationPaged]) {
+  for (const item of [...rootfs, ...checkpointPaged]) {
     const url = new URL(item.path, releaseRoot);
     const expectedEtag = `"sha256-${item.sha256}"`;
     const response = await fetchImpl(url, {

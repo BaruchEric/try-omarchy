@@ -2,7 +2,7 @@
 
 `paged-disk.mjs` registers a multi-gigabyte, same-origin `rootfs.ext4` at
 `/pack/rootfs.ext4` without first copying the image into JavaScript or Wasm
-memory. It is the production successor to `proofs/lazy-disk`.
+memory.
 
 The adapter has two deliberately separate phases:
 

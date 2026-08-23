@@ -1,6 +1,0 @@
-MODULES=""
-EARLYHOOKS="udev"
-HOOKS="udev keymap resume"
-LATEHOOKS="omarchy_hibernate_stage"
-CLEANUPHOOKS="udev"
-EMERGENCYHOOKS=""

@@ -4,11 +4,7 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { deflateSync } from "node:zlib";
 
-import {
-  ACTIVE_UPSTREAM,
-  advanceDesktopEvidence,
-  createDesktopEvidence,
-} from "../../app/components/vm-ui-state.mjs";
+import { ACTIVE_UPSTREAM } from "../../app/components/vm-ui-state.mjs";
 import {
   acceptVmHostMessage,
   advanceAcceptance,
@@ -47,46 +43,6 @@ function checkpointGuestReportProvenance(overrides = {}) {
   return {
     origin: "checkpoint-source-evidence",
     sourceEvidence: checkpointSourceEvidence(overrides),
-  };
-}
-
-function hibernationResumeBinding(overrides = {}) {
-  return {
-    descriptorSha256: "5".repeat(64),
-    markerSha256: "6".repeat(64),
-    sourceBootId: "8d8ea31b-3c52-4cc5-a876-f9e1fc0b68a7",
-    swapUuid: "4c9a13d2-7c3a-4f2c-b6e1-5a3048610e8f",
-    ...overrides,
-  };
-}
-
-function hibernationGuestReportProvenance(overrides = {}) {
-  return {
-    origin: "live-hibernation-serial",
-    resume: hibernationResumeBinding(overrides),
-  };
-}
-
-function hibernationResumeMessage(overrides = {}) {
-  const binding = hibernationResumeBinding();
-  return {
-    type: "hibernationresume",
-    evidence: {
-      schemaVersion: 1,
-      checkpointMode: "guest-hibernation-resume",
-      ...binding,
-      rendererReportSha256: "7".repeat(64),
-      renderer: "virgl",
-      kernelEvidence: [
-        "PM: Image signature found, resuming",
-        "PM: Image loading done",
-        "PM: Image successfully loaded",
-        "PM: hibernation: hibernation exit",
-      ],
-      runtimeDisplay: "sdl,gl=es,show-cursor=on",
-      derivedInitramfsSha256: "8".repeat(64),
-      ...overrides,
-    },
   };
 }
 
@@ -334,124 +290,6 @@ test("checkpoint acceptance preserves exact provenance and rejects downgrade or 
   assert.equal(state.stage, "passed");
 });
 
-test("hibernation acceptance requires ordered authenticated resume before a fresh live report", () => {
-  const provenance = hibernationGuestReportProvenance();
-  const begin = () => {
-    let state = createAcceptanceState({ releaseId: RELEASE_ID, runNonce: RUN_NONCE });
-    state = advanceAcceptance(state, { type: "ready" }, 1);
-    return advanceAcceptance(state, release(provenance), 2);
-  };
-
-  let earlyReport = begin();
-  assert.equal(earlyReport.stage, "waiting-hibernation-resume");
-  earlyReport = advanceAcceptance(
-    earlyReport,
-    guestReportMessage(provenance),
-    3,
-  );
-  assert.equal(earlyReport.stage, "failed");
-  assert.match(earlyReport.failure.reason, /resume/i);
-
-  const timedOut = checkAcceptanceTimeout(begin(), 180_003);
-  assert.equal(timedOut.stage, "failed");
-  assert.match(timedOut.failure.reason, /waiting-hibernation-resume/);
-
-  let downgraded = begin();
-  downgraded = advanceAcceptance(downgraded, hibernationResumeMessage(), 3);
-  downgraded = advanceAcceptance(downgraded, guestReportMessage(), 4);
-  assert.equal(downgraded.stage, "failed");
-  assert.match(downgraded.failure.reason, /exact verified Omarchy release/i);
-
-  for (const [name, mutation] of [
-    ["descriptor", { descriptorSha256: "9".repeat(64) }],
-    ["marker", { markerSha256: "9".repeat(64) }],
-    ["source boot", { sourceBootId: "11111111-2222-4333-8444-555555555555" }],
-    ["swap", { swapUuid: "11111111-2222-4333-8444-555555555555" }],
-    ["renderer", { renderer: "llvmpipe" }],
-    ["renderer report", { rendererReportSha256: "not-a-digest" }],
-    ["derived initramfs", { derivedInitramfsSha256: "not-a-digest" }],
-    ["kernel order", { kernelEvidence: [
-      "PM: Image loading done",
-      "PM: Image signature found, resuming",
-      "PM: Image successfully loaded",
-      "PM: hibernation: hibernation exit",
-    ] }],
-  ]) {
-    let hostile = begin();
-    hostile = advanceAcceptance(
-      hostile,
-      hibernationResumeMessage(mutation),
-      3,
-    );
-    assert.equal(hostile.stage, "failed", name);
-  }
-
-  let state = begin();
-  state = advanceAcceptance(state, hibernationResumeMessage(), 3);
-  assert.equal(state.stage, "waiting-report");
-  assert.equal(state.hibernationResume.value.descriptorSha256, "5".repeat(64));
-  assert.equal(state.hibernationResume.value.rendererReportSha256, "7".repeat(64));
-  state = advanceAcceptance(state, guestReportMessage(provenance), 4);
-  assert.equal(state.stage, "waiting-desktop-proof");
-  assert.equal(state.report.value.origin, "live-hibernation-serial");
-  assert.deepEqual(state.report.value.resume, provenance.resume);
-  state = advanceAcceptance(state, frame(10), 5);
-  state = advanceAcceptance(state, frame(11), 6);
-  state = advanceAcceptance(state, desktopProof(), 7);
-  state = advanceAcceptance(state, metrics(), 8);
-  state = advanceAcceptance(state, frame(12), 9);
-  assert.equal(state.stage, "passed");
-
-  let replay = begin();
-  replay = advanceAcceptance(replay, hibernationResumeMessage(), 3);
-  replay = advanceAcceptance(replay, hibernationResumeMessage(), 4);
-  assert.equal(replay.stage, "failed");
-  assert.match(replay.failure.reason, /more than once|replay/i);
-});
-
-test("launcher state preserves hibernation provenance and latches ordering failures", () => {
-  const provenance = hibernationGuestReportProvenance();
-  const releaseEvent = {
-    type: "release",
-    release: {
-      upstream: { ...ACTIVE_UPSTREAM },
-      artifactManifestSha256: RELEASE_ID,
-    },
-    guestReportProvenance: provenance,
-  };
-  const reportEvent = {
-    type: "guestreport",
-    report: report(),
-    ...provenance,
-  };
-
-  let rejected = advanceDesktopEvidence(
-    createDesktopEvidence(RELEASE_ID),
-    releaseEvent,
-  );
-  rejected = advanceDesktopEvidence(rejected, reportEvent);
-  assert.equal(rejected.invalid, true);
-  rejected = advanceDesktopEvidence(rejected, hibernationResumeMessage());
-  assert.equal(rejected.invalid, true);
-  assert.equal(rejected.hibernationResume, null);
-
-  let state = advanceDesktopEvidence(
-    createDesktopEvidence(RELEASE_ID),
-    releaseEvent,
-  );
-  state = advanceDesktopEvidence(state, hibernationResumeMessage());
-  assert.equal(state.invalid, false);
-  assert.equal(state.hibernationResume.descriptorSha256, "5".repeat(64));
-  assert.equal(state.hibernationResume.rendererReportSha256, "7".repeat(64));
-  state = advanceDesktopEvidence(state, reportEvent);
-  assert.equal(state.invalid, false);
-  assert.deepEqual(state.reportProvenance, provenance);
-
-  state = advanceDesktopEvidence(state, hibernationResumeMessage());
-  assert.equal(state.invalid, true);
-  assert.equal(state.ready, false);
-});
-
 test("final evidence recheck rejects a terminal event after provisional PASS", () => {
   let provisional = stateThroughProof();
   provisional = advanceAcceptance(provisional, metrics(), 7);
@@ -609,33 +447,6 @@ test("active iframe nonce/source binding rejects replayed desktop proof", () => 
   assert.equal(
     acceptVmHostMessage(
       { origin: "https://try.example", source: {}, data },
-      expected,
-    ),
-    null,
-  );
-  const resumeData = {
-    channel: "omarchy-vm-host",
-    version: 1,
-    runNonce: RUN_NONCE,
-    ...hibernationResumeMessage(),
-  };
-  assert.deepEqual(
-    acceptVmHostMessage(
-      { origin: "https://try.example", source, data: resumeData },
-      expected,
-    ),
-    resumeData,
-  );
-  assert.equal(
-    acceptVmHostMessage(
-      {
-        origin: "https://try.example",
-        source,
-        data: {
-          ...resumeData,
-          evidence: { ...resumeData.evidence, renderer: "llvmpipe" },
-        },
-      },
       expected,
     ),
     null,

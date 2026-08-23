@@ -21,12 +21,7 @@ parent/iframe protocol:
 2. Guest-report provenance is preserved across the Worker, isolated host, and
    acceptance contract. Cold boot requires `live-guest-serial`. Migration
    resume requires `checkpoint-source-evidence` plus all four release-bound
-   source-evidence SHA-256 digests. Guest hibernation instead requires one
-   ordered `hibernationresume` event bound to the exact
-   `hibernate-manifest.json` SHA-256, source boot, swap UUID, marker, renderer
-   report, derived initramfs, and three ordered kernel-resume milestones. Only
-   then may a fresh report with `live-hibernation-serial` be accepted; the
-   producer's pre-hibernate report is never replayed.
+   source-evidence SHA-256 digests.
 3. The guest-authored report proves Arch Linux x86_64, Wayland, live Hyprland
    and Quickshell processes, the required successful commands, one active
    1600×900 monitor, the installed Omarchy version, and upstream config hashes.
@@ -49,9 +44,9 @@ references, stage/total timeouts, an uncaught page exception, weak or visually
 degenerate screenshots, console errors, and unsafe disk access all fail the
 run. After the PNG and request ledger are complete, the runner re-reads the
 live contract and error streams so a late failure cannot be persisted as a
-stale PASS. Rootfs, migration-state/delta, and hibernation root-delta/swap GETs
-must be exact ranges no larger than 8 MiB, carry the artifact digest in
-`If-Match`, return 206, and return exactly the requested byte count.
+stale PASS. Rootfs and migration-state/delta GETs must be exact ranges no
+larger than 8 MiB, carry the artifact digest in `If-Match`, return 206, and
+return exactly the requested byte count.
 
 ## Run
 
@@ -95,7 +90,6 @@ Run the deterministic contract, proxy, and parser checks without booting a VM:
 
 ```sh
 node --test proofs/browser-acceptance/acceptance.test.mjs
-node --test proofs/browser-acceptance/hibernation-bootstrap.test.mjs
 npx eslint proofs/browser-acceptance
 git diff --check -- proofs/browser-acceptance
 ```

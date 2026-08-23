@@ -145,16 +145,8 @@ export function inspectArtifactManifest(body) {
   if (rootfs.length !== 1) throw new Error("Release must contain exactly one guest-rootfs artifact.");
   const migrationPaged = [...artifacts.values()].filter(({ role }) =>
     role === "preboot-vmstate" || role === "preboot-disk-delta");
-  const hibernationPaged = [...artifacts.values()].filter(({ role }) =>
-    role === "hibernation-root-delta" || role === "hibernation-swap-image");
   if (migrationPaged.length !== 0 && migrationPaged.length !== 2) {
     throw new Error("Release contains a partial migration checkpoint range set.");
-  }
-  if (hibernationPaged.length !== 0 && hibernationPaged.length !== 2) {
-    throw new Error("Release contains a partial hibernation range set.");
-  }
-  if (migrationPaged.length > 0 && hibernationPaged.length > 0) {
-    throw new Error("Release mixes migration and hibernation range sets.");
   }
   return Object.freeze({
     manifest,
@@ -164,7 +156,6 @@ export function inspectArtifactManifest(body) {
     strictRangeArtifacts: Object.freeze([
       rootfs[0],
       ...migrationPaged,
-      ...hibernationPaged,
     ]),
   });
 }

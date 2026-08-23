@@ -72,29 +72,6 @@ file, an undeclared checkpoint artifact/role, a mismatched producer document,
 or any backing/provenance/QEMU identity drift fails closed. It never silently
 falls back to cold boot.
 
-The accelerated profile uses a distinct schema-1
-`guest-hibernation-resume` checkpoint and has no cold or migration downgrade.
-Assembly and promotion call the runtime's exact profile validator, including
-the ordered QEMU argv, derived initramfs, explicit root/swap virtio devices,
-`-snapshot`, VirGL display, two-vCPU topology, target-only kernel role flag,
-and the absence of `-incoming`. They then add exactly four files:
-
-- `initramfs-virgl-hibernate.img` as `hibernation-initramfs`;
-- `hibernate-root-overlay.qcow2` as `hibernation-root-delta`;
-- `omarchy-hibernate.qcow2` as `hibernation-swap-image`; and
-- `hibernate-manifest.json` as `hibernation-metadata`.
-
-Every path, role, media type, byte count, and SHA-256 must match the runtime
-descriptor. The producer document separately records the native `gl=on`
-machine and browser `gl=es` machine while requiring every other topology and
-block-device field to match. Its embedded pre-GPU source-entry hashes, redacted
-source command line, resume marker/renderer/frame evidence, kernel, base and
-derived initramfs, rootfs, provenance, guest manifest, and browser QEMU hashes
-are exact. The root delta receives the same bounded backing-file parse as the
-migration delta; the swap image receives a bounded qcow2-v3 parse that requires
-no backing file and exactly 1,610,612,736 virtual bytes. Deployment range-probes
-both hibernation disk artifacts in addition to the rootfs.
-
 Copy `release-input.example.json` outside the repository's tracked files,
 replace the example source URL with the immutable deployed corresponding-source
 URL, and run:
@@ -179,9 +156,9 @@ The upload path is fail-closed:
    conditionally created. Its strict schema binds the release ID to the exact
    approval evidence and approval-policy digests.
 9. Immediately after clearance, every deployed object (including clearance)
-   must pass `HEAD`; the rootfs and, when declared, migration vmstate/delta or
-   hibernation root-delta/swap must also pass `Range: bytes=0-0` with their
-   synthetic strong SHA-256 `If-Match` validators.
+   must pass `HEAD`; the rootfs and, when declared, migration vmstate/delta
+   must also pass `Range: bytes=0-0` with their synthetic strong SHA-256
+   `If-Match` validators.
 
 R2 does not provide a transaction spanning multiple objects, and its S3 API
 does not provide a conditional `CompleteMultipartUpload` operation. The
