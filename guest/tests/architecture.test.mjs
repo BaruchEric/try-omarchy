@@ -202,7 +202,7 @@ test("browser and native guests receive truthful architecture-specific welcomes"
 
   assert.match(browserWelcome, /Everything resets when this tab closes\./);
   assert.doesNotMatch(nativeWelcome, /resets|tab closes/i);
-  assert.match(nativeWelcome, /'Press cmd space to explore\.'/);
+  assert.match(nativeWelcome, /'Press Super \+ Space to explore\.'/);
   assert.match(
     configure,
     /if \[\[ \$architecture == x86_64 \]\]; then[\s\S]*hypr-autostart\.append\.lua[\s\S]*elif \[\[ \$architecture == aarch64 \]\]; then[\s\S]*hypr-autostart-arm-qemu\.append\.lua/,
