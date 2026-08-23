@@ -1,15 +1,23 @@
-# Try Omarchy in your browser
+# Try Omarchy: browser VM and native Apple Silicon
 
-This project runs a pinned build of the real
-[Basecamp Omarchy](https://github.com/basecamp/omarchy) desktop inside a
-client-side x86_64 virtual machine. It is a short, disposable product demo: the
-browser renders QEMU's guest framebuffer, forwards keyboard and pointer input
-to the VM, and discards all changes when the session is reset or closed.
+This project retains two runnable builds of the real
+[Basecamp Omarchy](https://github.com/basecamp/omarchy) Quattro desktop:
+
+1. A fully client-side x86_64 QEMU/WebAssembly virtual machine. The browser
+   renders the guest framebuffer, forwards keyboard and pointer input, and
+   discards temporary writes when the tab closes. It works on ARM and x86 hosts,
+   but all guest CPU execution is still emulated and can be slow.
+2. A native Apple Silicon window backed by Apple's Virtualization.framework.
+   Its ARM64 guest runs with hardware virtualization and uses a host-bound
+   resume state for the fast local experience.
 
 The original browser-VM path is not recreated with HTML or streamed from a
 server. The guest is Arch Linux booting Hyprland, Quickshell, Omarchy's
 commands, configuration, and themes from upstream commit
-`f0020448ca87329199de7cb12f2015ebc4a3e5e7`.
+`7488eaded43de68ff9d2d7e4bf50cd48e112eb0f`.
+
+The separate `/browser` route is the browser-native Browser Edition recreation;
+it is not either of the two full-system runtimes above.
 
 An isolated WebRTC proof now provides the performance-oriented alternative: a
 real, architecture-native Omarchy VM stays on a hardware-virtualized host while
@@ -70,6 +78,30 @@ The launcher intentionally reports missing VM files until an immutable release
 exists at its pinned artifact path. It never substitutes a screenshot or fake
 desktop.
 
+## Run the two full-system builds locally
+
+Start the complete client-side x86_64 VM:
+
+```sh
+npm run omarchy:browser
+```
+
+Then open `http://127.0.0.1:8094/web/full-guest.html`. The loopback server
+verifies the canonical runtime and guest, serves the 6 GiB disk through bounded
+byte ranges without copying it, and keeps execution, display, input, and
+temporary writes in the browser.
+
+On an Apple Silicon Mac, build, ad-hoc sign, validate, and open the native ARM64
+window with host-bound resume enabled:
+
+```sh
+npm run omarchy:native
+```
+
+This is a repo-local developer launcher, not yet a notarized downloadable
+`.app`. It keeps the real guest and native VM window, and it does not involve
+the WebRTC streaming proof.
+
 ## Run the WebRTC performance proof
 
 The WebRTC proof is dependency-free and loopback-only by default:
@@ -113,18 +145,20 @@ make -C runtime test
 QEMU_WASM_SOURCE=/private/tmp/qemu-wasm-source BUILD_JOBS=4 \
   runtime/scripts/build-qemu-wasm.sh
 make -C runtime verify-dist
+make -C runtime package GUEST_DIR=../guest/dist
 ```
 
 Then boot the exact local guest through the production paged Worker without
 copying the 6 GiB raw disk:
 
 ```sh
-make -C runtime serve-full
+make -C runtime browser-qemu
 ```
 
-Open `http://127.0.0.1:8094/` in a current Chromium browser. The local server
-supplies COOP/COEP isolation, synthesizes a verified combined manifest, refuses
-full rootfs reads, and records range requests at `/__requests`.
+Open `http://127.0.0.1:8094/web/full-guest.html` in a current Chromium browser.
+The local server supplies COOP/COEP isolation, synthesizes a verified combined
+manifest, refuses full rootfs reads, and records range requests at
+`/__requests`.
 
 ## Release discipline
 
