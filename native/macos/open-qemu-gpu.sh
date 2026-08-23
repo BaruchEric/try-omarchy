@@ -25,7 +25,7 @@ expected_wrapper="$native_dir/open-qemu-gpu.sh"
   fail "wrapper path does not match the repo-local launcher"
 }
 
-launcher_arguments=()
+launcher_arguments=(--run-qemu)
 case ${1:-} in
   --ephemeral|--reset-storage)
     launcher_arguments+=("$1")
@@ -78,5 +78,4 @@ exec /usr/bin/open \
   -W \
   "$app" \
   --args \
-  --run-qemu \
   "${launcher_arguments[@]}"
