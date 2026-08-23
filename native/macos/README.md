@@ -51,8 +51,9 @@ The first launch may ask for two macOS permissions:
   is denied, speaker playback still works and only guest recording is disabled.
 
 Accessibility is checked before QEMU starts. If macOS no longer recognizes a
-rebuilt ad-hoc-signed app, use the launcher's button to open Accessibility
-settings, enable **Omarchy Quattro** (or toggle it off and on), then relaunch.
+rebuilt ad-hoc-signed app, its permission prompt opens Accessibility settings.
+Enable **Omarchy Quattro** (or toggle it off and on); the waiting launcher
+detects the grant and continues into QEMU automatically.
 
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
 resizable window and back. Closing QEMU powers off that session cleanly.
