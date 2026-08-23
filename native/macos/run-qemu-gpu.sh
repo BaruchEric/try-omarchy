@@ -429,11 +429,11 @@ if spec_profile == "factory":
         "build spec mise component",
     )
     if mise != {
-        "version": "2026.8.6",
-        "url": "https://github.com/jdx/mise/releases/download/v2026.8.6/mise-v2026.8.6-linux-arm64.tar.xz",
-        "sha256": "dfdb41a4654f473f504625ffa1e011e119e5fd1880ccbed8dcb0b21a58ccd309",
-        "binarySha256": "f9bd051912beb8861bf248289bfb2d8c281ff00fcdf1e44d730b8ea7e859e9a4",
-        "reportedVersion": "2026.8.6 linux-arm64 (2026-08-14)",
+        "version": "2026.8.11",
+        "url": "https://github.com/jdx/mise/releases/download/v2026.8.11/mise-v2026.8.11-linux-arm64.tar.xz",
+        "sha256": "fefd580d2c6a8169762f40ce5019a61de5b2dcf0b38c5d428ef6b97d5ce76fba",
+        "binarySha256": "6b7471271a990cbd6a795b24f9df83338aa220c227bf75fd083442e5a728f5f7",
+        "reportedVersion": "2026.8.11 linux-arm64 (2026-08-23)",
         "license": "MIT",
     }:
         fail("factory mise component is not the reviewed ARM64 release")
