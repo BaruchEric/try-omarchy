@@ -5,7 +5,6 @@ import { handleArtifactRequest } from "./artifacts.mjs";
 
 interface Env {
   ASSETS: Fetcher;
-  DB: D1Database;
   OMARCHY_ARTIFACTS: {
     head(key: string): Promise<unknown | null>;
     get(key: string, options?: Record<string, unknown>): Promise<unknown | null>;

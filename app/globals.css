@@ -966,7 +966,8 @@ kbd {
   }
 
   .launch-button,
-  .machine-frame {
+  .machine-frame,
+  .architecture-runtime-picker a {
     transition: none;
   }
 }
@@ -1072,6 +1073,47 @@ kbd {
   font-size: clamp(17px, 1.7vw, 23px);
   letter-spacing: -0.025em;
   line-height: 1.48;
+}
+.architecture-runtime-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  width: min(760px, 100%);
+  margin: 36px 0 0 auto;
+}
+.architecture-runtime-picker a {
+  display: grid;
+  gap: 7px;
+  min-height: 118px;
+  padding: 20px;
+  border: 1px solid var(--arch-line);
+  border-radius: 14px;
+  background: rgba(255, 255, 252, 0.68);
+  color: var(--arch-ink);
+  text-decoration: none;
+  transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+.architecture-runtime-picker a:hover {
+  border-color: #aeb1a8;
+  background: rgba(255, 255, 252, 0.96);
+  transform: translateY(-2px);
+}
+.architecture-runtime-picker span,
+.architecture-runtime-picker small {
+  color: #7b7e76;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.architecture-runtime-picker strong {
+  font-size: 16px;
+  font-weight: 590;
+  letter-spacing: -0.03em;
+}
+.architecture-runtime-picker small {
+  align-self: end;
+  line-height: 1.45;
 }
 
 .architecture-section {
@@ -1358,6 +1400,7 @@ kbd {
   .architecture-hero { padding: 72px 0 96px; }
   .architecture-hero h1 { font-size: clamp(52px, 17vw, 76px); }
   .architecture-hero > p { margin-top: 36px; }
+  .architecture-runtime-picker { grid-template-columns: 1fr; }
   .architecture-section { padding-bottom: 94px; }
   .architecture-section-heading {
     align-items: flex-start;

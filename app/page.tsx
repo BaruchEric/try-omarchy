@@ -57,13 +57,14 @@ export default function Home() {
   return (
     <main className="architecture-page">
       <header className="architecture-nav">
-        <a className="architecture-brand" href="#top" aria-label="Omarchy Native home">
+        <a className="architecture-brand" href="#top" aria-label="Try Omarchy home">
           <span className="architecture-brand-mark" aria-hidden="true">
             O
           </span>
-          <span>Omarchy Native</span>
+          <span>Try Omarchy</span>
         </a>
         <nav aria-label="Page navigation">
+          <a href="/browser">Browser VM</a>
           <a href="#architecture">Architecture</a>
           <a href="#startup">Startup flow</a>
         </nav>
@@ -84,6 +85,18 @@ export default function Home() {
           stays itself—no x86 translation and no browser runtime around the
           complete ARM64 guest.
         </p>
+        <div className="architecture-runtime-picker" aria-label="Choose an Omarchy runtime">
+          <a href="/browser">
+            <span>Browser VM</span>
+            <strong>Run fully client-side</strong>
+            <small>x86_64 QEMU + WebAssembly · no installation</small>
+          </a>
+          <a href="#architecture">
+            <span>Native Mac VM</span>
+            <strong>Explore native speed</strong>
+            <small>ARM64 QEMU + HVF · Apple Silicon</small>
+          </a>
+        </div>
       </section>
 
       <section className="architecture-section" id="architecture" aria-labelledby="architecture-title">

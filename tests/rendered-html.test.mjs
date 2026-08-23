@@ -187,6 +187,9 @@ test("server-renders the QEMU/HVF native macOS architecture page", async () => {
   assert.match(html, /QEMU devices · HVF CPU · no x86 translation/);
   assert.match(html, /From first clone to persistent return/);
   assert.match(html, /Persistent by design/);
+  assert.match(html, /href="\/browser"/);
+  assert.match(html, /Run fully client-side/);
+  assert.match(html, /Explore native speed/);
   assert.doesNotMatch(html, /<canvas\b/i);
   assert.doesNotMatch(html, /Omarchy desktop ready|Guest report received/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
