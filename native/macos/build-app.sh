@@ -51,7 +51,7 @@ contents="$app/Contents"
 module_cache="$native_dir/.build/module-cache"
 runtime_source="$native_dir/.build/qemu-gpu-runtime"
 repo_dir=$(cd "$native_dir/../.." && pwd -P)
-guest_dir=${guest_dir:-"$repo_dir/guest/dist-aarch64"}
+guest_dir=${guest_dir:-"$repo_dir/guest/dist-aarch64-unprovisioned"}
 dependency_bundler="$native_dir/bundle-macho-dependencies.sh"
 package_dmg="$native_dir/package-dmg.sh"
 zstd_bin=$(command -v zstd || true)
@@ -93,7 +93,22 @@ install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$native_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"
 install -m 0644 "$native_dir/qemu-persistent-storage.sh" \
   "$contents/Resources/scripts/qemu-persistent-storage.sh"
-ditto "$guest_dir" "$contents/Resources/guest"
+for guest_resource in \
+  LICENSE.omarchy \
+  SHA256SUMS \
+  build-spec.json \
+  guest-manifest.json \
+  initramfs-linux.img \
+  packages.lock.txt \
+  provenance.json \
+  rootfs.ext4.zst \
+  vmlinuz-linux; do
+  [[ -f $guest_dir/$guest_resource && ! -L $guest_dir/$guest_resource ]] || {
+    echo "build-app: factory guest resource is missing or unsafe: $guest_resource" >&2
+    exit 1
+  }
+  install -m 0644 "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
+done
 
 "$dependency_bundler" "$contents/Resources/runtime"
 

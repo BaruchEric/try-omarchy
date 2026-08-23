@@ -20,6 +20,8 @@ QEMU_SELECTED_STORAGE_MODE=''
 QEMU_PERSISTENT_STORAGE_DIRECTORY=''
 QEMU_PERSISTENT_STORAGE_IDENTITY=''
 QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
+QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
+QEMU_IMMUTABLE_SOURCE_DISK=''
 
 _qps_error() {
   printf 'qemu-persistent-storage: %s\n' "$*" >&2
@@ -220,7 +222,7 @@ _qps_prepare_state_root() {
   fi
   _qps_validate_root_marker "$qps_marker" || return 1
 
-  for qps_child in disks locks; do
+  for qps_child in disks images locks; do
     if [[ ! -e $qps_root/$qps_child && ! -L $qps_root/$qps_child ]]; then
       if mkdir "$qps_root/$qps_child" 2>/dev/null; then
         chmod 700 "$qps_root/$qps_child" || return 1
@@ -234,6 +236,7 @@ _qps_prepare_state_root() {
 
   QEMU_PERSISTENT_STORAGE_ROOT=$qps_root
   QEMU_PERSISTENT_STORAGE_DISKS_ROOT="$qps_root/disks"
+  QEMU_PERSISTENT_STORAGE_IMAGES_ROOT="$qps_root/images"
   QEMU_PERSISTENT_STORAGE_LOCKS_ROOT="$qps_root/locks"
 }
 
@@ -417,7 +420,8 @@ _qps_validate_store_directory() {
   local qps_identity=$2
   local qps_source_sha=$3
   local qps_source_bytes=$4
-  local qps_allow_missing_disk=${5:-0}
+  local qps_working_bytes=$5
+  local qps_allow_missing_disk=${6:-0}
   local qps_disk="$qps_directory/rootfs.ext4"
 
   _qps_assert_private_directory "$qps_directory" 'persistent-disk directory' || return 1
@@ -433,7 +437,7 @@ _qps_validate_store_directory() {
 
   if [[ -e $qps_disk || -L $qps_disk ]]; then
     _qps_assert_private_regular_file "$qps_disk" 'persistent root disk' || return 1
-    [[ $(_qps_size "$qps_disk") == "$qps_source_bytes" ]] || {
+    [[ $(_qps_size "$qps_disk") == "$qps_working_bytes" ]] || {
       _qps_fail "persistent root disk has the wrong size: $qps_disk"
       return 1
     }
@@ -491,12 +495,173 @@ _qps_clone_disk() {
   }
 }
 
+_qps_expand_disk() {
+  local qps_disk=$1
+  local qps_source_bytes=$2
+  local qps_working_bytes=$3
+
+  [[ $qps_working_bytes == "$qps_source_bytes" ]] && return 0
+  [[ $qps_working_bytes -gt $qps_source_bytes ]] || {
+    _qps_fail 'working root disk cannot be smaller than its immutable source'
+    return 1
+  }
+  /usr/bin/truncate -s "$qps_working_bytes" "$qps_disk" || {
+    _qps_fail 'cannot sparsely expand the working root disk'
+    return 1
+  }
+  [[ $(_qps_size "$qps_disk") == "$qps_working_bytes" ]] || {
+    _qps_fail 'expanded working root disk has the wrong size'
+    return 1
+  }
+  _qps_error "expanded the sparse working disk to $((qps_working_bytes / 1024 / 1024)) MiB"
+}
+
+_qps_validate_immutable_source() {
+  local qps_source=$1
+  local qps_expected_bytes=$2
+  local qps_magic=''
+
+  _qps_assert_private_regular_file "$qps_source" 'materialized immutable root disk' || return 1
+  [[ $(_qps_size "$qps_source") == "$qps_expected_bytes" ]] || {
+    _qps_fail 'materialized immutable root disk has the wrong size'
+    return 1
+  }
+  qps_magic=$(/usr/bin/od -An -tx1 -j 1080 -N 2 "$qps_source" | tr -d '[:space:]') || {
+    _qps_fail 'cannot inspect the materialized ext4 superblock'
+    return 1
+  }
+  [[ $qps_magic == 53ef ]] || {
+    _qps_fail 'materialized immutable root disk has no ext4 superblock'
+    return 1
+  }
+}
+
+# Expand a signed, manifest-verified Zstandard artifact into an identity-keyed
+# immutable APFS source exactly once. The persistent workspace is then cloned
+# from this source, so the 6 GiB base blocks are not physically duplicated.
+qemu_persistent_storage_materialize_source() {
+  local qps_identity=${1:-}
+  local qps_compressed=${2:-}
+  local qps_compressed_bytes=${3:-}
+  local qps_source_sha=${4:-}
+  local qps_source_bytes=${5:-}
+  local qps_zstd=${6:-}
+  local qps_final=''
+  local qps_staging=''
+  local qps_actual_sha=''
+  local qps_lock_path=''
+
+  QEMU_IMMUTABLE_SOURCE_DISK=''
+  _qps_is_identity "$qps_identity" || {
+    _qps_fail 'bundle identity must be exactly 64 lowercase hexadecimal characters'
+    return 1
+  }
+  _qps_is_identity "$qps_source_sha" || {
+    _qps_fail 'source rootfs digest must be exactly 64 lowercase hexadecimal characters'
+    return 1
+  }
+  _qps_is_positive_integer "$qps_compressed_bytes" || return 1
+  _qps_is_positive_integer "$qps_source_bytes" || return 1
+  [[ -f $qps_compressed && ! -L $qps_compressed ]] || {
+    _qps_fail 'compressed root disk is missing or unsafe'
+    return 1
+  }
+  [[ $(_qps_size "$qps_compressed") == "$qps_compressed_bytes" ]] || {
+    _qps_fail 'compressed root disk has the wrong size'
+    return 1
+  }
+  [[ -f $qps_zstd && ! -L $qps_zstd && -x $qps_zstd ]] || {
+    _qps_fail 'bundled Zstandard decoder is missing or unsafe'
+    return 1
+  }
+
+  _qps_prepare_state_root || return 1
+  qps_final="$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT/$qps_identity.ext4"
+  qps_lock_path="$QEMU_PERSISTENT_STORAGE_LOCKS_ROOT/$qps_identity.image.lock"
+  exec 8>>"$qps_lock_path" || return 1
+  chmod 600 "$qps_lock_path" || { exec 8>&-; return 1; }
+  _qps_assert_private_regular_file "$qps_lock_path" 'base-image lock' || {
+    exec 8>&-
+    return 1
+  }
+  if ! /usr/bin/lockf -s 8; then
+    exec 8>&-
+    _qps_fail 'cannot lock base-image materialization'
+    return 1
+  fi
+
+  for qps_staging in \
+    "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT"/."$qps_identity".initializing.??????; do
+    [[ -f $qps_staging && ! -L $qps_staging ]] || continue
+    [[ $(_qps_owner "$qps_staging") == $(id -u) ]] || continue
+    case "$qps_staging" in
+      "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT/.${qps_identity}.initializing."??????)
+        /bin/rm -f -- "$qps_staging" || {
+          exec 8>&-
+          _qps_fail 'cannot reclaim an interrupted base-image expansion'
+          return 1
+        }
+        ;;
+    esac
+  done
+
+  if [[ -e $qps_final || -L $qps_final ]]; then
+    if ! _qps_validate_immutable_source "$qps_final" "$qps_source_bytes"; then
+      exec 8>&-
+      return 1
+    fi
+    QEMU_IMMUTABLE_SOURCE_DISK=$qps_final
+    exec 8>&-
+    return 0
+  fi
+
+  qps_staging=$(mktemp "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT/.${qps_identity}.initializing.XXXXXX") || {
+    exec 8>&-
+    return 1
+  }
+  chmod 600 "$qps_staging" || return 1
+  if ! "$qps_zstd" -d -f "$qps_compressed" -o "$qps_staging" >&2; then
+    /bin/rm -f -- "$qps_staging"
+    exec 8>&-
+    _qps_fail 'cannot expand the bundled root disk'
+    return 1
+  fi
+  chmod 600 "$qps_staging" || {
+    /bin/rm -f -- "$qps_staging"
+    exec 8>&-
+    return 1
+  }
+  if ! _qps_validate_immutable_source "$qps_staging" "$qps_source_bytes"; then
+    /bin/rm -f -- "$qps_staging"
+    exec 8>&-
+    return 1
+  fi
+  qps_actual_sha=$(/usr/bin/shasum -a 256 "$qps_staging" | awk '{ print $1 }') || {
+    /bin/rm -f -- "$qps_staging"
+    exec 8>&-
+    return 1
+  }
+  if [[ $qps_actual_sha != "$qps_source_sha" ]]; then
+    /bin/rm -f -- "$qps_staging"
+    exec 8>&-
+    _qps_fail 'expanded root disk does not match its signed manifest digest'
+    return 1
+  fi
+  _qps_fsync "$qps_staging" || return 1
+  /bin/mv "$qps_staging" "$qps_final" || return 1
+  _qps_fsync "$QEMU_PERSISTENT_STORAGE_IMAGES_ROOT" || return 1
+  QEMU_IMMUTABLE_SOURCE_DISK=$qps_final
+  exec 8>&-
+  _qps_error "materialized immutable base image ${qps_identity:0:12}"
+}
+
 _qps_remove_recognized_directory() {
   local qps_directory=$1
   local qps_identity=$2
   local qps_source_sha=$3
   local qps_source_bytes=$4
-  local qps_allow_missing_disk=${5:-0}
+  local qps_working_bytes=$5
+  local qps_allow_missing_disk=${6:-0}
 
   case "$qps_directory" in
     "$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_identity"|\
@@ -513,6 +678,7 @@ _qps_remove_recognized_directory() {
     "$qps_identity" \
     "$qps_source_sha" \
     "$qps_source_bytes" \
+    "$qps_working_bytes" \
     "$qps_allow_missing_disk" || return 1
   /bin/rm -rf "$qps_directory" || {
     _qps_fail "cannot remove recognized persistent-disk directory: $qps_directory"
@@ -524,6 +690,7 @@ _qps_reap_interrupted_work() {
   local qps_identity=$1
   local qps_source_sha=$2
   local qps_source_bytes=$3
+  local qps_working_bytes=$4
   local qps_candidate=''
   local qps_name=''
 
@@ -541,6 +708,7 @@ _qps_reap_interrupted_work() {
       "$qps_identity" \
       "$qps_source_sha" \
       "$qps_source_bytes" \
+      "$qps_working_bytes" \
       1; then
       _qps_error "removed interrupted storage transaction $qps_name"
     else
@@ -554,6 +722,7 @@ _qps_initialize_persistent_disk() {
   local qps_source=$2
   local qps_source_sha=$3
   local qps_source_bytes=$4
+  local qps_working_bytes=$5
   local qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_identity"
   local qps_staging=''
 
@@ -575,11 +744,19 @@ _qps_initialize_persistent_disk() {
   fi
   if ! _qps_clone_disk "$qps_source" "$qps_staging/rootfs.ext4" "$qps_source_bytes"; then
     _qps_remove_recognized_directory \
-      "$qps_staging" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" 1 || true
+      "$qps_staging" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+      "$qps_working_bytes" 1 || true
+    return 1
+  fi
+  if ! _qps_expand_disk "$qps_staging/rootfs.ext4" "$qps_source_bytes" "$qps_working_bytes"; then
+    _qps_remove_recognized_directory \
+      "$qps_staging" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+      "$qps_working_bytes" 1 || true
     return 1
   fi
   _qps_validate_store_directory \
-    "$qps_staging" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" || return 1
+    "$qps_staging" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+    "$qps_working_bytes" || return 1
   _qps_fsync "$qps_staging" || {
     _qps_fail 'cannot flush persistent-disk staging directory'
     return 1
@@ -604,12 +781,14 @@ _qps_reset_persistent_disk() {
   local qps_identity=$1
   local qps_source_sha=$2
   local qps_source_bytes=$3
+  local qps_working_bytes=$4
   local qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_identity"
   local qps_discarded=''
 
   [[ -e $qps_final || -L $qps_final ]] || return 0
   _qps_validate_store_directory \
-    "$qps_final" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" || return 1
+    "$qps_final" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+    "$qps_working_bytes" || return 1
 
   qps_discarded="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/.${qps_identity}.discarded.$$.$RANDOM$RANDOM"
   [[ ! -e $qps_discarded && ! -L $qps_discarded ]] || {
@@ -622,7 +801,8 @@ _qps_reset_persistent_disk() {
   }
   _qps_fsync "$QEMU_PERSISTENT_STORAGE_DISKS_ROOT" || return 1
   _qps_remove_recognized_directory \
-    "$qps_discarded" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" || return 1
+    "$qps_discarded" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+    "$qps_working_bytes" || return 1
   _qps_error "reset persistent workspace ${qps_identity:0:12}"
 }
 
@@ -632,6 +812,7 @@ _qps_select_persistent_disk() {
   local qps_source=$3
   local qps_source_sha=$4
   local qps_source_bytes=$5
+  local qps_working_bytes=$6
   local qps_final=''
 
   _qps_prepare_state_root || return 1
@@ -639,22 +820,26 @@ _qps_select_persistent_disk() {
   QEMU_PERSISTENT_STORAGE_IDENTITY=$qps_identity
   qps_final="$QEMU_PERSISTENT_STORAGE_DISKS_ROOT/$qps_identity"
 
-  _qps_reap_interrupted_work "$qps_identity" "$qps_source_sha" "$qps_source_bytes"
+  _qps_reap_interrupted_work \
+    "$qps_identity" "$qps_source_sha" "$qps_source_bytes" "$qps_working_bytes"
   if [[ $qps_mode == reset ]]; then
-    if ! _qps_reset_persistent_disk "$qps_identity" "$qps_source_sha" "$qps_source_bytes"; then
+    if ! _qps_reset_persistent_disk \
+      "$qps_identity" "$qps_source_sha" "$qps_source_bytes" "$qps_working_bytes"; then
       qemu_persistent_storage_release_lock
       return 1
     fi
   fi
   if [[ ! -e $qps_final && ! -L $qps_final ]]; then
     if ! _qps_initialize_persistent_disk \
-      "$qps_identity" "$qps_source" "$qps_source_sha" "$qps_source_bytes"; then
+      "$qps_identity" "$qps_source" "$qps_source_sha" "$qps_source_bytes" \
+      "$qps_working_bytes"; then
       qemu_persistent_storage_release_lock
       return 1
     fi
   fi
   if ! _qps_validate_store_directory \
-    "$qps_final" "$qps_identity" "$qps_source_sha" "$qps_source_bytes"; then
+    "$qps_final" "$qps_identity" "$qps_source_sha" "$qps_source_bytes" \
+    "$qps_working_bytes"; then
     qemu_persistent_storage_release_lock
     return 1
   fi
@@ -673,6 +858,7 @@ _qps_select_ephemeral_disk() {
   local qps_source=$1
   local qps_source_bytes=$2
   local qps_work_directory=$3
+  local qps_working_bytes=${4:-$qps_source_bytes}
   local qps_final="$qps_work_directory/rootfs.ext4"
   local qps_staging="$qps_work_directory/.rootfs.ext4.initializing.$$.$RANDOM$RANDOM"
 
@@ -682,6 +868,10 @@ _qps_select_ephemeral_disk() {
     return 1
   }
   if ! _qps_clone_disk "$qps_source" "$qps_staging" "$qps_source_bytes"; then
+    [[ ! -e $qps_staging && ! -L $qps_staging ]] || /bin/rm -f "$qps_staging"
+    return 1
+  fi
+  if ! _qps_expand_disk "$qps_staging" "$qps_source_bytes" "$qps_working_bytes"; then
     [[ ! -e $qps_staging && ! -L $qps_staging ]] || /bin/rm -f "$qps_staging"
     return 1
   fi
@@ -706,6 +896,7 @@ _qps_select_ephemeral_disk() {
 #   4. validated source-rootfs SHA-256 from the manifest
 #   5. source-rootfs byte count from the manifest
 #   6. private run directory (required only for ephemeral mode)
+#   7. working rootfs byte count (optional; defaults to source size)
 #
 # On success, QEMU_SELECTED_DISK and QEMU_SELECTED_STORAGE_MODE are populated.
 # Persistent/reset mode also holds FD 9 until the caller exits or explicitly
@@ -717,12 +908,14 @@ qemu_persistent_storage_select() {
   local qps_source_sha=${4:-}
   local qps_source_bytes=${5:-}
   local qps_work_directory=${6:-}
+  local qps_working_bytes=${7:-$qps_source_bytes}
 
   QEMU_SELECTED_DISK=''
   QEMU_SELECTED_STORAGE_MODE=''
   QEMU_PERSISTENT_STORAGE_DIRECTORY=''
   QEMU_PERSISTENT_STORAGE_IDENTITY=''
   QEMU_PERSISTENT_STORAGE_LOCK_PATH=''
+  QEMU_PERSISTENT_STORAGE_WORKING_BYTES=''
 
   case "$qps_mode" in
     persistent|reset|ephemeral) ;;
@@ -743,12 +936,23 @@ qemu_persistent_storage_select() {
     _qps_fail 'source rootfs byte count must be a positive integer'
     return 1
   }
+  _qps_is_positive_integer "$qps_working_bytes" || {
+    _qps_fail 'working rootfs byte count must be a positive integer'
+    return 1
+  }
+  (( qps_working_bytes >= qps_source_bytes )) || {
+    _qps_fail 'working rootfs byte count cannot be smaller than the source'
+    return 1
+  }
   _qps_assert_source_disk "$qps_source" "$qps_source_bytes" || return 1
+  QEMU_PERSISTENT_STORAGE_WORKING_BYTES=$qps_working_bytes
 
   if [[ $qps_mode == ephemeral ]]; then
-    _qps_select_ephemeral_disk "$qps_source" "$qps_source_bytes" "$qps_work_directory"
+    _qps_select_ephemeral_disk \
+      "$qps_source" "$qps_source_bytes" "$qps_work_directory" "$qps_working_bytes"
   else
     _qps_select_persistent_disk \
-      "$qps_mode" "$qps_identity" "$qps_source" "$qps_source_sha" "$qps_source_bytes"
+      "$qps_mode" "$qps_identity" "$qps_source" "$qps_source_sha" \
+      "$qps_source_bytes" "$qps_working_bytes"
   fi
 }

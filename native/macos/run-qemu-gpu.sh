@@ -185,7 +185,10 @@ expected_artifacts = {
     "rootfs.ext4.zst": ("guest-rootfs-compressed", "application/zstd"),
     "vmlinuz-linux": ("guest-kernel", "application/vnd.linux.kernel"),
 }
-expected_files = set(expected_artifacts) | {"guest-manifest.json", "SHA256SUMS"}
+packaged_artifacts = set(expected_artifacts)
+if not (guest / "rootfs.ext4").exists():
+    packaged_artifacts.remove("rootfs.ext4")
+expected_files = packaged_artifacts | {"guest-manifest.json", "SHA256SUMS"}
 
 try:
     actual_files = {entry.name for entry in guest.iterdir()}
@@ -342,12 +345,13 @@ expected_devices = [
     "virtio-net-pci",
     "virtio-serial-pci",
     "virtconsole",
-    "virtserialport",
     "virtio-rng-pci",
     "virtio-balloon-pci",
     "intel-hda",
     "hda-micro",
 ]
+if spec_profile == "demo":
+    expected_devices.insert(7, "virtserialport")
 graphics = {
     "device": "virtio-gpu-gl-pci",
     "display": "cocoa",
@@ -483,6 +487,9 @@ if set(records_by_path) != set(expected_artifacts):
 calculated: dict[str, str] = {}
 for name, record in records_by_path.items():
     path = guest / name
+    if name not in packaged_artifacts:
+        calculated[name] = str(record["sha256"])
+        continue
     if path.stat().st_size != record["bytes"]:
         fail(f"artifact size mismatch for {name}")
     calculated[name] = sha256(path)
@@ -516,12 +523,13 @@ with (guest / "initramfs-linux.img").open("rb") as handle:
     if handle.read(6) not in {b"070701", b"070702"}:
         fail("initramfs-linux.img is not a mkinitcpio newc archive")
 rootfs = guest / "rootfs.ext4"
-if rootfs.stat().st_size != image["sizeMiB"] * 1024 * 1024:
-    fail("rootfs.ext4 does not have the specified image size")
-with rootfs.open("rb") as handle:
-    handle.seek(1024 + 56)
-    if handle.read(2) != b"\x53\xef":
-        fail("rootfs.ext4 does not have an ext4 superblock")
+if rootfs.exists():
+    if rootfs.stat().st_size != image["sizeMiB"] * 1024 * 1024:
+        fail("rootfs.ext4 does not have the specified image size")
+    with rootfs.open("rb") as handle:
+        handle.seek(1024 + 56)
+        if handle.read(2) != b"\x53\xef":
+            fail("rootfs.ext4 does not have an ext4 superblock")
 with (guest / "rootfs.ext4.zst").open("rb") as handle:
     if handle.read(4) != b"\x28\xb5\x2f\xfd":
         fail("rootfs.ext4.zst is not a Zstandard frame")
@@ -536,6 +544,7 @@ sys.stdout.write(
             calculated["guest-manifest.json"],
             str(rootfs_record["sha256"]),
             str(rootfs_record["bytes"]),
+            str(records_by_path["rootfs.ext4.zst"]["bytes"]),
             str(expanded_size_mib * 1024 * 1024),
             command_line,
         )
@@ -543,17 +552,16 @@ sys.stdout.write(
 )
 PY
 )
-IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes expanded_disk_bytes kernel_command_line \
+IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_disk_bytes \
+  expanded_disk_bytes kernel_command_line \
   <<<"$bundle_validation"
 [[ $bundle_identity =~ ^[0-9a-f]{64}$ ]] || fail "validated bundle identity is invalid"
 [[ $source_disk_sha =~ ^[0-9a-f]{64}$ ]] || fail "validated rootfs digest is invalid"
 [[ $source_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated rootfs size is invalid"
+[[ $compressed_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated compressed rootfs size is invalid"
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
-if (( expanded_disk_bytes > source_disk_bytes )); then
-  [[ $storage_mode == ephemeral ]] || fail "this guest requires --ephemeral working-disk expansion"
-fi
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -703,46 +711,25 @@ audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
 source_disk="$guest_dir/rootfs.ext4"
+if [[ ! -e $source_disk && ! -L $source_disk ]]; then
+  qemu_persistent_storage_materialize_source \
+    "$bundle_identity" \
+    "$guest_dir/rootfs.ext4.zst" \
+    "$compressed_disk_bytes" \
+    "$source_disk_sha" \
+    "$source_disk_bytes" \
+    "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
+  source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
+fi
 qemu_persistent_storage_select \
   "$storage_mode" \
   "$bundle_identity" \
   "$source_disk" \
   "$source_disk_sha" \
   "$source_disk_bytes" \
-  "$work_dir" || fail "could not prepare the selected root disk"
+  "$work_dir" \
+  "$expanded_disk_bytes" || fail "could not prepare the selected root disk"
 working_disk=$QEMU_SELECTED_DISK
-if (( expanded_disk_bytes > source_disk_bytes )); then
-  [[ $QEMU_SELECTED_STORAGE_MODE == ephemeral ]] || fail "only disposable disks may use runtime expansion"
-  python3 - "$working_disk" "$source_disk_bytes" "$expanded_disk_bytes" <<'PY' ||
-import os
-import stat
-import sys
-
-path = sys.argv[1]
-source_size = int(sys.argv[2])
-expanded_size = int(sys.argv[3])
-flags = os.O_WRONLY | os.O_NOFOLLOW
-if hasattr(os, "O_CLOEXEC"):
-    flags |= os.O_CLOEXEC
-descriptor = os.open(path, flags)
-try:
-    before = os.fstat(descriptor)
-    if not stat.S_ISREG(before.st_mode) or before.st_size != source_size:
-        raise SystemExit("disposable root disk changed before expansion")
-    os.ftruncate(descriptor, expanded_size)
-    os.fsync(descriptor)
-    after = os.fstat(descriptor)
-    if after.st_size != expanded_size:
-        raise SystemExit("disposable root disk has the wrong expanded size")
-finally:
-    os.close(descriptor)
-PY
-  {
-    fail "could not safely expand the disposable root disk"
-  }
-  [[ $(stat -f '%z' "$working_disk") == "$expanded_disk_bytes" ]] || fail "expanded root disk has the wrong size"
-  echo "[qemu-gpu] Expanded the disposable sparse disk to $((expanded_disk_bytes / 1024 / 1024)) MiB." >&2
-fi
 
 qemu_args=(
   -name 'Omarchy Quattro ARM64 - QEMU VirGL'

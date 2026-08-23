@@ -122,11 +122,47 @@ export OMARCHY_QEMU_GPU_STATE_ROOT="$test_root/state"
 source_disk="$test_root/source.ext4"
 dd if=/dev/zero of="$source_disk" bs=4096 count=1 >/dev/null 2>&1
 printf 'immutable-base' | dd of="$source_disk" bs=1 seek=32 conv=notrunc >/dev/null 2>&1
+printf '\x53\xef' | dd of="$source_disk" bs=1 seek=1080 conv=notrunc >/dev/null 2>&1
 source_bytes=$(stat -f '%z' "$source_disk")
 source_sha=$(shasum -a 256 "$source_disk" | awk '{print $1}')
 identity_a=$(printf 'bundle-a' | shasum -a 256 | awk '{print $1}')
 identity_b=$(printf 'bundle-b' | shasum -a 256 | awk '{print $1}')
 identity_bad=$(printf 'bundle-bad' | shasum -a 256 | awk '{print $1}')
+identity_expanded=$(printf 'bundle-expanded' | shasum -a 256 | awk '{print $1}')
+identity_compressed=$(printf 'bundle-compressed' | shasum -a 256 | awk '{print $1}')
+
+# A compressed app payload is expanded once into the private immutable-image
+# cache, verified against the raw manifest digest, and reused thereafter.
+compressed_disk="$test_root/source.ext4.zst"
+zstd_source=$(command -v zstd)
+zstd_test="$test_root/zstd"
+printf '#!/bin/bash\nexec %q "$@"\n' "$zstd_source" >"$zstd_test"
+chmod 700 "$zstd_test"
+zstd -q -f "$source_disk" -o "$compressed_disk"
+compressed_bytes=$(stat -f '%z' "$compressed_disk")
+qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+materialized_source=$QEMU_IMMUTABLE_SOURCE_DISK
+assert cmp -s "$materialized_source" "$source_disk"
+qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+assert_eq "$QEMU_IMMUTABLE_SOURCE_DISK" "$materialized_source"
+
+# The factory workspace grows sparsely while its immutable source stays at the
+# transport size. Relaunch validates and reuses the expanded workspace.
+expanded_bytes=$((source_bytes + 16384))
+qemu_persistent_storage_select \
+  persistent "$identity_expanded" "$source_disk" "$source_sha" "$source_bytes" '' "$expanded_bytes"
+expanded_disk=$QEMU_SELECTED_DISK
+assert_eq "$(stat -f '%z' "$expanded_disk")" "$expanded_bytes"
+printf 'expanded-persistence' | dd of="$expanded_disk" bs=1 seek="$source_bytes" conv=notrunc >/dev/null 2>&1
+qemu_persistent_storage_release_lock
+qemu_persistent_storage_select \
+  persistent "$identity_expanded" "$source_disk" "$source_sha" "$source_bytes" '' "$expanded_bytes"
+assert_eq "$(dd if="$QEMU_SELECTED_DISK" bs=1 skip="$source_bytes" count=20 2>/dev/null)" expanded-persistence
+qemu_persistent_storage_release_lock
 
 qemu_persistent_storage_select \
   persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
