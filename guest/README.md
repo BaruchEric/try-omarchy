@@ -183,7 +183,9 @@ The builder normalizes `/boot/Image`, its initramfs, and the ext4 root disk to
 the shared artifact names `vmlinuz-linux`, `initramfs-linux.img`, and
 `rootfs.ext4`. The native launcher boots those files directly with QEMU's
 `virt` machine, HVF, host ARM CPU, Virtio block/GPU/input/console/RNG/balloon,
-Virtio Ethernet over SLIRP, and a duplex HDA device backed by SDL.
+Virtio Ethernet over SLIRP, and a duplex HDA device backed by SDL. A named
+Virtio-serial channel mirrors the live CoreAudio catalog into PipeWire, so
+Quattro's own Audio panel selects Mac speakers and microphones directly.
 
 ARM serial evidence uses the connected `hvc0` console. A narrow udev rule grants
 the guest `users` group write access only to that console. The x86 guest retains

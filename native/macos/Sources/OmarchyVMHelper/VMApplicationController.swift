@@ -6,15 +6,12 @@ import Foundation
 final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let launcherURL: URL
     private let initialArguments: [String]
-    private let restartArguments: [String]
-    private let restartAllowed: Bool
     private let baseEnvironment: [String: String]
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
 
     private var lifecycle = VMRunLifecycle()
-    private var statusMenu: AudioStatusMenuController?
     private var childRunning = false
     private var applicationTerminationPending = false
 
@@ -23,8 +20,6 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     init(
         launcherURL: URL,
         initialArguments: [String],
-        restartArguments: [String],
-        restartAllowed: Bool,
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
@@ -32,8 +27,6 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     ) {
         self.launcherURL = launcherURL
         self.initialArguments = initialArguments
-        self.restartArguments = restartArguments
-        self.restartAllowed = restartAllowed
         self.baseEnvironment = baseEnvironment
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
@@ -85,48 +78,17 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             self?.childDidExit(status: status)
         }
         childRunning = true
-
-        if let statusMenu {
-            statusMenu.setRunningRoutes(configuration.routes)
-        } else {
-            statusMenu = AudioStatusMenuController(
-                preferenceStore: preferenceStore,
-                deviceProvider: deviceProvider,
-                runningRoutes: configuration.routes,
-                restartAllowed: restartAllowed,
-                onRestart: { [weak self] in self?.requestRestart() ?? false },
-                onQuit: { NSApp.terminate(nil) }
-            )
-        }
-    }
-
-    private func requestRestart() -> Bool {
-        guard childRunning,
-              lifecycle.requestRestart(allowed: restartAllowed) else { return false }
-        statusMenu?.setRestarting(true)
-        supervisor.forward(signal: SIGTERM)
-        return true
     }
 
     private func childDidExit(status: Int32) {
         guard childRunning else { return }
         childRunning = false
 
-        switch lifecycle.childExited() {
-        case .relaunch:
-            do {
-                try launch(arguments: restartArguments)
-            } catch {
-                failLaunch(error)
-            }
-        case .finish:
-            if applicationTerminationPending {
-                statusMenu?.invalidate()
-                statusMenu = nil
-                NSApp.reply(toApplicationShouldTerminate: true)
-            } else {
-                finish(status: status)
-            }
+        lifecycle.childExited()
+        if applicationTerminationPending {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        } else {
+            finish(status: status)
         }
     }
 
@@ -137,8 +99,6 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func finish(status: Int32) {
         exitStatus = status
-        statusMenu?.invalidate()
-        statusMenu = nil
         NSApp.stop(nil)
 
         // `stop` takes effect after the current event is handled. Posting a

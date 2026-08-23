@@ -561,6 +561,7 @@ verify_runtime_tree() {
     printf '%s\n' "$audio_help" | awk '$1 == "sdl" { found = 1 } END { exit !found }' || \
       die "source-built QEMU is missing the SDL audio backend"
     for marker in \
+      OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY \
       OMARCHY_SDL_INPUT_DEVICE_NAME \
       OMARCHY_SDL_OUTPUT_DEVICE_NAME; do
       LC_ALL=C grep -aFq "$marker" "$qemu" || \

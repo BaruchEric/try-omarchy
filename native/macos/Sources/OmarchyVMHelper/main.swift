@@ -6,7 +6,7 @@ import Foundation
 private var terminationSignalSources: [DispatchSourceSignal] = []
 
 private func usage() -> Never {
-    fputs("Usage: omarchy-vm-helper --run-qemu [--ephemeral | --reset-storage] [GUEST_DIR] | --bridge-command-super QEMU_PID QMP_SOCKET\n", stderr)
+    fputs("Usage: omarchy-vm-helper --run-qemu [--ephemeral | --reset-storage] [GUEST_DIR] | --bridge-command-super QEMU_PID QMP_SOCKET | --bridge-native-audio QEMU_PID SOCKET ROUTE_DIRECTORY\n", stderr)
     exit(64)
 }
 
@@ -44,6 +44,27 @@ private func waitForAccessibilityPermission() -> Bool {
 
 let arguments = effectiveArguments()
 do {
+    if arguments.first == "--bridge-native-audio" {
+        guard arguments.count == 4,
+              let processIdentifier = Int32(arguments[1]),
+              processIdentifier > 1 else { usage() }
+        let bridge = try NativeAudioBridge(
+            targetPID: processIdentifier,
+            socketPath: arguments[2],
+            routeDirectoryPath: arguments[3]
+        )
+        for signalNumber in [SIGINT, SIGTERM] {
+            Darwin.signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+            source.setEventHandler { bridge.stop() }
+            source.resume()
+            terminationSignalSources.append(source)
+        }
+        fputs("[audio-bridge] Host audio devices are available inside Omarchy.\n", stderr)
+        try bridge.run()
+        exit(0)
+    }
+
     if arguments.first == "--bridge-command-super" {
         guard arguments.count == 3,
               let processIdentifier = Int32(arguments[1]),
@@ -78,7 +99,6 @@ do {
         }
         let launcher = try QEMUGPULauncherPath.resolve(bundleURL: Bundle.main.bundleURL)
         let launcherArguments = try request.validatedScriptArguments()
-        let restartArguments = try request.validatedRestartScriptArguments()
         guard MainActor.assumeIsolated({ waitForAccessibilityPermission() }) else {
             throw HelperError.io(
                 "timed out waiting for Accessibility permission; enable Omarchy Quattro in System Settings, then retry"
@@ -100,9 +120,7 @@ do {
             application.setActivationPolicy(.accessory)
             let controller = VMApplicationController(
                 launcherURL: launcher,
-                initialArguments: launcherArguments,
-                restartArguments: restartArguments,
-                restartAllowed: request.allowsAudioRestart
+                initialArguments: launcherArguments
             )
             application.delegate = controller
             for signalNumber in [SIGHUP, SIGINT, SIGTERM] {

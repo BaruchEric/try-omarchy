@@ -140,6 +140,7 @@
       "virtio-net-pci",
       "virtio-serial-pci",
       "virtconsole",
+      "virtserialport",
       "virtio-rng-pci",
       "virtio-balloon-pci",
       "intel-hda",

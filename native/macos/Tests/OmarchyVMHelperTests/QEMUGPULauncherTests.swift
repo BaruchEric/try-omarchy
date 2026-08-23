@@ -67,33 +67,6 @@ struct QEMUGPULaunchRequestTests {
         }
     }
 
-    @Test("an audio restart never replays a one-shot storage reset")
-    func resetIsNotReplayed() throws {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omarchy-qemu-restart-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let canonicalPath = root.resolvingSymlinksInPath().path
-        let request = QEMUGPULaunchRequest(
-            storageOption: .resetStorage,
-            guestDirectoryPath: root.path
-        )
-
-        #expect(request.allowsAudioRestart)
-        #expect(try request.validatedScriptArguments() == ["--reset-storage", canonicalPath])
-        #expect(try request.validatedRestartScriptArguments() == [canonicalPath])
-    }
-
-    @Test("a disposable VM cannot be restarted to apply audio changes")
-    func ephemeralRestartIsDisabled() throws {
-        let request = QEMUGPULaunchRequest(
-            storageOption: .ephemeral,
-            guestDirectoryPath: nil
-        )
-
-        #expect(!request.allowsAudioRestart)
-        #expect(try request.validatedRestartScriptArguments() == ["--ephemeral"])
-    }
 }
 
 @Suite("Repo-local QEMU GPU launcher path")

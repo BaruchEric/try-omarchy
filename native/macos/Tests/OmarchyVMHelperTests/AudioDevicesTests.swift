@@ -4,6 +4,47 @@ import Testing
 
 @Suite("Host audio routing")
 struct AudioDevicesTests {
+    @Test("guest route requests use a strict direction-aware schema")
+    func guestRouteRequestSchema() throws {
+        let output = try #require(
+            NativeAudioRouteRequest.decode(Data(
+                #"{"deviceUID":"speaker","direction":"output","type":"select"}"#.utf8
+            ))
+        )
+        let systemInput = try #require(
+            NativeAudioRouteRequest.decode(Data(
+                #"{"deviceUID":null,"direction":"input","type":"select"}"#.utf8
+            ))
+        )
+
+        #expect(output == .init(direction: .output, deviceUID: "speaker"))
+        #expect(systemInput == .init(direction: .input, deviceUID: nil))
+        #expect(NativeAudioRouteRequest.decode(Data(
+            #"{"deviceUID":"speaker","direction":"output","extra":true,"type":"select"}"#.utf8
+        )) == nil)
+    }
+
+    @Test("route files publish canonical base64 and an unambiguous default sentinel")
+    func routeControlFiles() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("omarchy-audio-route-tests.\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try NativeAudioRouteFileStore(directoryPath: directory.path)
+
+        try store.publish("Studio Display", for: .output)
+        try store.publish(nil, for: .input)
+
+        #expect(try String(contentsOf: directory.appendingPathComponent("output"), encoding: .utf8)
+            == "U3R1ZGlvIERpc3BsYXk=\n")
+        #expect(try String(contentsOf: directory.appendingPathComponent("input"), encoding: .utf8)
+            == "default\n")
+    }
+
     @Test("empty preferences use System Default for both directions")
     func emptyPreferencesUseSystemDefaults() {
         let fixture = DefaultsFixture()
@@ -167,52 +208,21 @@ struct AudioDevicesTests {
 
 @Suite("VM run lifecycle")
 struct VMRunLifecycleTests {
-    @Test("one accepted restart produces exactly one relaunch")
-    func restartOnce() {
+    @Test("quit drains the child exactly once")
+    func quitDrainsChild() {
         var lifecycle = VMRunLifecycle()
-
-        let accepted = lifecycle.requestRestart(allowed: true)
-        #expect(accepted)
-        #expect(lifecycle.isRestarting)
-        let firstExit = lifecycle.childExited()
-        #expect(firstExit == .relaunch)
-        #expect(!lifecycle.isStopping)
-        let secondExit = lifecycle.childExited()
-        #expect(secondExit == .finish)
-    }
-
-    @Test("a denied restart leaves the VM running")
-    func deniedRestart() {
-        var lifecycle = VMRunLifecycle()
-
-        let accepted = lifecycle.requestRestart(allowed: false)
-        #expect(!accepted)
-        #expect(!lifecycle.isStopping)
-        let exit = lifecycle.childExited()
-        #expect(exit == .finish)
-    }
-
-    @Test("Quit overrides a pending restart")
-    func quitOverridesRestart() {
-        var lifecycle = VMRunLifecycle()
-        let accepted = lifecycle.requestRestart(allowed: true)
-        #expect(accepted)
-
         lifecycle.requestQuit()
-
-        let exit = lifecycle.childExited()
-        #expect(exit == .finish)
+        #expect(lifecycle.isStopping)
+        lifecycle.childExited()
+        #expect(!lifecycle.isStopping)
     }
 
-    @Test("an external signal cancels a pending restart")
-    func signalOverridesRestart() {
+    @Test("an external signal drains the child exactly once")
+    func signalDrainsChild() {
         var lifecycle = VMRunLifecycle()
-        let accepted = lifecycle.requestRestart(allowed: true)
-        #expect(accepted)
-
         lifecycle.requestTermination(signal: 15)
-
-        let exit = lifecycle.childExited()
-        #expect(exit == .finish)
+        #expect(lifecycle.isStopping)
+        lifecycle.childExited()
+        #expect(!lifecycle.isStopping)
     }
 }

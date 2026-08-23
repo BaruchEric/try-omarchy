@@ -96,6 +96,10 @@ if [[ $architecture == x86_64 ]]; then
   cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
   cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 elif [[ $architecture == aarch64 ]]; then
+  cp -a "$guest_dir/native-overlay/." "$root/"
+  mkdir -p "$root/etc/systemd/user/default.target.wants"
+  ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
+    "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"
   cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
   if [[ $profile == demo ]]; then
     cat "$guest_dir/fragments/hypr-autostart-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"

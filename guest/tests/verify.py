@@ -111,7 +111,10 @@ def test_static() -> None:
         result = run("bash", "-n", script)
         check(result.returncode == 0, f"shell syntax: {script.relative_to(GUEST)}")
         check(os.access(script, os.X_OK), f"shell executable: {script.relative_to(GUEST)}")
-    python_files = sorted((GUEST / "scripts").glob("*.py")) + [GUEST / "overlay/usr/local/bin/omarchy-web-guest-probe"]
+    python_files = sorted((GUEST / "scripts").glob("*.py")) + [
+        GUEST / "overlay/usr/local/bin/omarchy-web-guest-probe",
+        GUEST / "native-overlay/usr/local/bin/omarchy-native-audio-bridge",
+    ]
     for script in python_files:
         try:
             ast.parse(script.read_text(), filename=str(script))

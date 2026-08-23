@@ -61,19 +61,6 @@ struct QEMUGPULaunchRequest: Equatable {
         return result
     }
 
-    var allowsAudioRestart: Bool {
-        storageOption != .ephemeral
-    }
-
-    func validatedRestartScriptArguments() throws -> [String] {
-        // Reset is a one-shot launch request. Replaying it after an audio menu
-        // change would replace the just-booted persistent disk a second time.
-        let restartStorageOption = storageOption == .resetStorage ? nil : storageOption
-        return try QEMUGPULaunchRequest(
-            storageOption: restartStorageOption,
-            guestDirectoryPath: guestDirectoryPath
-        ).validatedScriptArguments()
-    }
 }
 
 enum QEMUGPULauncherPath {

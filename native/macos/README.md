@@ -9,6 +9,7 @@ ARM64 Quattro guest from `guest/dist-aarch64` in QEMU with:
   refresh rate to the guest;
 - an unprivileged SLIRP network behind a Virtio Ethernet adapter;
 - SDL speaker and microphone I/O behind a duplex virtual HDA device;
+- live host audio-device mirroring in Omarchy's own PipeWire panel;
 - a manifest-keyed persistent APFS disk clone; and
 - a signed app that owns microphone permission and maps focused Mac Command to
   guest Super.
@@ -58,12 +59,12 @@ detects the grant and continues into QEMU automatically.
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
 resizable window and back. Closing QEMU powers off that session cleanly.
 
-While the VM is running, the Omarchy speaker icon in the macOS menu bar exposes
-separate **Speaker** and **Microphone** submenus. **System Default** is the first
-choice in both and follows macOS's current default route. Choosing a specific
-device saves its stable CoreAudio identity immediately; use **Restart Omarchy to
-Apply** after making all desired changes. The menu also links to Sound and
-Microphone Privacy settings and provides a VM-aware Quit action.
+While the VM is running, open Omarchy's Audio panel from its top bar or with
+Super-Control-A. Its output and input lists include **Mac System Default** and
+every currently connected Mac speaker or microphone. The list updates when
+CoreAudio hardware appears, disappears, or changes, and choosing a route takes
+effect without restarting Omarchy. Selections retain stable CoreAudio identities
+and survive app relaunches and guest-storage resets.
 
 For an intentionally throwaway disk or a clean clone of the current verified
 ARM image:
@@ -161,11 +162,15 @@ or playback.
 Host audio choices are stored by stable CoreAudio UID in the app's versioned
 `UserDefaults` record, independently of guest disks. They therefore survive app
 relaunches, guest storage resets, and guest-image updates. If a saved device is
-temporarily disconnected, the menu keeps that choice, marks it unavailable,
-and launches with System Default until the device returns. Explicit device
-changes require one controlled VM restart because QEMU's SDL backend opens its
-audio devices at process startup. A disposable `--ephemeral` VM is never
-silently replaced during that operation; reopen it to apply the saved choice.
+temporarily disconnected, routing falls back to System Default until it returns.
+
+The signed helper watches CoreAudio and exchanges a strict JSON-lines catalog
+with a guest user service over a private named Virtio serial port. That service
+mirrors endpoints as PipeWire sinks and sources, so the stock Quattro audio
+panel remains the only chooser. Route selections are atomically published in
+the run's private control directory; the patched SDL backend reopens only the
+affected stream while QEMU and the guest keep running. The transport HDA nodes
+stay hidden from the panel and continue carrying the selected virtual route.
 
 ## Focused Command-to-Super bridge
 

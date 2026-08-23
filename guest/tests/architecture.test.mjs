@@ -75,6 +75,7 @@ test("x86 and ARM specs are immutable, distinct Quattro products", () => {
     "virtio-net-pci",
     "virtio-serial-pci",
     "virtconsole",
+    "virtserialport",
     "virtio-rng-pci",
     "virtio-balloon-pci",
     "intel-hda",
@@ -327,8 +328,31 @@ test("ARM QEMU host cursor is boot-gated without freezing display policy", () =>
   assert.doesNotMatch(profile, /LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER|llvmpipe/);
   assert.match(
     configure,
-    /elif \[\[ \$architecture == aarch64 \]\]; then\n\s+cat "\$guest_dir\/fragments\/hypr-monitors-arm-qemu\.append\.lua"/,
+    /elif \[\[ \$architecture == aarch64 \]\]; then[\s\S]*cat "\$guest_dir\/fragments\/hypr-monitors-arm-qemu\.append\.lua"/,
   );
+});
+
+test("native ARM audio devices are mirrored into Omarchy's live audio panel", () => {
+  const configure = text("scripts/configure-rootfs.sh");
+  const bridge = text("native-overlay/usr/local/bin/omarchy-native-audio-bridge");
+  const unit = text("native-overlay/usr/lib/systemd/user/omarchy-native-audio-bridge.service");
+  const rule = text("native-overlay/etc/udev/rules.d/91-omarchy-native-audio.rules");
+  const launcher = readFileSync(
+    new URL("../../native/macos/run-qemu-gpu.sh", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(configure, /elif \[\[ \$architecture == aarch64 \]\]; then\n\s+cp -a "\$guest_dir\/native-overlay\/\."/);
+  assert.match(configure, /omarchy-native-audio-bridge\.service/);
+  assert.match(bridge, /module-null-sink/);
+  assert.match(bridge, /module-loopback/);
+  assert.match(bridge, /get-default-sink/);
+  assert.match(bridge, /get-default-source/);
+  assert.match(unit, /Restart=on-failure/);
+  assert.match(rule, /ATTR\{name\}=="dev\.tryomarchy\.audio"/);
+  assert.match(launcher, /name=dev\.tryomarchy\.audio/);
+  assert.match(launcher, /--bridge-native-audio/);
+  assert.match(launcher, /OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY/);
 });
 
 test("browser and native guests receive truthful architecture-specific welcomes", () => {

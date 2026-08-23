@@ -56,6 +56,7 @@ done
 }
 file "$qemu_bin" | grep -q 'arm64' || fail "staged QEMU is not an ARM64 executable"
 for marker in \
+  OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY \
   OMARCHY_SDL_INPUT_DEVICE_NAME \
   OMARCHY_SDL_OUTPUT_DEVICE_NAME; do
   LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
@@ -102,6 +103,7 @@ for device in \
   hda-micro \
   intel-hda \
   virtconsole \
+  virtserialport \
   virtio-balloon-pci \
   virtio-blk-pci \
   virtio-gpu-gl-pci \
@@ -339,6 +341,7 @@ expected_devices = [
     "virtio-net-pci",
     "virtio-serial-pci",
     "virtconsole",
+    "virtserialport",
     "virtio-rng-pci",
     "virtio-balloon-pci",
     "intel-hda",
@@ -570,6 +573,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 bridge_pid=""
+audio_bridge_pid=""
 
 terminate_child() {
   local pid=$1
@@ -599,6 +603,9 @@ cleanup() {
   fi
   if [[ $bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$bridge_pid" 20
+  fi
+  if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$audio_bridge_pid" 20
   fi
   qemu_persistent_storage_release_lock
   if [[ -n $work_dir && -n $owner_marker && -n $owner_token ]]; then
@@ -690,6 +697,9 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose QMP through the standardized alias expected by the
 # security-checking input bridge.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
+audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
+mkdir -m 700 "$work_dir/audio-routes"
 
 source_disk="$guest_dir/rootfs.ext4"
 qemu_persistent_storage_select \
@@ -772,12 +782,15 @@ qemu_args=(
   -device 'virtio-serial-pci,id=omarchy-serial'
   -chardev 'stdio,id=omarchy-hvc0,signal=off'
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
+  -chardev "socket,id=omarchy-audio-bridge,path=$audio_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
 )
 
 # SDL2 has one legacy process-wide override that would collapse input and
 # output onto the same named device. The patched QEMU backend uses the two
 # direction-specific Omarchy variables instead; unset means live System Default.
 unset SDL_AUDIO_DEVICE_NAME
+export OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY="$audio_route_dir"
 
 if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
   qemu_args+=(
@@ -790,6 +803,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   printf ' %q' "$qemu_bin" "${qemu_args[@]}" >&2
   printf '\n[qemu-gpu] bridge command: %q --bridge-command-super QEMU_PID %q' \
     "$input_bridge" "$qmp_socket" >&2
+  printf '\n[qemu-gpu] audio bridge command: %q --bridge-native-audio QEMU_PID %q %q' \
+    "$input_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -809,16 +824,20 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [[ -S $qmp_socket ]] && break
+  [[ -S $qmp_socket && -S $audio_bridge_socket ]] && break
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
   sleep 0.05
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
+[[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling input
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.
 "$input_bridge" --bridge-command-super "$qemu_pid" "$qmp_socket" 9>&- &
 bridge_pid=$!
+"$input_bridge" --bridge-native-audio \
+  "$qemu_pid" "$audio_bridge_socket" "$audio_route_dir" 9>&- &
+audio_bridge_pid=$!
 
 # Bash 3.2 has no `wait -n`. Poll both children so a bridge failure at any
 # point terminates QEMU instead of leaving an unmodified Command key behind.
@@ -835,6 +854,17 @@ while true; do
     fi
     bridge_pid=""
     fail "focused Command-key bridge exited while QEMU was running (status $bridge_status)"
+  fi
+
+  audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)
+  if [[ -z $audio_bridge_state || $audio_bridge_state == *Z* ]]; then
+    if wait "$audio_bridge_pid"; then
+      audio_bridge_status=0
+    else
+      audio_bridge_status=$?
+    fi
+    audio_bridge_pid=""
+    fail "native audio bridge exited while QEMU was running (status $audio_bridge_status)"
   fi
   sleep 0.1
 done
@@ -858,4 +888,17 @@ else
   wait "$bridge_pid" 2>/dev/null || true
 fi
 bridge_pid=""
+
+for ((attempt = 0; attempt < 40; attempt++)); do
+  audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)
+  [[ -n $audio_bridge_state && $audio_bridge_state != *Z* ]] || break
+  sleep 0.05
+done
+audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)
+if [[ -n $audio_bridge_state && $audio_bridge_state != *Z* ]]; then
+  terminate_child "$audio_bridge_pid" 20
+else
+  wait "$audio_bridge_pid" 2>/dev/null || true
+fi
+audio_bridge_pid=""
 exit "$qemu_status"
