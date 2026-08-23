@@ -13,7 +13,7 @@
     "omarchy:native:prepare": "./native/macos/build-qemu-gpu-runtime.sh && ./native/macos/build-app.sh",
     "omarchy:native": "./native/macos/open-qemu-gpu.sh",
     "omarchy:native:ephemeral": "./native/macos/open-qemu-gpu.sh --ephemeral",
-    "omarchy:native:factory": "\"./native/macos/.build/Omarchy Quattro.app/Contents/MacOS/omarchy-vm-helper\" --run-qemu --ephemeral \"$PWD/guest/dist-aarch64-unprovisioned\"",
+    "omarchy:native:factory": "./native/macos/open-qemu-gpu.sh --ephemeral ./guest/dist-aarch64-unprovisioned",
     "omarchy:native:reset": "./native/macos/open-qemu-gpu.sh --reset-storage",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"

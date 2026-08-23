@@ -24,6 +24,25 @@ private func requestAccessibilityPermission() -> Bool {
     return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
 }
 
+@MainActor
+private func showAccessibilitySetup() {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    application.activate(ignoringOtherApps: true)
+
+    let alert = NSAlert()
+    alert.alertStyle = .warning
+    alert.messageText = "Allow Command-key capture"
+    alert.informativeText = "Omarchy Quattro needs Accessibility permission only to send Command as Super while the VM window is focused. Enable Omarchy Quattro in System Settings, then run the launch command again. If it is already enabled, toggle it off and on."
+    alert.addButton(withTitle: "Open Accessibility Settings")
+    alert.addButton(withTitle: "Quit")
+
+    if alert.runModal() == .alertFirstButtonReturn,
+       let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        NSWorkspace.shared.open(settings)
+    }
+}
+
 let arguments = effectiveArguments()
 do {
     if arguments.first == "--bridge-command-super" {
@@ -61,6 +80,17 @@ do {
         let launcher = try QEMUGPULauncherPath.resolve(bundleURL: Bundle.main.bundleURL)
         let launcherArguments = try request.validatedScriptArguments()
         let restartArguments = try request.validatedRestartScriptArguments()
+        if !AXIsProcessTrusted() {
+            requestAccessibilityPermission()
+        }
+        guard AXIsProcessTrusted() else {
+            MainActor.assumeIsolated {
+                showAccessibilitySetup()
+            }
+            throw HelperError.io(
+                "Accessibility permission is required for focused Command-key capture; enable Omarchy Quattro in System Settings, then retry"
+            )
+        }
         let microphoneDecision = MicrophonePreflight.decision()
         if let warning = microphoneDecision.warning {
             fputs("[audio] \(warning)\n", stderr)
