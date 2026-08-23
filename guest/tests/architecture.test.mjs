@@ -275,6 +275,8 @@ test("factory setup and update prerequisites are pinned and locally represented"
   assert.match(mise, /-T mise/);
   assert.match(runtime, /usr\/share\/omarchy-web\/repo/);
   assert.match(repository, /repo-add --quiet/);
+  assert.match(repository, /-cf - "\$\{database_entries\[@\]\}"/);
+  assert.doesNotMatch(repository, /-cf - \./);
   assert.match(repository, /var\/lib\/pacman\/sync\/\$repo_name\.db/);
   assert.doesNotMatch(repository, /pacman -Syy/);
   assert.match(repository, /pacman -Qem/);

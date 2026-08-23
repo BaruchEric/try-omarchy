@@ -41,7 +41,7 @@ case "$root" in
     ;;
 esac
 [[ -f $spec ]] || fail "spec not found: $spec"
-for command in arch-chroot find gzip install python3 repo-add tar; do
+for command in arch-chroot find gzip install python3 repo-add sort tar; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
@@ -87,8 +87,16 @@ trap cleanup EXIT
 # the reproducible ext4 image vary between builds.
 repo-add --quiet "$temporary/$repo_name.db.tar.gz" "${archives[@]}"
 install -d -m 0755 "$temporary/extracted"
-tar -xf "$temporary/$repo_name.db.tar.gz" -C "$temporary/extracted"
+tar --warning=no-unknown-keyword -xf "$temporary/$repo_name.db.tar.gz" -C "$temporary/extracted"
 find "$temporary/extracted" -exec touch -h -d "@$source_date_epoch" {} +
+mapfile -t database_entries < <(
+  find "$temporary/extracted" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort
+)
+(( ${#database_entries[@]} == expected_archive_count )) ||
+  fail "local repository database has an unexpected entry count"
+for entry in "${database_entries[@]}"; do
+  [[ $entry =~ ^[A-Za-z0-9@._+-]+$ && $entry != .* ]] || fail "unsafe local repository entry: $entry"
+done
 tar \
   --sort=name \
   --mtime="@$source_date_epoch" \
@@ -97,7 +105,7 @@ tar \
   --numeric-owner \
   --format=gnu \
   -C "$temporary/extracted" \
-  -cf - . |
+  -cf - "${database_entries[@]}" |
   gzip -n -9 >"$repo_dir/$repo_name.db.tar.gz"
 ln -sfn "$repo_name.db.tar.gz" "$repo_dir/$repo_name.db"
 
