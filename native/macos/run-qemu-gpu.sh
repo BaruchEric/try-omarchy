@@ -55,6 +55,13 @@ done
   fail "missing focused Command-key bridge at $input_bridge; run native/macos/build-app.sh first"
 }
 file "$qemu_bin" | grep -q 'arm64' || fail "staged QEMU is not an ARM64 executable"
+for marker in \
+  OMARCHY_SDL_INPUT_DEVICE_NAME \
+  OMARCHY_SDL_OUTPUT_DEVICE_NAME; do
+  LC_ALL=C grep -aFq "$marker" "$qemu_bin" || {
+    fail "staged QEMU lacks persistent host audio routing; rerun npm run omarchy:native:prepare"
+  }
+done
 file "$input_bridge" | grep -q 'arm64' || fail "focused Command-key bridge is not an ARM64 executable"
 codesign --verify --strict "$input_bridge" >/dev/null 2>&1 || {
   fail "focused Command-key bridge is not code-signed"
@@ -651,6 +658,11 @@ qemu_args=(
   -chardev 'stdio,id=omarchy-hvc0,signal=off'
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
 )
+
+# SDL2 has one legacy process-wide override that would collapse input and
+# output onto the same named device. The patched QEMU backend uses the two
+# direction-specific Omarchy variables instead; unset means live System Default.
+unset SDL_AUDIO_DEVICE_NAME
 
 if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
   qemu_args+=(

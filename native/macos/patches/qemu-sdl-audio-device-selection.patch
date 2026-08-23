@@ -1,0 +1,40 @@
+diff --git a/audio/sdlaudio.c b/audio/sdlaudio.c
+index 707110973a..5c65db3e5b 100644
+--- a/audio/sdlaudio.c
++++ b/audio/sdlaudio.c
+@@ -116,6 +116,19 @@ static int sdl_to_audfmt(int sdlfmt, AudioFormat *fmt, int *endianness)
+     return 0;
+ }
+ 
++/*
++ * SDL's QEMU backend normally opens the default device in both directions.
++ * Keep that behavior unless the native Omarchy launcher resolves one of its
++ * persisted CoreAudio device UIDs to an available SDL display name.
++ */
++static const char *sdl_device_name(int rec)
++{
++    const char *name = g_getenv(rec ? "OMARCHY_SDL_INPUT_DEVICE_NAME" :
++                                     "OMARCHY_SDL_OUTPUT_DEVICE_NAME");
++
++    return name && *name ? name : NULL;
++}
++
+ static SDL_AudioDeviceID sdl_open(SDL_AudioSpec *req, SDL_AudioSpec *obt,
+                                   int rec)
+ {
+@@ -141,7 +154,14 @@ static SDL_AudioDeviceID sdl_open(SDL_AudioSpec *req, SDL_AudioSpec *obt,
+     }
+ #endif
+ 
+-    devid = SDL_OpenAudioDevice(NULL, rec, req, obt, 0);
++    devid = SDL_OpenAudioDevice(sdl_device_name(rec), rec, req, obt, 0);
++    if (!devid && sdl_device_name(rec)) {
++        AUD_log(AUDIO_CAP,
++                "Requested SDL %s device disappeared; using system default\n",
++                rec ? "recording" : "playback");
++        SDL_ClearError();
++        devid = SDL_OpenAudioDevice(NULL, rec, req, obt, 0);
++    }
+     if (!devid) {
+         sdl_logerr("SDL_OpenAudioDevice for %s failed\n",
+                    rec ? "recording" : "playback");

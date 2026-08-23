@@ -41,6 +41,7 @@ done
 
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
+audio_device_patch="$native_dir/patches/qemu-sdl-audio-device-selection.patch"
 prepare_runtime="$native_dir/prepare-qemu-gpu-runtime.sh"
 
 qemu_commit=cf3e71d8fc8ba681266759bb6cb2e45a45983e3e
@@ -57,6 +58,7 @@ startergo_sha256=8b02c2bc4177047cb516f0cd5b510aa7a7aed2bdb3fb1d8507faf45fa5adc5a
 texture_patch_sha256=428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc157903
 gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
 display_patch_sha256=93fc190b8fb4d71e53b0c1b58c77ff81c4f742126913310c2bcbfc90f7af8302
+audio_device_patch_sha256=b413348ca070a0fde5f8c7bc4a75e23267906161c4cadb803a9b4bb4d25dadae
 
 keycodemap_commit=f5772a62ec52591ff6870b7e8ef32482371f22c6
 keycodemap_root="keycodemapdb-$keycodemap_commit"
@@ -114,6 +116,8 @@ macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
 ((macos_major >= 15)) || die "the pinned GPU bottles require macOS 15 or newer"
 [[ -f $display_patch && ! -L $display_patch ]] || \
   die "missing dynamic-display patch: $display_patch"
+[[ -f $audio_device_patch && ! -L $audio_device_patch ]] || \
+  die "missing SDL audio-device patch: $audio_device_patch"
 [[ -x $prepare_runtime && ! -L $prepare_runtime ]] || \
   die "missing runtime preparation script: $prepare_runtime"
 if [[ -n $archive_cache ]]; then
@@ -289,11 +293,14 @@ gpu_fix_patch="$startergo_dir/patches/gpu-spike-resolution-fix.patch"
 verify_file_sha "startergo texture-borrowing patch" "$texture_patch" "$texture_patch_sha256"
 verify_file_sha "startergo GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patch_sha256"
 verify_file_sha "Try Omarchy dynamic-display patch" "$display_patch" "$display_patch_sha256"
+verify_file_sha "Try Omarchy SDL audio-device patch" \
+  "$audio_device_patch" "$audio_device_patch_sha256"
 
-log "Applying the exact startergo render patches and dynamic-display patch"
+log "Applying the exact render, dynamic-display, and audio-device patches"
 patch -d "$source_dir" -p1 -f -i "$texture_patch"
 patch -d "$source_dir" -p1 -f -i "$gpu_fix_patch"
 patch -d "$source_dir" -p1 -f -i "$display_patch"
+patch -d "$source_dir" -p1 -f -i "$audio_device_patch"
 
 virgl_root="$dependency_root/virglrenderer/$virgl_version"
 angle_root="$dependency_root/angle/$angle_version"

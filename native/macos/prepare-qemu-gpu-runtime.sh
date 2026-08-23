@@ -84,7 +84,7 @@ log() {
   echo "[qemu-gpu-runtime] $*"
 }
 
-for tool in awk brew codesign curl ditto file install install_name_tool mkdir \
+for tool in awk brew codesign curl ditto file grep install install_name_tool mkdir \
   mktemp otool python3 rm sed shasum sw_vers tar uname xattr; do
   command -v "$tool" >/dev/null 2>&1 || die "required tool is unavailable: $tool"
 done
@@ -560,6 +560,12 @@ verify_runtime_tree() {
       die "source-built QEMU could not enumerate audio backends: $audio_help"
     printf '%s\n' "$audio_help" | awk '$1 == "sdl" { found = 1 } END { exit !found }' || \
       die "source-built QEMU is missing the SDL audio backend"
+    for marker in \
+      OMARCHY_SDL_INPUT_DEVICE_NAME \
+      OMARCHY_SDL_OUTPUT_DEVICE_NAME; do
+      LC_ALL=C grep -aFq "$marker" "$qemu" || \
+        die "source-built QEMU is missing the $marker routing hook"
+    done
     [[ $device_help == *'name "intel-hda"'* ]] || \
       die "source-built QEMU is missing the intel-hda controller"
     [[ $device_help == *'name "hda-micro"'* ]] || \
