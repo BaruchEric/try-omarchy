@@ -341,11 +341,14 @@ export function inspectWebgl2ArtifactPlumbing(moduleSource, wasm) {
   });
 }
 
-export async function verifyRuntimeArtifacts(outputDirectory) {
+export async function verifyRuntimeArtifacts(
+  outputDirectory,
+  { writeReport = true, canonical = false } = {},
+) {
   const manifest = JSON.parse(await readFile(join(outputDirectory, "runtime-manifest.json"), "utf8"));
-  const tcgExperiment = experimentalTcgProfile();
-  const requestedGraphics = graphicsExperiment();
-  const vcpus = vcpuExperiment();
+  const tcgExperiment = canonical ? null : experimentalTcgProfile();
+  const requestedGraphics = canonical ? null : graphicsExperiment();
+  const vcpus = canonical ? null : vcpuExperiment();
   const hibernation = manifest.checkpoint?.mode === HIBERNATION_MODE;
   assert.ok(
     !hibernation || requestedGraphics === null || requestedGraphics === VIRGL_GRAPHICS_EXPERIMENT,
@@ -698,20 +701,42 @@ export async function verifyRuntimeArtifacts(outputDirectory) {
     },
     javascript: sourceChecks,
   };
-  await writeFile(
-    join(outputDirectory, "runtime-verification.json"),
-    `${JSON.stringify(report, null, 2)}\n`,
-    "utf8",
-  );
+  if (writeReport) {
+    await writeFile(
+      join(outputDirectory, "runtime-verification.json"),
+      `${JSON.stringify(report, null, 2)}\n`,
+      "utf8",
+    );
+  }
   return report;
 }
 
 const runtimeDirectory = resolve(fileURLToPath(new URL("..", import.meta.url)));
+
+export function parseRuntimeVerificationCli(arguments_) {
+  let outputDirectory = join(runtimeDirectory, "dist");
+  let outputDirectorySeen = false;
+  let writeReport = false;
+  for (const argument of arguments_) {
+    if (argument === "--write-report") {
+      assert.equal(writeReport, false, "--write-report may only be supplied once");
+      writeReport = true;
+    } else if (argument.startsWith("-")) {
+      throw new Error(`Unknown argument: ${argument}`);
+    } else {
+      assert.equal(outputDirectorySeen, false, "runtime output directory may only be supplied once");
+      outputDirectory = resolve(argument);
+      outputDirectorySeen = true;
+    }
+  }
+  return Object.freeze({ outputDirectory, writeReport });
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const outputDirectory = resolve(process.argv[2] ?? join(runtimeDirectory, "dist"));
-  const report = await verifyRuntimeArtifacts(outputDirectory);
+  const { outputDirectory, writeReport } = parseRuntimeVerificationCli(process.argv.slice(2));
+  const report = await verifyRuntimeArtifacts(outputDirectory, { writeReport });
   process.stdout.write(
     `runtime artifacts: wasm32 shared memory ${report.wasm.sharedMemoryImport.initialMiB} MiB; ` +
-      "pthread/main-thread-framebuffer/FS/frame/qcow2 gates passed\n",
+      `pthread/main-thread-framebuffer/FS/frame/qcow2 gates passed (${writeReport ? "report written" : "read-only"})\n`,
   );
 }

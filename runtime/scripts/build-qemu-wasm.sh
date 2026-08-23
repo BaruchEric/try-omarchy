@@ -342,7 +342,7 @@ cmp -s "$runtime_dir/../storage/bounded-overlay.mjs" "$output_dir/bounded-overla
   printf 'packaged bounded-overlay.mjs differs from the canonical storage guard\n' >&2
   exit 1
 }
-node "$runtime_dir/scripts/verify-runtime-artifacts.mjs" "$output_dir"
+node "$runtime_dir/scripts/verify-runtime-artifacts.mjs" --write-report "$output_dir"
 QEMU_WASM_BUILDER_IMAGE="$builder_image" \
 QEMU_WASM_BUILDER_ID="$(docker image inspect --format '{{.Id}}' "$builder_image")" \
   node "$runtime_dir/scripts/write-build-metadata.mjs" "$output_dir"

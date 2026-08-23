@@ -10,6 +10,7 @@ import { runInNewContext } from "node:vm";
 import {
   graphicsExperimentWorkerIdentityMatches,
   inspectWebgl2ArtifactPlumbing,
+  parseRuntimeVerificationCli,
   parseImportedMemories,
   verifyCheckpointWasmIdentity,
 } from "../scripts/verify-runtime-artifacts.mjs";
@@ -32,6 +33,7 @@ const scripts = [
   "scripts/package-smoke.sh",
   "scripts/patch-generated-qemu.mjs",
   "scripts/prepare-runtime-manifest.mjs",
+  "scripts/run-browser-qemu.mjs",
   "scripts/serve.mjs",
   "scripts/serve-full-guest.mjs",
   "scripts/stamp-tcg-threshold-experiment.mjs",
@@ -50,6 +52,43 @@ test("build entry points are executable and parse with their declared runtime", 
     const result = spawnSync(command, args, { encoding: "utf8" });
     assert.equal(result.status, 0, `${relativePath}: ${result.stderr}`);
   }
+});
+
+test("ordinary runtime verification is read-only and packaging opts into report writes", async () => {
+  const output = join(tmpdir(), "omarchy-runtime-verification-output");
+  assert.deepEqual(parseRuntimeVerificationCli([output]), {
+    outputDirectory: output,
+    writeReport: false,
+  });
+  assert.deepEqual(parseRuntimeVerificationCli(["--write-report", output]), {
+    outputDirectory: output,
+    writeReport: true,
+  });
+  assert.throws(
+    () => parseRuntimeVerificationCli(["--write-report", "--write-report", output]),
+    /--write-report may only be supplied once/,
+  );
+
+  const [builder, packager, smokePackager, makefile] = await Promise.all([
+    readFile(new URL("scripts/build-qemu-wasm.sh", runtime), "utf8"),
+    readFile(new URL("scripts/package-guest.sh", runtime), "utf8"),
+    readFile(new URL("scripts/package-smoke.sh", runtime), "utf8"),
+    readFile(new URL("Makefile", runtime), "utf8"),
+  ]);
+  for (const source of [builder, packager, smokePackager]) {
+    assert.match(
+      source,
+      /verify-runtime-artifacts\.mjs" --write-report "\$output_dir"/,
+    );
+  }
+  assert.match(
+    makefile,
+    /verify-dist:\n\tnode \.\/scripts\/verify-runtime-artifacts\.mjs \.\/dist/,
+  );
+  assert.doesNotMatch(
+    makefile,
+    /verify-dist:\n\t[^\n]*--write-report/,
+  );
 });
 
 test("SDL2 config shim exposes the Emscripten system port", () => {

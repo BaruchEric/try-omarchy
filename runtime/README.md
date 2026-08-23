@@ -394,8 +394,15 @@ To boot the exact local `guest/dist` without copying its 6 GiB disk into
 `runtime/` or `public/`, run:
 
 ```sh
-make -C runtime serve-full
+make -C runtime browser-qemu
 ```
+
+The launcher accepts only the canonical x86_64 runtime in `runtime/dist`,
+verifies it without rewriting packaged evidence, verifies every runtime and
+guest artifact through the no-copy release server, and then prints the exact
+loopback URL. It fails with the required build or restore command when either
+generated bundle is absent. `make -C runtime serve-full` remains the lower-level
+server entrypoint for diagnostics and isolated experiments.
 
 Open `http://127.0.0.1:8094/`. The server synthesizes an in-memory combined
 artifact manifest from `runtime/dist/runtime-build.json` and

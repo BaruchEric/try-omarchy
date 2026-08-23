@@ -59,7 +59,7 @@ docker run --rm --init \
 
 install -m 0644 "$runtime_dir/config/smoke.json" "$output_dir/runtime-manifest.json"
 install -m 0644 "$runtime_dir/web/runtime.mjs" "$output_dir/runtime.mjs"
-node "$runtime_dir/scripts/verify-runtime-artifacts.mjs" "$output_dir"
+node "$runtime_dir/scripts/verify-runtime-artifacts.mjs" --write-report "$output_dir"
 QEMU_WASM_BUILDER_IMAGE="$builder_image" \
 QEMU_WASM_BUILDER_ID="$(docker image inspect --format '{{.Id}}' "$builder_image")" \
   node "$runtime_dir/scripts/write-build-metadata.mjs" "$output_dir"
