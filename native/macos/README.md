@@ -23,6 +23,16 @@ codesign --force --sign - \
   .build/release/omarchy-vm-helper
 ```
 
+For a local developer run, the repo-local wrapper performs the release build,
+ad-hoc signing, complete guest validation, and direct launch in one command:
+
+```bash
+./native/macos/build-sign-run.sh
+```
+
+It is intentionally a development script, not a distributable or notarized
+macOS application bundle.
+
 Inspect capabilities and verify the complete guest bundle before launching:
 
 ```bash
@@ -44,6 +54,13 @@ challenge, and launches at most one native VM child at a time:
 Use `--no-resume` only for a deliberate cold-boot proof. Save states are tied by
 Virtualization.framework to the Mac that created them and are never distributable
 release artifacts.
+
+Each launch owns its disposable `omarchy-native-*` disk directory with an
+advisory lock. Normal window close, Command-Q, SIGINT, and SIGTERM remove it;
+after a crash or SIGKILL, a later launch removes only directories carrying the
+new exact marker whose lock is no longer held. Legacy directories without a
+lock are deliberately left untouched because another older helper could still
+be using them.
 
 ## WebRTC capture mode
 

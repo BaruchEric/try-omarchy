@@ -2,7 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 
-private var serverSignalSources: [DispatchSourceSignal] = []
+private var terminationSignalSources: [DispatchSourceSignal] = []
 
 private func usage() -> Never {
     fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] [--stream-window] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT] [--stream-window]\n", stderr)
@@ -56,10 +56,27 @@ do {
                 streamWindow: streamWindow
             )
             let application = NSApplication.shared
+            application.delegate = controller
             application.setActivationPolicy(.regular)
-            try controller.start()
-        application.run()
-        controller.cleanup()
+            for signalNumber in [SIGINT, SIGTERM] {
+                Darwin.signal(signalNumber, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+                source.setEventHandler {
+                    MainActor.assumeIsolated {
+                        controller.requestTermination()
+                    }
+                }
+                source.resume()
+                terminationSignalSources.append(source)
+            }
+            do {
+                try controller.start()
+            } catch {
+                controller.cleanup()
+                throw error
+            }
+            application.run()
+            controller.cleanup()
         }
     case "--serve":
         guard let originIndex = arguments.firstIndex(of: "--allowed-origin"),
@@ -103,7 +120,7 @@ do {
                 Darwin.exit(0)
             }
             source.resume()
-            serverSignalSources.append(source)
+            terminationSignalSources.append(source)
         }
         try LoopbackServer.serve(port: port, allowedOrigin: allowedOrigin, bundle: bundle, launcher: launcher)
     default:

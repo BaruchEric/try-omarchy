@@ -353,6 +353,117 @@ struct ResumeStoreTests {
     }
 }
 
+@Suite("Disposable native VM working directories")
+struct WorkingDirectoryLeaseTests {
+    @Test("cleanup removes only unlocked, recognized disposable work")
+    func cleanupIsLeaseSafe() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+            .appendingPathComponent("omarchy-workdir-test-\(UUID().uuidString)", isDirectory: true)
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+
+        let active = try WorkingDirectoryLease(
+            root: root,
+            cleanStaleDirectories: false,
+            manager: manager
+        )
+        defer { active.cleanup() }
+
+        let staleName = WorkingDirectoryLease.workPrefix + UUID().uuidString.uppercased()
+        let stale = root.appendingPathComponent(staleName, isDirectory: true)
+        try writeRecognizedDirectory(stale, manager: manager)
+
+        let interruptedClaimName = WorkingDirectoryLease.claimPrefix + UUID().uuidString.uppercased()
+        let interruptedClaim = root.appendingPathComponent(interruptedClaimName, isDirectory: true)
+        try writeRecognizedDirectory(interruptedClaim, manager: manager, includeDisk: false)
+
+        let legacyName = WorkingDirectoryLease.workPrefix + UUID().uuidString.uppercased()
+        let legacy = root.appendingPathComponent(legacyName, isDirectory: true)
+        try manager.createDirectory(at: legacy, withIntermediateDirectories: false)
+        try Data("legacy disk".utf8).write(
+            to: legacy.appendingPathComponent(WorkingDirectoryLease.diskName)
+        )
+
+        let unsafeName = WorkingDirectoryLease.workPrefix + UUID().uuidString.uppercased()
+        let unsafe = root.appendingPathComponent(unsafeName, isDirectory: true)
+        try writeRecognizedDirectory(unsafe, manager: manager)
+        try Data("must survive".utf8).write(to: unsafe.appendingPathComponent("unrecognized.txt"))
+
+        let report = WorkingDirectoryLease.cleanupStaleDirectories(in: root, manager: manager)
+
+        #expect(report.removed == [interruptedClaimName, staleName].sorted())
+        #expect(report.active == [active.directory.lastPathComponent])
+        #expect(report.legacy == [legacyName])
+        #expect(report.unsafe == [unsafeName])
+        #expect(manager.fileExists(atPath: active.directory.path))
+        #expect(!manager.fileExists(atPath: stale.path))
+        #expect(!manager.fileExists(atPath: interruptedClaim.path))
+        #expect(manager.fileExists(atPath: legacy.path))
+        #expect(manager.fileExists(atPath: unsafe.path))
+    }
+
+    @Test("owner cleanup is immediate and idempotent")
+    func ownerCleanup() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+            .appendingPathComponent("omarchy-workdir-test-\(UUID().uuidString)", isDirectory: true)
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+
+        let lease = try WorkingDirectoryLease(
+            root: root,
+            cleanStaleDirectories: false,
+            manager: manager
+        )
+        let directory = lease.directory
+        try Data("disposable disk".utf8).write(
+            to: directory.appendingPathComponent(WorkingDirectoryLease.diskName)
+        )
+        #expect(manager.fileExists(atPath: directory.path))
+
+        lease.cleanup()
+        lease.cleanup()
+        #expect(!manager.fileExists(atPath: directory.path))
+    }
+
+    @Test("owner deinitialization removes disposable work")
+    func ownerDeinitialization() throws {
+        let manager = FileManager.default
+        let root = manager.temporaryDirectory
+            .appendingPathComponent("omarchy-workdir-test-\(UUID().uuidString)", isDirectory: true)
+        try manager.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? manager.removeItem(at: root) }
+
+        var lease: WorkingDirectoryLease? = try WorkingDirectoryLease(
+            root: root,
+            cleanStaleDirectories: false,
+            manager: manager
+        )
+        let directory = try #require(lease?.directory)
+        #expect(manager.fileExists(atPath: directory.path))
+
+        lease = nil
+        #expect(!manager.fileExists(atPath: directory.path))
+    }
+
+    private func writeRecognizedDirectory(
+        _ directory: URL,
+        manager: FileManager,
+        includeDisk: Bool = true
+    ) throws {
+        try manager.createDirectory(at: directory, withIntermediateDirectories: false)
+        try WorkingDirectoryLease.lockMarker.write(
+            to: directory.appendingPathComponent(WorkingDirectoryLease.lockName)
+        )
+        if includeDisk {
+            try Data("disposable disk".utf8).write(
+                to: directory.appendingPathComponent(WorkingDirectoryLease.diskName)
+            )
+        }
+    }
+}
+
 @Test("capability report is explicit and architecture-safe")
 func capabilityReport() {
     let report = HostCapabilities.report()

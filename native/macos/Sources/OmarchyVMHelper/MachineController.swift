@@ -3,7 +3,7 @@ import Foundation
 @preconcurrency import Virtualization
 
 @MainActor
-final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDelegate {
+final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplicationDelegate, NSWindowDelegate {
     private let bundle: GuestBundle
     private let resumeStore: ResumeStore
     private let allowResume: Bool
@@ -11,11 +11,13 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     private let plan: MachinePlan
     private let machineIdentifier: VZGenericMachineIdentifier
     private let expectedResume: ResumeMetadata
+    private let workingLease: WorkingDirectoryLease
     private let workingDirectory: URL
     private let workingDiskURL: URL
     private let serialPipe = Pipe()
     private let serialMonitor: GuestSerialMonitor
     private var saveScheduled = false
+    private var terminationRequested = false
     private var virtualMachine: VZVirtualMachine?
     private var window: NSWindow?
 
@@ -58,8 +60,9 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
             machineIdentifierBase64: machineIdentifier.dataRepresentation.base64EncodedString()
         )
         self.serialMonitor = GuestSerialMonitor(spec: bundle.spec)
-        self.workingDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("omarchy-native-\(UUID().uuidString)", isDirectory: true)
+        let workingLease = try WorkingDirectoryLease()
+        self.workingLease = workingLease
+        self.workingDirectory = workingLease.directory
         self.workingDiskURL = workingDirectory.appendingPathComponent("rootfs.ext4")
         super.init()
     }
@@ -252,13 +255,13 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
 
     private func fail(_ message: String) {
         fputs("omarchy-vm-helper: \(message)\n", stderr)
-        NSApplication.shared.terminate(nil)
+        finishTermination()
     }
 
     nonisolated func guestDidStop(_ virtualMachine: VZVirtualMachine) {
         Task { @MainActor in
             print("[native] Guest stopped")
-            NSApplication.shared.terminate(nil)
+            self.finishTermination()
         }
     }
 
@@ -270,17 +273,35 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSWindowDeleg
     }
 
     func windowWillClose(_ notification: Notification) {
-        guard let machine = virtualMachine, machine.state == .running else {
-            NSApplication.shared.terminate(nil)
+        requestTermination()
+    }
+
+    func requestTermination() {
+        guard !terminationRequested else {
+            finishTermination()
             return
         }
-        machine.stop { _ in
-            Task { @MainActor in NSApplication.shared.terminate(nil) }
+        terminationRequested = true
+        guard let machine = virtualMachine, machine.state == .running else {
+            finishTermination()
+            return
         }
+        machine.stop { [weak self] _ in
+            Task { @MainActor in self?.finishTermination() }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        cleanup()
     }
 
     func cleanup() {
         serialPipe.fileHandleForReading.readabilityHandler = nil
-        try? FileManager.default.removeItem(at: workingDirectory)
+        workingLease.cleanup()
+    }
+
+    private func finishTermination() {
+        cleanup()
+        NSApplication.shared.terminate(nil)
     }
 }
