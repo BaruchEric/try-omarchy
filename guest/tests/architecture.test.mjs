@@ -41,7 +41,45 @@ test("x86 and ARM specs are immutable, distinct Quattro products", () => {
   assert.match(arm.upstream.treeSha256, /^[0-9a-f]{64}$/);
   assert.notEqual(arm.image.filesystemUuid, x86.image.filesystemUuid);
   assert.deepEqual(arm.guest.virtualDisplay, x86.guest.virtualDisplay);
-  assert.equal(arm.runtime.hypervisor, "apple-virtualization-framework");
+  assert.equal(arm.runtime.virtualMachineMonitor, "qemu-system-aarch64");
+  assert.equal(arm.runtime.hypervisor, "hvf");
+  assert.deepEqual(arm.runtime.graphics, {
+    device: "virtio-gpu-gl-pci",
+    display: "cocoa",
+    guestRenderer: "virgl",
+    hostRenderer: "angle-metal",
+  });
+  assert.deepEqual(arm.runtime.network, {
+    device: "virtio-net-pci",
+    backend: "slirp",
+    mode: "user",
+  });
+  assert.deepEqual(arm.runtime.audio, {
+    controller: "intel-hda",
+    codec: "hda-micro",
+    backend: "sdl",
+    duplex: true,
+  });
+  assert.deepEqual(arm.runtime.storage, {
+    device: "virtio-blk-pci",
+    format: "raw",
+    mode: "persistent",
+    initialization: "apfs-clone",
+    fallback: "full-copy",
+  });
+  assert.deepEqual(arm.runtime.devices, [
+    "virtio-blk-pci",
+    "virtio-gpu-gl-pci",
+    "virtio-keyboard-pci",
+    "virtio-tablet-pci",
+    "virtio-net-pci",
+    "virtio-serial-pci",
+    "virtconsole",
+    "virtio-rng-pci",
+    "virtio-balloon-pci",
+    "intel-hda",
+    "hda-micro",
+  ]);
   assert.equal(arm.runtime.kernelSource, "/boot/Image");
   assert.deepEqual(x86.inputs.packageCachePins, [
     "qt6-base",

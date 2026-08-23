@@ -77,13 +77,13 @@ qemu_netdevs=$("$qemu_bin" -machine virt -netdev help 2>&1) || {
   fail "cannot inspect staged QEMU network backends"
 }
 printf '%s\n' "$qemu_netdevs" | grep -qx 'user' || {
-  fail "staged QEMU does not provide no-root SLIRP networking; rerun npm run omarchy:native:gpu:prepare"
+  fail "staged QEMU does not provide no-root SLIRP networking; rerun npm run omarchy:native:prepare"
 }
 qemu_audiodevs=$("$qemu_bin" -machine virt -audiodev help 2>&1) || {
   fail "cannot inspect staged QEMU audio backends"
 }
 printf '%s\n' "$qemu_audiodevs" | grep -qx 'sdl' || {
-  fail "staged QEMU does not provide duplex SDL audio; rerun npm run omarchy:native:gpu:prepare"
+  fail "staged QEMU does not provide duplex SDL audio; rerun npm run omarchy:native:prepare"
 }
 
 require_qemu_device() {
@@ -268,9 +268,11 @@ if (
 runtime = exact_keys(
     spec.get("runtime"),
     {
+        "audio",
         "compressedDisk",
         "devices",
         "disk",
+        "graphics",
         "hypervisor",
         "initramfs",
         "initramfsSource",
@@ -279,19 +281,50 @@ runtime = exact_keys(
         "kernelSource",
         "minimumCpuCount",
         "minimumMemoryMiB",
+        "network",
         "recommendedMemoryMiB",
+        "storage",
+        "virtualMachineMonitor",
     },
     "build spec runtime",
 )
 expected_devices = [
-    "virtio-blk",
-    "virtio-gpu",
-    "usb-keyboard",
-    "usb-screen-coordinate-pointing",
-    "virtio-console",
-    "virtio-rng",
-    "virtio-balloon",
+    "virtio-blk-pci",
+    "virtio-gpu-gl-pci",
+    "virtio-keyboard-pci",
+    "virtio-tablet-pci",
+    "virtio-net-pci",
+    "virtio-serial-pci",
+    "virtconsole",
+    "virtio-rng-pci",
+    "virtio-balloon-pci",
+    "intel-hda",
+    "hda-micro",
 ]
+graphics = {
+    "device": "virtio-gpu-gl-pci",
+    "display": "cocoa",
+    "guestRenderer": "virgl",
+    "hostRenderer": "angle-metal",
+}
+network = {
+    "device": "virtio-net-pci",
+    "backend": "slirp",
+    "mode": "user",
+}
+audio = {
+    "controller": "intel-hda",
+    "codec": "hda-micro",
+    "backend": "sdl",
+    "duplex": True,
+}
+storage = {
+    "device": "virtio-blk-pci",
+    "format": "raw",
+    "mode": "persistent",
+    "initialization": "apfs-clone",
+    "fallback": "full-copy",
+}
 if (
     runtime.get("kernel") != "vmlinuz-linux"
     or runtime.get("kernelSource") != "/boot/Image"
@@ -299,7 +332,12 @@ if (
     or runtime.get("initramfsSource") != "/boot/initramfs-linux.img"
     or runtime.get("disk") != "rootfs.ext4"
     or runtime.get("compressedDisk") != "rootfs.ext4.zst"
-    or runtime.get("hypervisor") != "apple-virtualization-framework"
+    or runtime.get("virtualMachineMonitor") != "qemu-system-aarch64"
+    or runtime.get("hypervisor") != "hvf"
+    or runtime.get("graphics") != graphics
+    or runtime.get("network") != network
+    or runtime.get("audio") != audio
+    or runtime.get("storage") != storage
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
     or runtime.get("recommendedMemoryMiB") != 4096

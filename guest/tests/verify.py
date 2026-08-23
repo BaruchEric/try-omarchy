@@ -156,7 +156,7 @@ def test_static() -> None:
             pathlib.Path("/dev/ttyS0"),
             pathlib.Path("/dev/hvc0"),
         ],
-        "diagnostic fallback prioritizes Apple's connected hvc0 console on ARM and ttyS0 on x86",
+        "diagnostic fallback prioritizes QEMU's connected hvc0 console on ARM and ttyS0 on x86",
     )
     diagnostic_rules = (
         GUEST / "overlay/etc/udev/rules.d/90-omarchy-web-diagnostics.rules"
