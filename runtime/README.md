@@ -6,9 +6,8 @@ The browser profile uses QEMU 8.2, pthreads/SharedArrayBuffer, MTTCG, SDL2,
 `virtio-vga`, two guest vCPUs, 1 GiB RAM, and the software presentation path
 `sdl,gl=off`.
 
-There are no ARM-browser, remote-streaming, VirGL/WebGL2, TCG-threshold, or
-alternate-vCPU runtime variants here. The separate Apple-native runtime is in
-`native/macos/`.
+There are no alternate browser runtime variants here. The separate
+Apple-native runtime is in `native/macos/`.
 
 ## Requirements
 
@@ -62,8 +61,8 @@ contains the complete generic migration-checkpoint set:
 The packager rejects a partial set. It verifies the exact guest, QEMU Wasm,
 machine profile, immutable backing image, checkpoint source evidence, vmstate,
 and overlay identities before emitting a checkpoint-enabled runtime manifest.
-Disposable writes still go to QEMU's snapshot layer. Guest hibernation and
-GPU-bound resume profiles are not supported.
+Disposable writes still go to QEMU's snapshot layer. Only cold boot and the
+generic migration-resume profile are supported.
 
 ## Runtime and security model
 
