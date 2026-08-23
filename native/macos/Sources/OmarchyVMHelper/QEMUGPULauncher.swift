@@ -60,6 +60,20 @@ struct QEMUGPULaunchRequest: Equatable {
         result.append(canonicalDirectory.path)
         return result
     }
+
+    var allowsAudioRestart: Bool {
+        storageOption != .ephemeral
+    }
+
+    func validatedRestartScriptArguments() throws -> [String] {
+        // Reset is a one-shot launch request. Replaying it after an audio menu
+        // change would replace the just-booted persistent disk a second time.
+        let restartStorageOption = storageOption == .resetStorage ? nil : storageOption
+        return try QEMUGPULaunchRequest(
+            storageOption: restartStorageOption,
+            guestDirectoryPath: guestDirectoryPath
+        ).validatedScriptArguments()
+    }
 }
 
 enum QEMUGPULauncherPath {
@@ -174,27 +188,66 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
     private let lock = NSLock()
     private var child: Process?
 
-    func run(executableURL: URL, arguments: [String]) throws -> Int32 {
+    func start(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String],
+        completion: @escaping @MainActor @Sendable (Int32) -> Void
+    ) throws {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
+        process.environment = environment
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
+        process.terminationHandler = { [weak self] process in
+            self?.clear(process)
+            let status = Self.status(for: process)
+            // NSApplication owns a synchronous AppKit run loop. Dispatching a
+            // main-queue block lets that run loop service child completion;
+            // a MainActor Task could wait behind the still-running call.
+            DispatchQueue.main.async {
+                completion(status)
+            }
+        }
 
-        try process.run()
         lock.lock()
+        guard child == nil else {
+            lock.unlock()
+            throw HelperError.io("QEMU launcher process is already running")
+        }
         child = process
         lock.unlock()
 
-        process.waitUntilExit()
-
-        lock.lock()
-        if child === process {
-            child = nil
+        do {
+            try process.run()
+        } catch {
+            clear(process)
+            throw error
         }
-        lock.unlock()
+    }
 
+    var isRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return child?.isRunning == true
+    }
+
+    func forward(signal: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let child, child.isRunning else { return }
+        _ = Darwin.kill(child.processIdentifier, signal)
+    }
+
+    private func clear(_ process: Process) {
+        lock.lock()
+        if child === process { child = nil }
+        lock.unlock()
+    }
+
+    private static func status(for process: Process) -> Int32 {
         switch process.terminationReason {
         case .exit:
             return process.terminationStatus
@@ -203,12 +256,5 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         @unknown default:
             return 1
         }
-    }
-
-    func forward(signal: Int32) {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let child, child.isRunning else { return }
-        _ = Darwin.kill(child.processIdentifier, signal)
     }
 }

@@ -53,6 +53,13 @@ The first launch may ask for two macOS permissions:
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
 resizable window and back. Closing QEMU powers off that session cleanly.
 
+While the VM is running, the Omarchy speaker icon in the macOS menu bar exposes
+separate **Speaker** and **Microphone** submenus. **System Default** is the first
+choice in both and follows macOS's current default route. Choosing a specific
+device saves its stable CoreAudio identity immediately; use **Restart Omarchy to
+Apply** after making all desired changes. The menu also links to Sound and
+Microphone Privacy settings and provides a VM-aware Quit action.
+
 For an intentionally throwaway disk or a clean clone of the current verified
 ARM image:
 
@@ -130,6 +137,15 @@ The app preflights microphone access before starting QEMU. A denied or
 restricted decision is reported clearly but does not block the VM, networking,
 or playback.
 
+Host audio choices are stored by stable CoreAudio UID in the app's versioned
+`UserDefaults` record, independently of guest disks. They therefore survive app
+relaunches, guest storage resets, and guest-image updates. If a saved device is
+temporarily disconnected, the menu keeps that choice, marks it unavailable,
+and launches with System Default until the device returns. Explicit device
+changes require one controlled VM restart because QEMU's SDL backend opens its
+audio devices at process startup. A disposable `--ephemeral` VM is never
+silently replaced during that operation; reopen it to apply the saved choice.
+
 ## Focused Command-to-Super bridge
 
 QEMU Cocoa normally reserves ungrabbed macOS Command shortcuts. The launcher
@@ -152,10 +168,11 @@ than leaving an unmodified Command path behind.
 
 `build-qemu-gpu-runtime.sh` builds QEMU 10.2.50 from pinned commit
 `cf3e71d8fc8ba681266759bb6cb2e45a45983e3e`, applies checksum-pinned upstream
-VirGL/ANGLE patches and this repo's Cocoa dynamic-display patch, and validates
-the resulting capabilities. QEMU is ARM64/HVF-only and includes Cocoa/VirGL,
-SLIRP, and SDL audio. VirGL, ANGLE, and libepoxy dylibs are isolated in the
-staged runtime; the checked Homebrew core dependencies remain locally linked.
+VirGL/ANGLE patches plus this repo's Cocoa dynamic-display and direction-aware
+SDL audio patches, and validates the resulting capabilities. QEMU is
+ARM64/HVF-only and includes Cocoa/VirGL, SLIRP, and SDL audio. VirGL, ANGLE, and
+libepoxy dylibs are isolated in the staged runtime; the checked Homebrew core
+dependencies remain locally linked.
 
 All downloaded archives and build wheels are immutable and SHA-256 pinned.
 They are copied into private scratch space and verified before extraction.

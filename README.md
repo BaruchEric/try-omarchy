@@ -85,11 +85,13 @@ when the window is resized, moved, or toggled fullscreen.
 
 Networking uses QEMU's unprivileged SLIRP backend and appears as a Virtio
 Ethernet adapter inside Omarchy. SDL provides speaker playback and microphone
-capture through the virtual HDA device. macOS asks for Microphone permission
-for the signed launcher app; denying it leaves playback available but disables
-guest recording. Accessibility permission is used only by the focused input
-bridge so Mac Command acts as Omarchy Super without leaking the shortcut to
-macOS. Physical Option remains guest Alt.
+capture through the virtual HDA device. While the VM runs, a menu-bar speaker
+icon selects each host device independently; **System Default** follows macOS,
+and explicit device choices persist across relaunches and guest resets. macOS
+asks for Microphone permission for the signed launcher app; denying it leaves
+playback available but disables guest recording. Accessibility permission is
+used only by the focused input bridge so Mac Command acts as Omarchy Super
+without leaking the shortcut to macOS. Physical Option remains guest Alt.
 
 See [native/macos/README.md](native/macos/README.md) for the native runtime's
 architecture, persistence rules, permissions, and security boundaries.

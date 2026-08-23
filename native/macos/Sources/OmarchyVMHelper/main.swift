@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Darwin
 import Foundation
@@ -59,6 +60,7 @@ do {
         }
         let launcher = try QEMUGPULauncherPath.resolve(bundleURL: Bundle.main.bundleURL)
         let launcherArguments = try request.validatedScriptArguments()
+        let restartArguments = try request.validatedRestartScriptArguments()
         let microphoneDecision = MicrophonePreflight.decision()
         if let warning = microphoneDecision.warning {
             fputs("[audio] \(warning)\n", stderr)
@@ -67,21 +69,36 @@ do {
             throw HelperError.io("microphone policy unexpectedly prevented audio playback")
         }
 
-        let supervisor = QEMUGPUProcessSupervisor()
-        for signalNumber in [SIGHUP, SIGINT, SIGTERM] {
-            Darwin.signal(signalNumber, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(
-                signal: signalNumber,
-                queue: .global(qos: .userInitiated)
+        // The executable's top level starts on the process main thread. Make
+        // that invariant explicit so the AppKit lifecycle stays MainActor
+        // isolated while `NSApplication.run()` services its event loop.
+        let status = MainActor.assumeIsolated { () -> Int32 in
+            let application = NSApplication.shared
+            application.setActivationPolicy(.accessory)
+            let controller = VMApplicationController(
+                launcherURL: launcher,
+                initialArguments: launcherArguments,
+                restartArguments: restartArguments,
+                restartAllowed: request.allowsAudioRestart
             )
-            source.setEventHandler { supervisor.forward(signal: signalNumber) }
-            source.resume()
-            terminationSignalSources.append(source)
+            application.delegate = controller
+            for signalNumber in [SIGHUP, SIGINT, SIGTERM] {
+                Darwin.signal(signalNumber, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(
+                    signal: signalNumber,
+                    queue: .main
+                )
+                source.setEventHandler {
+                    MainActor.assumeIsolated {
+                        controller.handleTerminationSignal(signalNumber)
+                    }
+                }
+                source.resume()
+                terminationSignalSources.append(source)
+            }
+            application.run()
+            return controller.exitStatus
         }
-        let status = try supervisor.run(
-            executableURL: launcher,
-            arguments: launcherArguments
-        )
         exit(status)
     }
 
