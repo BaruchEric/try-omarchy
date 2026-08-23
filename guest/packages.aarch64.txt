@@ -59,6 +59,7 @@ systemd
 systemd-resolvconf
 tmux
 ttf-jetbrains-mono-nerd
+udiskie
 unzip
 uwsm
 vulkan-swrast

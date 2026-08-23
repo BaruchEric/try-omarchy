@@ -1,0 +1,6 @@
+
+-- BEGIN OMARCHY NATIVE VM WELCOME
+hl.on("hyprland.start", function()
+  hl.exec_cmd("sleep 3 && omarchy-notification-send -u critical -g '󰖟' 'Welcome to Omarchy' 'Press Super + Space to explore. Files, apps, and settings persist between normal Native Mac VM launches.'")
+end)
+-- END OMARCHY NATIVE VM WELCOME

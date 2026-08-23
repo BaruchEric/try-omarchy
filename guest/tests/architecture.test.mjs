@@ -108,6 +108,7 @@ test("ARM dependency transaction is architecture-matched and fully locked", () =
     "linux-aarch64",
     "mesa",
     "quickshell",
+    "udiskie",
     "vulkan-swrast",
   ]) {
     assert.ok(packages.includes(required), `missing requested ARM package ${required}`);
@@ -191,5 +192,19 @@ test("ARM QEMU host cursor is boot-gated without freezing display policy", () =>
   assert.match(
     configure,
     /elif \[\[ \$architecture == aarch64 \]\]; then\n\s+cat "\$guest_dir\/fragments\/hypr-monitors-arm-qemu\.append\.lua"/,
+  );
+});
+
+test("browser and native guests receive truthful architecture-specific welcomes", () => {
+  const browserWelcome = text("fragments/hypr-autostart.append.lua");
+  const nativeWelcome = text("fragments/hypr-autostart-arm-qemu.append.lua");
+  const configure = text("scripts/configure-rootfs.sh");
+
+  assert.match(browserWelcome, /Everything resets when this tab closes\./);
+  assert.doesNotMatch(nativeWelcome, /resets|tab closes/i);
+  assert.match(nativeWelcome, /persist between normal Native Mac VM launches/);
+  assert.match(
+    configure,
+    /if \[\[ \$architecture == x86_64 \]\]; then[\s\S]*hypr-autostart\.append\.lua[\s\S]*elif \[\[ \$architecture == aarch64 \]\]; then[\s\S]*hypr-autostart-arm-qemu\.append\.lua/,
   );
 });

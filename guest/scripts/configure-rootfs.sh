@@ -73,10 +73,11 @@ fi
 # fragment merely selects Cocoa's host-composited cursor path.
 if [[ $architecture == x86_64 ]]; then
   cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+  cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 elif [[ $architecture == aarch64 ]]; then
   cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+  cat "$guest_dir/fragments/hypr-autostart-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 fi
-cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")
 commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["upstream"]["commit"])' "$spec")

@@ -54,7 +54,7 @@ def test_static() -> None:
     check(packages == sorted(set(packages)), "package list sorted and unique")
     required = {
         "base", "chromium", "foot", "hyprland", "linux", "mesa", "neovim",
-        "networkmanager", "omarchy-nvim", "quickshell-git", "uwsm", "vulkan-swrast",
+        "networkmanager", "omarchy-nvim", "quickshell-git", "udiskie", "uwsm", "vulkan-swrast",
         "xdg-desktop-portal-hyprland", "xdg-terminal-exec",
     }
     check(required <= set(packages), "real desktop packages retained")
@@ -77,11 +77,11 @@ def test_static() -> None:
     check(
         {name: package_lock["packages"][name] for name in cache_pins}
         == {
-            "qt6-base": "6.11.1-1",
-            "qt6-declarative": "6.11.1-3",
-            "qt6-svg": "6.11.1-1",
-            "qt6-translations": "6.11.1-1",
-            "qt6-wayland": "6.11.1-1",
+            "qt6-base": "6.11.2-2",
+            "qt6-declarative": "6.11.2-1",
+            "qt6-svg": "6.11.2-1",
+            "qt6-translations": "6.11.2-1",
+            "qt6-wayland": "6.11.2-1",
         },
         "Quickshell Qt ABI versions remain exact",
     )
@@ -885,6 +885,15 @@ def test_source(source: pathlib.Path) -> None:
         check(
             arm_monitors == expected_arm_monitors,
             "ARM QEMU monitor profile is additive to Quattro's automatic Retina profile",
+        )
+        arm_autostart = (arm_root / "etc/skel/.config/hypr/autostart.lua").read_bytes()
+        expected_arm_autostart = (
+            (source / "config/hypr/autostart.lua").read_bytes()
+            + (GUEST / "fragments/hypr-autostart-arm-qemu.append.lua").read_bytes()
+        )
+        check(
+            arm_autostart == expected_arm_autostart,
+            "ARM QEMU receives the persistent native welcome instead of browser reset copy",
         )
         check(
             not (
