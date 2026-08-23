@@ -698,6 +698,7 @@ def test_static() -> None:
 
     build = (GUEST / "build.sh").read_text()
     configure = (GUEST / "scripts/configure-rootfs.sh").read_text()
+    arm_qemu_monitors = (GUEST / "fragments/hypr-monitors-arm-qemu.append.lua").read_text()
     identity = (GUEST / "scripts/register-omarchy-runtime.sh").read_text()
     identity_call = '"$guest_dir/scripts/register-omarchy-runtime.sh"'
     check(identity_call in build and build.find(identity_call) < build.find('arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs'), "local Omarchy runtime package is registered before guest finalization")
@@ -708,6 +709,23 @@ def test_static() -> None:
     check('if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]' in build and "printf 'DisableSandbox\\n'" in build, "emulated builder sandbox override remains conditional")
     pinned_guest_config = 'install -m 0644 "$root/usr/share/omarchy/default/pacman/pacman-stable.conf" "$root/etc/pacman.conf"'
     check(pinned_guest_config in configure, "guest receives the unmodified pinned pacman configuration")
+    check(
+        'pcall(io.open, "/proc/cmdline", "r")' in arm_qemu_monitors
+        and 'if omarchy_kernel_option_enabled("omarchy.qemu_virgl=1") then'
+        in arm_qemu_monitors
+        and 'hl.config({ cursor = { invisible = true } })' in arm_qemu_monitors
+        and "hl.monitor(" not in arm_qemu_monitors
+        and "GDK_SCALE" not in arm_qemu_monitors
+        and "1920x1080" not in arm_qemu_monitors
+        and "@60" not in arm_qemu_monitors
+        and not re.search(
+            r"LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER|llvmpipe",
+            arm_qemu_monitors,
+        )
+        and 'elif [[ $architecture == aarch64 ]]; then' in configure
+        and 'hypr-monitors-arm-qemu.append.lua' in configure,
+        "ARM VirGL host cursor is exact-token boot-gated without freezing Quattro display policy or forcing software rendering",
+    )
     check('rmdir "$staged_package_cache"' in build and 'rm -rf "$package_cache"' not in build and 'rm -f "$package_cache"' not in build, "persistent package cache is never deleted by the build")
 
     resolver_link = 'ln -sfn ../run/systemd/resolve/stub-resolv.conf "$root/etc/resolv.conf"'
@@ -858,6 +876,22 @@ def test_source(source: pathlib.Path) -> None:
             (arm_root / "etc/skel/.config/hypr/hyprland.lua").read_bytes()
             == (source / "config/hypr/hyprland.lua").read_bytes(),
             "ARM profile retains Quattro's native look-and-feel bootstrap",
+        )
+        arm_monitors = (arm_root / "etc/skel/.config/hypr/monitors.lua").read_bytes()
+        expected_arm_monitors = (
+            (source / "config/hypr/monitors.lua").read_bytes()
+            + (GUEST / "fragments/hypr-monitors-arm-qemu.append.lua").read_bytes()
+        )
+        check(
+            arm_monitors == expected_arm_monitors,
+            "ARM QEMU monitor profile is additive to Quattro's automatic Retina profile",
+        )
+        check(
+            not (
+                arm_root
+                / "usr/lib/environment.d/91-omarchy-x86-web-renderer.conf"
+            ).exists(),
+            "ARM profile never installs the x86 llvmpipe renderer override",
         )
 
 

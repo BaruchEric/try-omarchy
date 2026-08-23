@@ -137,3 +137,21 @@ test("guest identity and initramfs support both runtime device sets", () => {
   assert.match(terminal, /exec \/usr\/bin\/foot/);
   assert.doesNotMatch(terminal, /eval|source /);
 });
+
+test("ARM QEMU host cursor is boot-gated without freezing display policy", () => {
+  const profile = text("fragments/hypr-monitors-arm-qemu.append.lua");
+  const configure = text("scripts/configure-rootfs.sh");
+
+  assert.match(profile, /pcall\(io\.open, "\/proc\/cmdline", "r"\)/);
+  assert.match(profile, /for option in cmdline:gmatch\("%S\+"\)/);
+  assert.match(
+    profile,
+    /if omarchy_kernel_option_enabled\("omarchy\.qemu_virgl=1"\) then[\s\S]*hl\.config\(\{ cursor = \{ invisible = true \} \}\)[\s\S]*\nend/,
+  );
+  assert.doesNotMatch(profile, /hl\.monitor\(|GDK_SCALE|1920x1080|@60/);
+  assert.doesNotMatch(profile, /LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER|llvmpipe/);
+  assert.match(
+    configure,
+    /elif \[\[ \$architecture == aarch64 \]\]; then\n\s+cat "\$guest_dir\/fragments\/hypr-monitors-arm-qemu\.append\.lua"/,
+  );
+});

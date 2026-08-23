@@ -68,10 +68,13 @@ fi
 
 # User customizations are additive. The prefix of each file remains byte-for-
 # byte identical to Basecamp's pinned config and can be audited independently.
-# Only the fixed browser canvas needs a forced scale. Native ARM retains
-# Quattro's upstream automatic monitor/HiDPI profile for Retina reconfiguration.
+# The fixed x86 browser canvas always needs a forced scale. ARM retains
+# Quattro's upstream automatic Retina profile; the accelerated QEMU-only
+# fragment merely selects Cocoa's host-composited cursor path.
 if [[ $architecture == x86_64 ]]; then
   cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+elif [[ $architecture == aarch64 ]]; then
+  cat "$guest_dir/fragments/hypr-monitors-arm-qemu.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
 fi
 cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 
