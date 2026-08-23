@@ -23,7 +23,6 @@ import {
   ProductionWorkerError,
   CANONICAL_CHECKPOINT_ARGUMENTS,
   CANONICAL_CHECKPOINT_IDENTITY,
-  CANONICAL_ARM64_PRODUCTION_MANIFEST,
   CANONICAL_PAGED_DISK_ARGUMENTS,
   CANONICAL_PRODUCTION_MANIFEST,
   OmarchyProductionWorkerHost,
@@ -63,7 +62,6 @@ import {
 } from "../web/production-worker.mjs";
 
 const manifestUrl = new URL("../config/demo.json", import.meta.url);
-const arm64ManifestUrl = new URL("../config/arm64-browser.json", import.meta.url);
 
 function checkpointProfile() {
   return {
@@ -783,6 +781,11 @@ test("production manifest is paged-worker-only and declares bounded assets", asy
   const workerSource = await readFile(new URL("../web/production-worker.mjs", import.meta.url), "utf8");
   assert.equal(validateProductionManifest(manifest), manifest);
   assert.deepEqual(CANONICAL_PRODUCTION_MANIFEST, manifest);
+  assert.deepEqual(qemuGeneratedAssetNames(manifest), {
+    architecture: "x86_64",
+    wasm: "qemu-system-x86_64.wasm",
+    pthread: "qemu-system-x86_64.worker.js",
+  });
   assert.equal(manifest.assets.preload, undefined);
   assert.equal(manifest.assets.data, undefined);
   assert.deepEqual(manifest.qemu.arguments.slice(0, 2), ["-machine", "pc-q35-8.2"]);
@@ -843,41 +846,6 @@ test("production manifest is paged-worker-only and declares bounded assets", asy
   assert.throws(
     () => validatePagedDiskArguments([...CANONICAL_PAGED_DISK_ARGUMENTS, "-drive", "file=evil"]),
     (error) => error instanceof ProductionWorkerError && error.code === "INVALID_PAGED_DISK_PROFILE",
-  );
-});
-
-test("ARM64 browser manifest is exact, isolated, and cannot be mixed with x86 assets", async () => {
-  const manifest = JSON.parse(await readFile(arm64ManifestUrl, "utf8"));
-  assert.equal(validateProductionManifest(manifest), manifest);
-  assert.deepEqual(CANONICAL_ARM64_PRODUCTION_MANIFEST, manifest);
-  assert.deepEqual(qemuGeneratedAssetNames(manifest), {
-    architecture: "aarch64",
-    wasm: "qemu-system-aarch64.wasm",
-    pthread: "qemu-system-aarch64.worker.js",
-  });
-  assert.deepEqual(manifest.qemu.arguments.slice(0, 4), [
-    "-machine", "virt,gic-version=3", "-cpu", "cortex-a72",
-  ]);
-  assert.equal(manifest.qemu.memoryMiB, 1024);
-  assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-m") + 1], "1024M");
-  assert.equal(manifest.qemu.cores, 1);
-  assert.equal(manifest.qemu.arguments[manifest.qemu.arguments.indexOf("-smp") + 1],
-    "1,sockets=1,cores=1,threads=1");
-
-  const mixed = structuredClone(manifest);
-  mixed.assets.locate = {
-    "qemu-system-x86_64.wasm": "qemu.wasm",
-    "qemu-system-x86_64.worker.js": "qemu.worker.js",
-  };
-  assert.throws(
-    () => validateProductionManifest(mixed),
-    (error) => error instanceof ProductionWorkerError && error.code === "INVALID_RUNTIME_MANIFEST",
-  );
-
-  const unprovenCheckpoint = { ...structuredClone(manifest), checkpoint: checkpointProfile() };
-  assert.throws(
-    () => validateProductionManifest(unprovenCheckpoint),
-    (error) => error instanceof ProductionWorkerError && error.code === "INVALID_RUNTIME_MANIFEST",
   );
 });
 

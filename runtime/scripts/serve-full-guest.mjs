@@ -244,62 +244,30 @@ export async function buildFullGuestRelease({ runtimeRoot, guestRoot }) {
     });
   }
 
-  const hibernation = runtimeManifest.checkpoint?.mode === "guest-hibernation-resume";
   if (runtimeManifest.checkpoint !== undefined) {
-    const checkpointRecords = hibernation
-      ? [
-          {
-            path: runtimeManifest.checkpoint?.derivedInitramfs?.artifactPath,
-            bytes: runtimeManifest.checkpoint?.derivedInitramfs?.bytes,
-            sha256: runtimeManifest.checkpoint?.derivedInitramfs?.sha256,
-            role: "hibernation-initramfs",
-            mediaType: "application/vnd.linux.initramfs",
-          },
-          {
-            path: runtimeManifest.checkpoint?.rootDelta?.artifactPath,
-            bytes: runtimeManifest.checkpoint?.rootDelta?.bytes,
-            sha256: runtimeManifest.checkpoint?.rootDelta?.sha256,
-            role: "hibernation-root-delta",
-            mediaType: "application/vnd.qemu.qcow2",
-          },
-          {
-            path: runtimeManifest.checkpoint?.swapImage?.artifactPath,
-            bytes: runtimeManifest.checkpoint?.swapImage?.bytes,
-            sha256: runtimeManifest.checkpoint?.swapImage?.sha256,
-            role: "hibernation-swap-image",
-            mediaType: "application/vnd.qemu.qcow2",
-          },
-          {
-            path: runtimeManifest.checkpoint?.producer?.manifestArtifactPath,
-            bytes: runtimeManifest.checkpoint?.producer?.manifestBytes,
-            sha256: runtimeManifest.checkpoint?.producer?.manifestSha256,
-            role: "hibernation-metadata",
-            mediaType: "application/json",
-          },
-        ]
-      : [
-          {
-            path: runtimeManifest.checkpoint?.vmstate?.artifactPath,
-            bytes: runtimeManifest.checkpoint?.vmstate?.bytes,
-            sha256: runtimeManifest.checkpoint?.vmstate?.sha256,
-            role: "preboot-vmstate",
-            mediaType: "application/vnd.qemu.vmstate",
-          },
-          {
-            path: runtimeManifest.checkpoint?.bootDelta?.artifactPath,
-            bytes: runtimeManifest.checkpoint?.bootDelta?.bytes,
-            sha256: runtimeManifest.checkpoint?.bootDelta?.sha256,
-            role: "preboot-disk-delta",
-            mediaType: "application/vnd.qemu.qcow2",
-          },
-          {
-            path: runtimeManifest.checkpoint?.producer?.manifestArtifactPath,
-            bytes: runtimeManifest.checkpoint?.producer?.manifestBytes,
-            sha256: runtimeManifest.checkpoint?.producer?.manifestSha256,
-            role: "preboot-checkpoint-metadata",
-            mediaType: "application/json",
-          },
-        ];
+    const checkpointRecords = [
+      {
+        path: runtimeManifest.checkpoint?.vmstate?.artifactPath,
+        bytes: runtimeManifest.checkpoint?.vmstate?.bytes,
+        sha256: runtimeManifest.checkpoint?.vmstate?.sha256,
+        role: "preboot-vmstate",
+        mediaType: "application/vnd.qemu.vmstate",
+      },
+      {
+        path: runtimeManifest.checkpoint?.bootDelta?.artifactPath,
+        bytes: runtimeManifest.checkpoint?.bootDelta?.bytes,
+        sha256: runtimeManifest.checkpoint?.bootDelta?.sha256,
+        role: "preboot-disk-delta",
+        mediaType: "application/vnd.qemu.qcow2",
+      },
+      {
+        path: runtimeManifest.checkpoint?.producer?.manifestArtifactPath,
+        bytes: runtimeManifest.checkpoint?.producer?.manifestBytes,
+        sha256: runtimeManifest.checkpoint?.producer?.manifestSha256,
+        role: "preboot-checkpoint-metadata",
+        mediaType: "application/json",
+      },
+    ];
     for (const artifact of checkpointRecords) {
       const artifactPath = safeRelativePath(artifact.path, "checkpoint artifact path");
       if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes <= 0 ||
@@ -310,12 +278,6 @@ export async function buildFullGuestRelease({ runtimeRoot, guestRoot }) {
       if (existing) {
         if (existing.artifact.bytes !== artifact.bytes || existing.artifact.sha256 !== artifact.sha256) {
           throw new Error(`checkpoint artifact conflicts with guest manifest: ${artifactPath}`);
-        }
-        if (hibernation) {
-          entries.set(artifactPath, {
-            artifact: Object.freeze({ ...artifact }),
-            path: existing.path,
-          });
         }
         continue;
       }
@@ -337,15 +299,10 @@ export async function buildFullGuestRelease({ runtimeRoot, guestRoot }) {
   const rootfsPath = runtimeManifest.guest.rootfs.artifactPath;
   const strictRangePaths = new Set([rootfsPath]);
   if (runtimeManifest.checkpoint !== undefined) {
-    const rangedCheckpointArtifacts = hibernation
-      ? [
-          ["hibernation root delta", runtimeManifest.checkpoint?.rootDelta?.artifactPath],
-          ["hibernation swap image", runtimeManifest.checkpoint?.swapImage?.artifactPath],
-        ]
-      : [
-          ["checkpoint vmstate", runtimeManifest.checkpoint?.vmstate?.artifactPath],
-          ["checkpoint boot delta", runtimeManifest.checkpoint?.bootDelta?.artifactPath],
-        ];
+    const rangedCheckpointArtifacts = [
+      ["checkpoint vmstate", runtimeManifest.checkpoint?.vmstate?.artifactPath],
+      ["checkpoint boot delta", runtimeManifest.checkpoint?.bootDelta?.artifactPath],
+    ];
     for (const [label, artifactPath] of rangedCheckpointArtifacts) {
       strictRangePaths.add(safeRelativePath(artifactPath, label));
     }

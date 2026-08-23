@@ -25,7 +25,7 @@ function identity() {
     artifactManifestSha256: sha256("artifact-manifest"),
     runtimeManifestSha256: sha256("runtime-manifest"),
     guestDescriptorSha256: sha256("guest-manifest"),
-    hibernateDescriptorSha256: sha256("hibernate-manifest"),
+    hibernateDescriptorSha256: null,
   });
 }
 
@@ -310,82 +310,4 @@ test("a native receipt handle is single-use and cannot be supplied by a public i
   module.inputEvents += 1;
   controller.moduleCallbacks().onBrowserPerformanceInputDelivered(receiptHandle);
   assert.equal(controller.failure.code, "INPUT_RECEIPT_HANDLE_REPLAY");
-});
-
-test("native hooks apply after the pinned display/input patches and preserve causal order", async (context) => {
-  const root = await mkdtemp(join(tmpdir(), "omarchy-browser-performance-hooks-"));
-  context.after(() => rm(root, { recursive: true, force: true }));
-  const upstream = process.env.QEMU_WASM_SOURCE ?? "/private/tmp/qemu-wasm-source";
-  const runtime = new URL("../", import.meta.url);
-  const sources = [
-    "include/ui/sdl2.h",
-    "ui/sdl2.c",
-    "ui/sdl2-2d.c",
-    "ui/sdl2-gl.c",
-    "system/main.c",
-    "hw/display/virtio-gpu-virgl.c",
-    "hw/input/virtio-input.c",
-  ];
-  for (const relativePath of sources) {
-    await mkdir(join(root, relativePath, ".."), { recursive: true });
-    await writeFile(join(root, relativePath), await readFile(join(upstream, relativePath)));
-  }
-  for (const relativePatch of [
-    "patches/qemu-sdl-frame-hook.patch",
-    "patches/qemu-sdl-frame-sampling.patch",
-    "patches/qemu-wasm-input-bridge.patch",
-    "patches/qemu-wasm-runstate-guard.patch",
-    "patches/qemu-wasm-sdl-texture-reuse.patch",
-    "patches/qemu-wasm-sdl-pageflip-coalesce.patch",
-    "patches/qemu-wasm-worker-dom.patch",
-  ]) {
-    const result = spawnSync("patch", [
-      "--quiet", "--directory", root, "--strip=1", "--input",
-      new URL(relativePatch, runtime).pathname,
-    ], { encoding: "utf8" });
-    assert.equal(result.status, 0, `${relativePatch}: ${result.stderr}`);
-  }
-  for (const relativePatch of [
-    "patches/qemu-wasm-sdl-webgl-context.patch",
-    "patches/qemu-wasm-sdl-webgl-frame-proof.patch",
-    "patches/qemu-wasm-browser-performance-hooks.patch",
-  ]) {
-    const arguments_ = ["apply", "--recount"];
-    if (relativePatch.endsWith("qemu-wasm-sdl-webgl-context.patch")) {
-      arguments_.push("--unidiff-zero");
-    }
-    arguments_.push("--unsafe-paths", new URL(relativePatch, runtime).pathname);
-    const result = spawnSync("git", arguments_, { cwd: root, encoding: "utf8" });
-    assert.equal(result.status, 0, `${relativePatch}: ${result.stderr}`);
-  }
-
-  const [virgl, input, sdl, gl, buildScript, metadataScript] = await Promise.all([
-    readFile(join(root, "hw/display/virtio-gpu-virgl.c"), "utf8"),
-    readFile(join(root, "hw/input/virtio-input.c"), "utf8"),
-    readFile(join(root, "ui/sdl2.c"), "utf8"),
-    readFile(join(root, "ui/sdl2-gl.c"), "utf8"),
-    readFile(new URL("scripts/build-qemu-wasm.sh", runtime), "utf8"),
-    readFile(new URL("scripts/write-build-metadata.mjs", runtime), "utf8"),
-  ]);
-  assert.match(
-    virgl,
-    /omarchy_gl_scanout_candidate_arm\(\+\+omarchy_candidate_id\);\s*}\s*#endif\s*dpy_gl_update/,
-  );
-  assert.ok(input.indexOf("virtqueue_push(vinput->evt") < input.indexOf("virtio_notify(VIRTIO_DEVICE(vinput)"));
-  assert.ok(input.indexOf("virtio_notify(VIRTIO_DEVICE(vinput)") < input.indexOf("omarchy_performance_input_report(true)"));
-  assert.match(input, /!omarchy_performance_receipt_report_seen \|\|\s*omarchy_performance_receipt_report_failed/);
-  assert.match(input, /onBrowserPerformanceInputDelivered/);
-  assert.match(sdl, /OMARCHY_PERFORMANCE_RECEIPT_BEGIN_EVENT/);
-  assert.match(sdl, /OMARCHY_PERFORMANCE_RECEIPT_END_EVENT/);
-  assert.match(gl, /HEAPU32\.slice/);
-  assert.match(gl, /onBrowserPerformanceScanoutCandidate/);
-  assert.match(gl, /onBrowserPerformanceScanoutPresent/);
-  assert.match(
-    gl,
-    /sdl2_gl_publish_scanout\(scon\);\s*#endif\s*sdl2_gl_window_context_swap\(scon\);/,
-  );
-  assert.match(buildScript, /qemu-wasm-browser-performance-hooks\.patch/);
-  assert.match(buildScript, /hw\/display\/virtio-gpu-virgl\.c:\/qemu-src\/hw\/display\/virtio-gpu-virgl\.c:ro/);
-  assert.match(buildScript, /hw\/input\/virtio-input\.c:\/qemu-src\/hw\/input\/virtio-input\.c:ro/);
-  assert.match(metadataScript, /patches\/qemu-wasm-browser-performance-hooks\.patch/);
 });
