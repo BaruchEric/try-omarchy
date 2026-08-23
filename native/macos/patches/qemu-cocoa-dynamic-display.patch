@@ -1,0 +1,142 @@
+From: Try Omarchy contributors
+Subject: [PATCH] cocoa: publish the live backing display through virtio-gpu
+
+Applies after startergo/homebrew-qemu-virgl-kosmickrisp v1.0.27:
+
+* upstream QEMU cf3e71d8fc8ba681266759bb6cb2e45a45983e3e
+* qemu-texture-borrowing.patch sha256
+  428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc157903
+* gpu-spike-resolution-fix.patch sha256
+  2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
+
+Keep startergo's VirGL/ANGLE/Metal rendering path unchanged. Report Cocoa
+backing pixels and the current screen refresh through QEMU UI info, including a
+reliable maximumFramesPerSecond fallback for variable-refresh displays. Update
+that information after screen, backing-scale, and fullscreen changes. Start at
+a 1920x1080 backing-pixel window when the host has room for it.
+
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -675,7 +675,7 @@
+ {
+     /* Must be called with the BQL, i.e. via updateUIInfo */
+     NSSize frameSize;
+-    QemuUIInfo info;
++    QemuUIInfo info = { 0 };
+ 
+     if (!qemu_console_is_graphic(dcl.con)) {
+         return;
+@@ -688,17 +688,31 @@
+         CGSize screenPhysicalSize = CGDisplayScreenSize(display);
+         bool isFullscreen = ([[self window] styleMask] & NSWindowStyleMaskFullScreen) != 0;
+         CVDisplayLinkRef displayLink;
++        uint32_t refreshRate = 0;
+ 
+         frameSize = isFullscreen ? [self screenSafeAreaSize] : [self frame].size;
+ 
+         if (!CVDisplayLinkCreateWithCGDisplay(display, &displayLink)) {
+             CVTime period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(displayLink);
+             CVDisplayLinkRelease(displayLink);
+-            if (!(period.flags & kCVTimeIsIndefinite)) {
+-                update_displaychangelistener(&dcl,
+-                                             1000 * period.timeValue / period.timeScale);
+-                info.refresh_rate = (int64_t)1000 * period.timeScale / period.timeValue;
++            if (!(period.flags & kCVTimeIsIndefinite) &&
++                period.timeValue > 0 && period.timeScale > 0) {
++                refreshRate = (int64_t)1000 * period.timeScale / period.timeValue;
++            }
++        }
++
++        if (!refreshRate) {
++            NSInteger framesPerSecond = [[[self window] screen] maximumFramesPerSecond];
++
++            if (framesPerSecond > 0) {
++                refreshRate = (uint32_t)framesPerSecond * 1000;
+             }
++        }
++
++        if (refreshRate) {
++            update_displaychangelistener(&dcl,
++                                         MAX(1u, 1000000u / refreshRate));
++            info.refresh_rate = refreshRate;
+         }
+ 
+         info.width_mm = frameSize.width / screenSize.width * screenPhysicalSize.width;
+@@ -711,8 +725,9 @@
+ 
+     info.xoff = 0;
+     info.yoff = 0;
+-    info.width = frameSize.width * [[self window] backingScaleFactor];
+-    info.height = frameSize.height * [[self window] backingScaleFactor];
++    NSSize backingFrameSize = [self convertSizeToBacking:frameSize];
++    info.width = backingFrameSize.width;
++    info.height = backingFrameSize.height;
+ 
+     dpy_set_ui_info(dcl.con, &info, TRUE);
+ }
+@@ -1290,7 +1305,25 @@
+ - (IBAction) do_about_menu_item: (id) sender;
+ - (void)adjustSpeed:(id)sender;
+ @end
++
++static NSRect cocoa_initial_window_frame(void)
++{
++    NSScreen *hostScreen = [NSScreen mainScreen];
++    CGFloat backingScale = hostScreen ? [hostScreen backingScaleFactor] : 1.0;
++    NSSize size = NSMakeSize(1920.0 / MAX(backingScale, 1.0),
++                             1080.0 / MAX(backingScale, 1.0));
+ 
++    if (hostScreen) {
++        NSSize available = [hostScreen visibleFrame].size;
++        CGFloat fit = MIN(1.0, MIN(available.width * 0.9 / size.width,
++                                   available.height * 0.9 / size.height));
++        size.width = floor(size.width * fit);
++        size.height = floor(size.height * fit);
++    }
++
++    return NSMakeRect(0.0, 0.0, size.width, size.height);
++}
++
+ @implementation QemuCocoaAppController
+ #ifdef CONFIG_OPENGL
+ - (id) initWithCGL:(BOOL)cgl
+@@ -1304,7 +1337,7 @@
+ 
+     self = [super init];
+     if (self) {
+-        NSRect frame = NSMakeRect(0.0, 0.0, 640.0, 480.0);
++        NSRect frame = cocoa_initial_window_frame();
+ 
+         // create a view and add it to the window
+ #ifdef CONFIG_OPENGL
+@@ -1395,18 +1428,29 @@
+ }
+ 
+ - (void)windowDidChangeScreen:(NSNotification *)notification
++{
++    [cocoaView updateScale];
++    [cocoaView updateUIInfo];
++}
++
++- (void)windowDidChangeBackingProperties:(NSNotification *)notification
+ {
++    [cocoaView updateScale];
+     [cocoaView updateUIInfo];
+ }
+ 
+ - (void)windowDidEnterFullScreen:(NSNotification *)notification
+ {
++    [cocoaView updateScale];
++    [cocoaView updateUIInfo];
+     [cocoaView grabMouse];
+ }
+ 
+ - (void)windowDidExitFullScreen:(NSNotification *)notification
+ {
+     [cocoaView resizeWindow];
++    [cocoaView updateScale];
++    [cocoaView updateUIInfo];
+     [cocoaView ungrabMouse];
+ }
+ 
