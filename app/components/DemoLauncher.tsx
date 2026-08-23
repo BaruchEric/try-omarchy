@@ -34,22 +34,7 @@ type GuestReport = Record<string, unknown> & {
 
 type GuestReportOrigin =
   | "live-guest-serial"
-  | "live-hibernation-serial"
   | "checkpoint-source-evidence";
-
-type HibernationResumeEvidence = {
-  schemaVersion: 1;
-  checkpointMode: "guest-hibernation-resume";
-  descriptorSha256: string;
-  markerSha256: string;
-  rendererReportSha256: string;
-  renderer: "virgl";
-  sourceBootId: string;
-  swapUuid: string;
-  kernelEvidence: string[];
-  runtimeDisplay: "sdl,gl=es,show-cursor=on";
-  derivedInitramfsSha256: string;
-};
 
 type GuestFrame = {
   sequence: number;
@@ -284,9 +269,6 @@ export function DemoLauncher() {
             ...(message.sourceEvidence === undefined
               ? {}
               : { sourceEvidence: message.sourceEvidence }),
-            ...(message.resume === undefined
-              ? {}
-              : { resume: message.resume }),
           });
           desktopEvidenceRef.current = next;
           if (next.report !== report) {
@@ -301,25 +283,6 @@ export function DemoLauncher() {
           setGuestReady(false);
           addHostDiagnostic(
             `[guest] Authenticity report from ${message.origin} matched the active release; waiting for the Worker's guest-acknowledged desktop-transition proof.`,
-          );
-          break;
-        }
-        case "hibernationresume": {
-          const evidence = message.evidence as HibernationResumeEvidence;
-          const next = advanceDesktopEvidence(desktopEvidenceRef.current, {
-            type: "hibernationresume",
-            evidence,
-          });
-          desktopEvidenceRef.current = next;
-          setGuestReady(false);
-          if (next.hibernationResume !== evidence) {
-            addHostDiagnostic(
-              "[resume] Rejected duplicate, out-of-order, malformed, or descriptor-mismatched hibernation evidence.",
-            );
-            break;
-          }
-          addHostDiagnostic(
-            `[resume] Authenticated VirGL hibernation resume for descriptor ${evidence.descriptorSha256}; waiting for a fresh live guest report.`,
           );
           break;
         }
