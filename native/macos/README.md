@@ -86,19 +86,32 @@ Then launch the canonical ARM bundle:
 npm run omarchy:native:gpu
 ```
 
-The launcher strictly verifies the runtime and complete guest bundle, APFS-
-clones a disposable root disk, and removes that clone and its private QMP socket
-when QEMU exits. It requires Apple Silicon and one-time Accessibility permission
+The launcher strictly verifies the runtime and complete guest bundle, then uses
+a persistent APFS clone by default. Guest files and settings therefore survive
+close/reopen. It requires Apple Silicon and one-time Accessibility permission
 for **Omarchy Quattro** so the focused Command-key bridge described below can
-provide guest Super shortcuts. It starts fullscreen so Cocoa publishes the
-host display's usable Retina dimensions and refresh rate immediately; press
+provide guest Super shortcuts. It starts fullscreen so Cocoa publishes the host
+display's usable Retina dimensions and refresh rate immediately; press
 Control-Option-F to toggle between fullscreen and a resizable window.
 
-Each QEMU launch owns a private `omarchy-qemu-gpu.*` directory. Normal shutdown
-removes it immediately. A later launch reclaims only exact, user-owned `0700`
-directories carrying the current marker after confirming that neither their
-launcher nor their recorded QEMU process still owns the run. Unknown and legacy
-directories are left untouched.
+Persistent disks are isolated by the verified guest-manifest SHA-256 under
+`~/Library/Application Support/OmarchyVMHelper/QEMU/v1`. A new guest bundle gets
+a separate disk instead of silently mutating or migrating an older one, and a
+second launcher cannot open the same disk concurrently. The source image is
+6 GiB logically; APFS cloning normally makes initial physical usage negligible.
+Use a throwaway session or explicitly reset only the selected bundle with:
+
+```bash
+npm run omarchy:native:gpu:ephemeral
+npm run omarchy:native:gpu:reset
+```
+
+Each QEMU launch still owns a private `omarchy-qemu-gpu.*` control directory.
+Normal shutdown removes it immediately without deleting persistent guest data.
+A later launch reclaims only exact, user-owned `0700` control directories
+carrying the current marker after confirming that neither their launcher nor
+their recorded QEMU process still owns the run. Unknown and legacy directories
+are left untouched.
 
 ## WebRTC capture mode
 

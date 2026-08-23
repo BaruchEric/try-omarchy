@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: native/macos/run-qemu-gpu.sh [GUEST_DIR]" >&2
+  echo "Usage: native/macos/run-qemu-gpu.sh [--ephemeral | --reset-storage] [GUEST_DIR]" >&2
   exit 64
 }
 
@@ -12,6 +12,18 @@ fail() {
   exit 1
 }
 
+storage_mode=persistent
+case ${1:-} in
+  --ephemeral)
+    storage_mode=ephemeral
+    shift
+    ;;
+  --reset-storage)
+    storage_mode=reset
+    shift
+    ;;
+  --*) usage ;;
+esac
 (( $# <= 1 )) || usage
 
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
@@ -19,6 +31,13 @@ repo_dir=$(cd "$native_dir/../.." && pwd -P)
 guest_input=${1:-"$repo_dir/guest/dist-aarch64"}
 qemu_bin="$native_dir/.build/qemu-gpu-runtime/bin/qemu-system-aarch64"
 input_bridge="$native_dir/.build/Omarchy Quattro.app/Contents/MacOS/omarchy-vm-helper"
+storage_library="$native_dir/qemu-persistent-storage.sh"
+
+[[ -f $storage_library && ! -L $storage_library ]] || {
+  fail "persistent-storage library is missing or unsafe: $storage_library"
+}
+# shellcheck source=qemu-persistent-storage.sh
+source "$storage_library"
 
 [[ $(uname -m) == arm64 ]] || fail "requires an ARM64 Mac"
 [[ $(uname -s) == Darwin ]] || fail "requires macOS"
@@ -50,6 +69,10 @@ printf '%s\n' "$qemu_cpus" | grep -Eq '^[[:space:]]*host([[:space:]]|$)' || fail
 qemu_displays=$("$qemu_bin" -display help 2>&1) || fail "cannot inspect staged QEMU displays"
 printf '%s\n' "$qemu_displays" | grep -qx 'cocoa' || fail "staged QEMU does not provide the Cocoa display"
 qemu_devices=$("$qemu_bin" -device help 2>&1) || fail "cannot inspect staged QEMU devices"
+qemu_help=$("$qemu_bin" -help 2>&1) || fail "cannot inspect staged QEMU options"
+printf '%s\n' "$qemu_help" | grep -q -- '^-add-fd fd=fd,set=set' || {
+  fail "staged QEMU cannot preserve the persistent-disk lock descriptor"
+}
 
 require_qemu_device() {
   local device=$1
@@ -83,9 +106,9 @@ if [[ $gpu_help == *'romfile=<str>'* ]]; then
   gpu_device+=',romfile='
 fi
 
-# Emit only the trusted kernel command line on stdout. All validation failures
-# go to stderr so command substitution cannot accidentally become -append data.
-kernel_command_line=$(python3 - "$guest_dir" <<'PY'
+# Emit one trusted tab-delimited record on stdout. All validation failures go
+# to stderr so command substitution cannot accidentally become launch data.
+bundle_validation=$(python3 - "$guest_dir" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -365,9 +388,25 @@ with (guest / "rootfs.ext4.zst").open("rb") as handle:
     if handle.read(4) != b"\x28\xb5\x2f\xfd":
         fail("rootfs.ext4.zst is not a Zstandard frame")
 
-sys.stdout.write(command_line)
+rootfs_record = records_by_path["rootfs.ext4"]
+sys.stdout.write(
+    "\t".join(
+        (
+            calculated["guest-manifest.json"],
+            str(rootfs_record["sha256"]),
+            str(rootfs_record["bytes"]),
+            command_line,
+        )
+    )
+)
 PY
 )
+IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes kernel_command_line \
+  <<<"$bundle_validation"
+[[ $bundle_identity =~ ^[0-9a-f]{64}$ ]] || fail "validated bundle identity is invalid"
+[[ $source_disk_sha =~ ^[0-9a-f]{64}$ ]] || fail "validated rootfs digest is invalid"
+[[ $source_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated rootfs size is invalid"
+[[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -418,6 +457,7 @@ cleanup() {
   if [[ $bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$bridge_pid" 20
   fi
+  qemu_persistent_storage_release_lock
   if [[ -n $work_dir && -n $owner_marker && -n $owner_token ]]; then
     case "$work_dir" in
       /private/tmp/omarchy-qemu-gpu.??????)
@@ -474,7 +514,7 @@ reap_stale_work_dirs() {
       if [[ $stale_qemu_pid =~ ^[0-9]+$ ]]; then
         qemu_command=$(ps -p "$stale_qemu_pid" -o command= 2>/dev/null || true)
         if [[ $qemu_command == *"$qemu_bin"* &&
-              $qemu_command == *"file=$candidate/rootfs.ext4"* ]]; then
+              $qemu_command == *"unix:/tmp/${candidate##*/}/qmp.sock"* ]]; then
           continue
         fi
       fi
@@ -509,21 +549,14 @@ chmod 600 "$owner_marker"
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 
 source_disk="$guest_dir/rootfs.ext4"
-working_disk="$work_dir/rootfs.ext4"
-if /bin/cp -c "$source_disk" "$working_disk" 2>/dev/null; then
-  echo "[qemu-gpu] APFS-cloned the immutable rootfs into $work_dir" >&2
-else
-  /bin/rm -f "$working_disk"
-  echo "[qemu-gpu] APFS clone unavailable; copying the immutable rootfs into $work_dir" >&2
-  /bin/cp "$source_disk" "$working_disk"
-fi
-[[ -f $working_disk && ! -L $working_disk ]] || fail "working rootfs copy is unsafe"
-[[ $(stat -f '%z' "$working_disk") == $(stat -f '%z' "$source_disk") ]] || {
-  fail "working rootfs copy has the wrong size"
-}
-[[ $(stat -f '%i' "$working_disk") != $(stat -f '%i' "$source_disk") ]] || {
-  fail "working rootfs did not receive a distinct inode"
-}
+qemu_persistent_storage_select \
+  "$storage_mode" \
+  "$bundle_identity" \
+  "$source_disk" \
+  "$source_disk_sha" \
+  "$source_disk_bytes" \
+  "$work_dir" || fail "could not prepare the selected root disk"
+working_disk=$QEMU_SELECTED_DISK
 
 qemu_args=(
   -name 'Omarchy Quattro ARM64 - QEMU VirGL'
@@ -558,6 +591,12 @@ qemu_args=(
   -device 'virtconsole,bus=omarchy-serial.0,nr=0,chardev=omarchy-hvc0'
 )
 
+if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
+  qemu_args+=(
+    -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD"
+  )
+fi
+
 if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   printf '[qemu-gpu] dry-run command:' >&2
   printf ' %q' "$qemu_bin" "${qemu_args[@]}" >&2
@@ -570,7 +609,12 @@ fi
   fail "OMARCHY_QEMU_GPU_DRY_RUN must be 0 or 1"
 }
 
-echo "[qemu-gpu] Starting the disposable ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+if [[ $QEMU_SELECTED_STORAGE_MODE == persistent ]]; then
+  echo "[qemu-gpu] Starting the persistent ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+  echo "[qemu-gpu] User data: $QEMU_PERSISTENT_STORAGE_DIRECTORY" >&2
+else
+  echo "[qemu-gpu] Starting a disposable ARM64 VirGL guest with $vcpu_count vCPUs and 4 GiB RAM." >&2
+fi
 "$qemu_bin" "${qemu_args[@]}" &
 qemu_pid=$!
 printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
@@ -583,7 +627,9 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 
-"$input_bridge" --bridge-command-super "$qemu_pid" "$qmp_socket" &
+# FD 9 deliberately remains open only in QEMU. Letting the sibling input
+# bridge inherit it could keep a persistent workspace locked after QEMU exits.
+"$input_bridge" --bridge-command-super "$qemu_pid" "$qmp_socket" 9>&- &
 bridge_pid=$!
 
 # Bash 3.2 has no `wait -n`. Poll both children so a bridge failure at any

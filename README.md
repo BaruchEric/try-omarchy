@@ -114,8 +114,10 @@ npm run omarchy:native:gpu
 This launcher requires Apple Silicon and one-time Accessibility permission for
 the signed **Omarchy Quattro** helper. The permission is used only to turn
 Command into guest Super while the QEMU window is focused; physical Option
-remains guest Alt. The root disk is APFS-cloned for each run and deleted when
-the window closes.
+remains guest Alt. Its verified root disk persists by default, so guest files
+and settings survive close/reopen. Use `npm run omarchy:native:gpu:ephemeral`
+for a clean throwaway session or `npm run omarchy:native:gpu:reset` to replace
+the current bundle's persistent disk with a fresh verified clone.
 
 ## Run the WebRTC performance proof
 
