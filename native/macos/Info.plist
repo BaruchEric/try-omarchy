@@ -28,6 +28,8 @@
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Omarchy Quattro uses the Mac microphone only when software inside the virtual machine records audio.</string>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

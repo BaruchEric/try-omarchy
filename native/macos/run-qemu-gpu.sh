@@ -73,6 +73,18 @@ qemu_help=$("$qemu_bin" -help 2>&1) || fail "cannot inspect staged QEMU options"
 printf '%s\n' "$qemu_help" | grep -q -- '^-add-fd fd=fd,set=set' || {
   fail "staged QEMU cannot preserve the persistent-disk lock descriptor"
 }
+qemu_netdevs=$("$qemu_bin" -machine virt -netdev help 2>&1) || {
+  fail "cannot inspect staged QEMU network backends"
+}
+printf '%s\n' "$qemu_netdevs" | grep -qx 'user' || {
+  fail "staged QEMU does not provide no-root SLIRP networking; rerun npm run omarchy:native:gpu:prepare"
+}
+qemu_audiodevs=$("$qemu_bin" -machine virt -audiodev help 2>&1) || {
+  fail "cannot inspect staged QEMU audio backends"
+}
+printf '%s\n' "$qemu_audiodevs" | grep -qx 'sdl' || {
+  fail "staged QEMU does not provide duplex SDL audio; rerun npm run omarchy:native:gpu:prepare"
+}
 
 require_qemu_device() {
   local device=$1
@@ -80,11 +92,14 @@ require_qemu_device() {
 }
 
 for device in \
+  hda-micro \
+  intel-hda \
   virtconsole \
   virtio-balloon-pci \
   virtio-blk-pci \
   virtio-gpu-gl-pci \
   virtio-keyboard-pci \
+  virtio-net-pci \
   virtio-rng-pci \
   virtio-serial-pci \
   virtio-tablet-pci; do
@@ -560,13 +575,19 @@ working_disk=$QEMU_SELECTED_DISK
 
 qemu_args=(
   -name 'Omarchy Quattro ARM64 - QEMU VirGL'
-  -machine 'virt,accel=hvf,gic-version=3'
+  # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
+  # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
+  -machine 'virt,accel=hvf,gic-version=2'
   -cpu host
   -smp "$vcpu_count,sockets=1,cores=$vcpu_count,threads=1"
   -m 4G
   -nodefaults
   -no-reboot
-  -nic none
+  -netdev 'user,id=omarchy-net'
+  -device 'virtio-net-pci,netdev=omarchy-net,mac=52:54:00:12:34:56,romfile='
+  -audiodev 'sdl,id=omarchy-audio'
+  -device 'intel-hda,id=omarchy-hda,romfile='
+  -device 'hda-micro,bus=omarchy-hda.0,audiodev=omarchy-audio'
   -serial none
   -monitor none
   -qmp "unix:$qmp_socket,server=on,wait=off"
