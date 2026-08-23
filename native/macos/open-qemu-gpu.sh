@@ -76,6 +76,9 @@ microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescripti
 exec /usr/bin/open \
   -n \
   -W \
+  --stdin /dev/null \
+  --stdout /dev/null \
+  --stderr /dev/null \
   "$app" \
   --args \
   "${launcher_arguments[@]}"
