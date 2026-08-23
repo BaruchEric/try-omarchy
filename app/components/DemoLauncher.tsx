@@ -2,10 +2,6 @@
 
 import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
-  launchNativeHelper,
-  probeNativeHelper,
-} from "./runtime-selection.mjs";
-import {
   acceptVmHostMessage,
   createVmHostCommand,
   createVmRun,
@@ -104,24 +100,6 @@ type VmRun = {
   src: string;
 };
 
-type NativeRuntime = {
-  kind: "native-arm64";
-  endpoint: string;
-  helperVersion: string;
-  bundleIdentity: string;
-  upstream: {
-    repository: string;
-    commit: string;
-    version: string;
-    treeSha256: string;
-    channel: "quattro";
-  };
-  display: "native-window";
-  supportsHostBoundResume: true;
-};
-
-type NativeLaunchState = "idle" | "launching" | "launched" | "error";
-
 const BOOT_STAGES = ["Runtime", "System image", "Emulator", "Desktop proof"];
 
 export function DemoLauncher() {
@@ -133,10 +111,6 @@ export function DemoLauncher() {
   );
   const [hostRun, setHostRun] = useState<VmRun | null>(null);
   const [capabilities, setCapabilities] = useState<CapabilityReport | null>(null);
-  const [nativeRuntime, setNativeRuntime] = useState<NativeRuntime | null>(null);
-  const [nativeProbeComplete, setNativeProbeComplete] = useState(false);
-  const [nativeLaunchState, setNativeLaunchState] =
-    useState<NativeLaunchState>("idle");
   const [phase, setPhase] = useState("idle");
   const [sessionStarted, setSessionStarted] = useState(false);
   const [guestReady, setGuestReady] = useState(false);
@@ -173,19 +147,10 @@ export function DemoLauncher() {
       );
     }
 
-    queueMicrotask(async () => {
+    queueMicrotask(() => {
       if (!cancelled) {
         setCapabilities(inspectVmCapabilities(window) as CapabilityReport);
         readDpr();
-      }
-      try {
-        const selected = await probeNativeHelper({
-          fetchImpl: window.fetch.bind(window),
-          crypto: window.crypto,
-        });
-        if (!cancelled) setNativeRuntime(selected as NativeRuntime | null);
-      } finally {
-        if (!cancelled) setNativeProbeComplete(true);
       }
     });
 
@@ -412,15 +377,10 @@ export function DemoLauncher() {
     };
   }, []);
 
-  const nativeSelected = nativeRuntime !== null;
-  const nativeLaunched = nativeLaunchState === "launched";
-  const displayReady = guestReady || nativeLaunched;
-  const unsupported =
-    nativeProbeComplete && !nativeSelected && capabilities !== null && !capabilities.supported;
+  const unsupported = capabilities !== null && !capabilities.supported;
   const phaseView = getPhasePresentation(phase, guestReady);
-  const starting = nativeSelected
-    ? nativeLaunchState === "launching"
-    : sessionStarted && !guestReady && phase !== "error" && phase !== "failed";
+  const starting =
+    sessionStarted && !guestReady && phase !== "error" && phase !== "failed";
 
   function addDiagnostic(value: string) {
     setSerialLines((lines) => appendDiagnosticLine(lines, value));
@@ -436,7 +396,6 @@ export function DemoLauncher() {
       activeRunRef.current = nextRun;
       if (iframeRef.current) iframeRef.current.src = "about:blank";
       setHostRun(nextRun);
-      setNativeLaunchState("idle");
       setSessionStarted(true);
       setGuestReady(false);
       setGuestReport(null);
@@ -463,36 +422,8 @@ export function DemoLauncher() {
     }
   }
 
-  async function handleLaunch() {
-    if (!nativeProbeComplete || starting || displayReady) return;
-    if (nativeRuntime) {
-      setSessionStarted(true);
-      setNativeLaunchState("launching");
-      setRuntimeError(null);
-      setPhase("native-launching");
-      setSerialLines([
-        "[launcher] Verified the local Apple Silicon helper and exact Quattro ARM64 bundle.",
-      ]);
-      try {
-        const receipt = await launchNativeHelper(nativeRuntime, {
-          fetchImpl: window.fetch.bind(window),
-          crypto: window.crypto,
-        });
-        setNativeLaunchState("launched");
-        setPhase("native-running");
-        addDiagnostic(
-          `[native] Opened ARM64 bundle ${receipt.bundleIdentity} in a hardware-virtualized macOS window.`,
-        );
-      } catch (error) {
-        const failure = normalizeRuntimeError(error);
-        setNativeLaunchState("error");
-        setRuntimeError(failure);
-        setPhase("error");
-        addDiagnostic(`[native] ${failure.technical}`);
-      }
-      return;
-    }
-    if (!capabilities?.supported) return;
+  function handleLaunch() {
+    if (!capabilities?.supported || starting || guestReady) return;
     beginFreshRun(false);
   }
 
@@ -523,7 +454,6 @@ export function DemoLauncher() {
   }
 
   function resetSession() {
-    if (nativeSelected) return;
     beginFreshRun(true);
   }
 
@@ -539,18 +469,14 @@ export function DemoLauncher() {
   }
 
   const launchLabel =
-    !nativeProbeComplete || capabilities === null
+    capabilities === null
       ? "Start Omarchy"
-      : nativeSelected
-        ? "Open native Omarchy"
-        : unsupported
-          ? "Browser unsupported"
-          : "Try full VM";
-  const identity = nativeSelected
-    ? `Omarchy ${nativeRuntime.upstream.version} · Quattro · ARM64`
-    : guestReport
-      ? formatGuestIdentity(guestReport)
-      : "Guest evidence pending";
+      : unsupported
+        ? "Browser unsupported"
+        : "Start Omarchy";
+  const identity = guestReport
+    ? formatGuestIdentity(guestReport)
+    : "Guest evidence pending";
   const frameResolution =
     lastFrame?.guestWidth && lastFrame.guestHeight
       ? `${lastFrame.guestWidth} × ${lastFrame.guestHeight}`
@@ -575,71 +501,48 @@ export function DemoLauncher() {
         <div className="header-status" aria-label="Demo runtime status">
           <span
             className="status-light"
-            data-state={displayReady ? "ready" : runtimeError ? "error" : "idle"}
+            data-state={guestReady ? "ready" : runtimeError ? "error" : "idle"}
             aria-hidden="true"
           />
-          {displayReady
-            ? nativeSelected
-              ? "Native ARM64 active"
-              : "Guest verified"
+          {guestReady
+            ? "Guest verified"
             : sessionStarted
               ? phaseView.title
-              : nativeSelected
-                ? "Apple Silicon edition"
-                : "Browser edition"}
+              : "Browser VM"}
         </div>
       </header>
 
       <section className="hero" id="top" data-session-active={sessionStarted}>
         <div className="hero-copy">
-          <p className="eyebrow">
-            Experience Quattro · No installation
-          </p>
+          <p className="eyebrow">Real Quattro VM · No installation</p>
           <h1>
             Try Omarchy
             <br />
             in your browser.
           </h1>
           <p className="lede">
-            {nativeSelected
-              ? "Start the fast Quattro Browser Edition in this tab, or open the complete ARM64 system through the verified native helper at host-class speed."
-              : "Start with the fast, client-side Quattro Browser Edition. Explore Omarchy's menu, tiling, workspaces, themes, terminal, and keyboard-driven workflow instantly."}
+            A disposable x86_64 Omarchy machine running entirely in this tab.
+            Explore the real Hyprland desktop, themes, terminal, and
+            keyboard-driven workflow, then close the tab when you&apos;re done.
           </p>
 
           <div className="actions">
-            <a className="launch-button" href="/browser">
-              <span>Start Omarchy instantly</span>
-              <span aria-hidden="true">→</span>
-            </a>
             <button
-              className="launch-button launch-button--secondary"
+              className="launch-button"
               type="button"
               onClick={handleLaunch}
-              disabled={
-                !nativeProbeComplete ||
-                (!nativeSelected && (capabilities === null || unsupported)) ||
-                starting ||
-                displayReady
-              }
+              disabled={capabilities === null || unsupported || starting || guestReady}
               aria-describedby="launch-note compatibility-note"
             >
               <span>{launchLabel}</span>
               <span aria-hidden="true">↗</span>
             </button>
-            <p id="launch-note">
-              {nativeSelected
-                ? "Browser Edition needs no helper. Native opens the complete system."
-                : "Browser Edition is recommended. The complete VM remains experimental."}
-            </p>
+            <p id="launch-note">Nothing is installed on your computer.</p>
           </div>
           <p className="compatibility-note" id="compatibility-note" role="status">
-            {nativeSelected
-              ? "Selected ARM64 Quattro with native CPU virtualization, Virtio graphics, and host-bound resume."
-              : unsupported
+            {unsupported
               ? `Missing: ${describeCapabilityIssue(capabilities)}. Use a current Chromium-based browser with page isolation enabled.`
-              : nativeProbeComplete
-                ? "Browser Edition runs instantly on ARM and x86. The optional full x86_64 VM uses the slower WebAssembly emulator."
-                : "Checking for the Apple Silicon helper before selecting a runtime."}
+              : "Requires WebAssembly threads, shared memory, and OffscreenCanvas."}
           </p>
         </div>
 
@@ -648,7 +551,7 @@ export function DemoLauncher() {
             className="machine-frame"
             ref={machineRef}
             data-active={sessionStarted}
-            data-ready={displayReady}
+            data-ready={guestReady}
           >
             <div className="machine-toolbar">
               <div className="machine-title">
@@ -659,7 +562,7 @@ export function DemoLauncher() {
               </div>
               <div className="machine-controls">
                 <span className="resolution-label">1600 × 900</span>
-                {sessionStarted && !nativeSelected && (
+                {sessionStarted && (
                   <>
                     <button
                       className="machine-control"
@@ -701,81 +604,31 @@ export function DemoLauncher() {
                     <span />
                     <span />
                   </div>
-                  <p className="screen-kicker">
-                    {nativeSelected
-                      ? "Native ARM64 virtual machine"
-                      : "Real x86_64 virtual machine"}
-                  </p>
+                  <p className="screen-kicker">Real x86_64 virtual machine</p>
                   <h2 className="screen-title">{phaseView.title}</h2>
-                  {nativeSelected ? (
-                    <div
-                      className="runtime-checks"
-                      aria-label="Native runtime capabilities"
-                    >
-                      {[
-                        "Apple virtualization",
-                        "ARM64 Quattro",
-                        "Native Virtio display",
-                        "Host-bound resume",
-                      ].map((label) => (
-                        <span key={label}>
-                          <i data-ready="true" aria-hidden="true" />
-                          {label}
+                  <div
+                    className="runtime-checks"
+                    aria-label="Browser capabilities"
+                  >
+                    {CAPABILITY_DEFINITIONS.map((capability) => {
+                      const available = capabilities?.checks[capability.key];
+                      return (
+                        <span key={capability.key}>
+                          <i
+                            data-ready={
+                              capabilities === null ? "checking" : available
+                            }
+                            aria-hidden="true"
+                          />
+                          {capability.label}
                         </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <div
-                      className="runtime-checks"
-                      aria-label="Browser capabilities"
-                    >
-                      {CAPABILITY_DEFINITIONS.map((capability) => {
-                        const available = capabilities?.checks[capability.key];
-                        return (
-                          <span key={capability.key}>
-                            <i
-                              data-ready={
-                                capabilities === null ? "checking" : available
-                              }
-                              aria-hidden="true"
-                            />
-                            {capability.label}
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {sessionStarted && nativeSelected && !nativeLaunched && !runtimeError && (
-                <div className="screen-overlay screen-overlay--booting">
-                  <div className="boot-status" role="status" aria-live="polite">
-                    <div>
-                      <p className="screen-kicker">Native launch</p>
-                      <h2 className="screen-title">{phaseView.title}</h2>
-                      <p className="screen-detail">{phaseView.detail}</p>
-                    </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
 
-              {sessionStarted && nativeSelected && nativeLaunched && !runtimeError && (
-                <div className="screen-overlay screen-overlay--idle" role="status">
-                  <div className="boot-mark" aria-hidden="true">
-                    <span />
-                    <span />
-                  </div>
-                  <p className="screen-kicker">ARM64 · Apple Virtualization.framework</p>
-                  <h2 className="screen-title">Native window opened</h2>
-                  <p className="screen-detail">
-                    Use the Omarchy window that just opened. Its display and input
-                    stay native instead of crossing the x86-to-WebAssembly emulator.
-                  </p>
-                </div>
-              )}
-
-              {sessionStarted && !nativeSelected && !guestReady && !runtimeError && (
+              {sessionStarted && !guestReady && !runtimeError && (
                 <div className="screen-overlay screen-overlay--booting">
                   <div className="boot-status" role="status" aria-live="polite">
                     <div>
@@ -815,9 +668,9 @@ export function DemoLauncher() {
                     <button
                       className="inline-action"
                       type="button"
-                      onClick={nativeSelected ? handleLaunch : resetSession}
+                      onClick={resetSession}
                     >
-                      {nativeSelected ? "Try opening the native window again" : "Start a fresh session"}
+                      Start a fresh session
                     </button>
                   </div>
                 </div>
@@ -825,17 +678,15 @@ export function DemoLauncher() {
             </div>
 
             <div className="machine-footer">
-              <span>{displayReady ? identity : "Arch · Hyprland · Quickshell"}</span>
+              <span>{guestReady ? identity : "Arch · Hyprland · Quickshell"}</span>
               <span>
-                {nativeLaunched
-                  ? "Native CPU · native display"
-                  : guestReady
+                {guestReady
                   ? "Release · input · display verified"
                   : "Disposable session"}
               </span>
             </div>
 
-            {sessionStarted && !nativeSelected && (
+            {sessionStarted && (
               <div className="session-tools">
                 <div className="shortcut-help" id="shortcut-help">
                   <strong>Explore the real desktop.</strong>
@@ -927,9 +778,8 @@ export function DemoLauncher() {
           </div>
           {sessionStarted && (
             <p className="disposable-note">
-              {nativeSelected
-                ? "The ARM64 VM runs locally in its native macOS window. Its saved resume state is bound to this exact Mac and guest bundle."
-                : "Reset destroys this isolated in-memory VM and starts a fresh one without reloading the page. Nothing from this session is kept."}
+              Reset destroys this isolated in-memory VM and starts a fresh one
+              without reloading the page. Nothing from this session is kept.
             </p>
           )}
         </div>

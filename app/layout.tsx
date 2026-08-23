@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const title = "Try Omarchy — Live in your browser";
+const title = "Try Omarchy — Browser VM and Native Mac VM";
 const description =
-  "Experience Omarchy Quattro instantly in a fast, client-side Browser Edition, with optional native and full-VM runtimes.";
+  "Try real Omarchy in a fully client-side browser VM, or run the accelerated ARM64 Native Mac VM through QEMU, HVF, VirGL, and Metal.";
 
 function requestOrigin(requestHeaders: Headers) {
   const forwardedHost = requestHeaders.get("x-forwarded-host")?.split(",")[0];
@@ -57,7 +57,7 @@ export async function generateMetadata(): Promise<Metadata> {
           url: socialImage,
           width: 1731,
           height: 909,
-          alt: "Try Omarchy in your browser",
+          alt: "Omarchy on Apple Silicon",
         },
       ],
     },

@@ -149,16 +149,6 @@ const PHASES = {
     detail: "QEMU is handing the real guest display to this canvas.",
     stage: 3,
   },
-  "native-launching": {
-    title: "Opening native Omarchy",
-    detail: "The verified Apple Silicon helper is opening the ARM64 VM window.",
-    stage: 3,
-  },
-  "native-running": {
-    title: "Native Omarchy window opened",
-    detail: "Omarchy is running through Apple hardware virtualization in its native window.",
-    stage: 4,
-  },
   running: {
     title: "Waiting for the Omarchy desktop",
     detail: "The emulator is running; readiness must come from the guest.",

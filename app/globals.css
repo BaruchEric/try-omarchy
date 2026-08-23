@@ -970,3 +970,412 @@ kbd {
     transition: none;
   }
 }
+
+/* Native macOS architecture page */
+.architecture-page {
+  --arch-ink: #171915;
+  --arch-muted: #6f716b;
+  --arch-line: #d8d9d2;
+  --arch-paper: #f4f4ef;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 76% 8%, rgba(215, 226, 255, 0.72), transparent 23rem),
+    var(--arch-paper);
+  color: var(--arch-ink);
+}
+
+.architecture-page * { scroll-margin-top: 88px; }
+
+.architecture-nav {
+  display: flex;
+  width: min(1240px, calc(100% - 64px));
+  height: 80px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--arch-line);
+}
+
+.architecture-brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--arch-ink);
+  font-size: 14px;
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  text-decoration: none;
+}
+
+.architecture-brand-mark {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 8px;
+  background: #181a16;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.architecture-nav nav { display: flex; gap: 28px; }
+.architecture-nav nav a {
+  color: var(--arch-muted);
+  font-size: 12px;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+.architecture-nav nav a:hover { color: var(--arch-ink); }
+.architecture-page a:focus-visible { outline-color: #5169d8; }
+
+.architecture-hero {
+  width: min(1240px, calc(100% - 64px));
+  margin: 0 auto;
+  padding: clamp(86px, 11vw, 150px) 0 clamp(92px, 12vw, 168px);
+}
+
+.architecture-kicker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 32px;
+  color: #555850;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.architecture-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #65a06f;
+  box-shadow: 0 0 0 5px rgba(101, 160, 111, 0.12);
+}
+
+.architecture-hero h1 {
+  max-width: 980px;
+  margin: 0;
+  color: var(--arch-ink);
+  font-size: clamp(58px, 8.2vw, 116px);
+  font-weight: 520;
+  letter-spacing: -0.075em;
+  line-height: 0.89;
+}
+.architecture-hero h1 span { color: #95978f; }
+.architecture-hero > p {
+  max-width: 640px;
+  margin: 46px 0 0 auto;
+  color: #595b56;
+  font-size: clamp(17px, 1.7vw, 23px);
+  letter-spacing: -0.025em;
+  line-height: 1.48;
+}
+
+.architecture-section {
+  width: min(1240px, calc(100% - 64px));
+  margin: 0 auto;
+  padding: 0 0 128px;
+}
+.architecture-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 48px;
+  margin-bottom: 30px;
+}
+.architecture-section-heading > div { display: flex; align-items: baseline; gap: 16px; }
+.architecture-section-number {
+  color: #989a93;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+}
+.architecture-section h2 {
+  margin: 0;
+  color: var(--arch-ink);
+  font-size: clamp(24px, 2.4vw, 34px);
+  font-weight: 570;
+  letter-spacing: -0.045em;
+}
+.architecture-section-heading > p {
+  max-width: 400px;
+  margin: 0;
+  color: var(--arch-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: right;
+}
+
+.architecture-diagram {
+  overflow: hidden;
+  border: 1px solid var(--arch-line);
+  border-radius: 22px;
+  background: rgba(255, 255, 252, 0.72);
+  box-shadow: 0 28px 80px rgba(30, 34, 26, 0.07);
+}
+.architecture-host-label {
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--arch-line);
+  color: #898b84;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.architecture-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 22px;
+}
+.architecture-layer-wrap { position: relative; min-width: 0; }
+.architecture-layer {
+  min-height: 292px;
+  margin: 0 7px;
+  border: 1px solid #dedfd9;
+  border-radius: 14px;
+  padding: 19px;
+  background: rgba(250, 250, 247, 0.88);
+}
+.architecture-layer-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #9b9d96;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+.architecture-layer-signal {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fc876e;
+  box-shadow: 0 0 0 5px rgba(252, 135, 110, 0.12);
+}
+.architecture-layer--blue .architecture-layer-signal {
+  background: #6586ee;
+  box-shadow: 0 0 0 5px rgba(101, 134, 238, 0.12);
+}
+.architecture-layer--violet .architecture-layer-signal {
+  background: #a083ce;
+  box-shadow: 0 0 0 5px rgba(160, 131, 206, 0.12);
+}
+.architecture-layer--green .architecture-layer-signal {
+  background: #65a06f;
+  box-shadow: 0 0 0 5px rgba(101, 160, 111, 0.12);
+}
+.architecture-layer-eyebrow {
+  margin: 52px 0 7px;
+  color: #898b84;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.architecture-layer h3 {
+  min-height: 52px;
+  margin: 0;
+  color: var(--arch-ink);
+  font-size: 21px;
+  font-weight: 590;
+  letter-spacing: -0.045em;
+  line-height: 1.18;
+}
+.architecture-layer-detail {
+  margin: 8px 0 0;
+  color: #5e615a;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.architecture-layer-description {
+  margin: 28px 0 0;
+  color: #777a73;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.architecture-connector {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  right: -12px;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d0d2cb;
+  border-radius: 50%;
+  background: #fff;
+  transform: translateY(-50%);
+}
+.architecture-connector::before,
+.architecture-connector::after { position: absolute; content: ""; }
+.architecture-connector::before {
+  top: 10px;
+  left: 7px;
+  width: 7px;
+  height: 1px;
+  background: #7f827a;
+}
+.architecture-connector::after {
+  top: 8px;
+  right: 6px;
+  width: 4px;
+  height: 4px;
+  border-top: 1px solid #7f827a;
+  border-right: 1px solid #7f827a;
+  transform: rotate(45deg);
+}
+.architecture-foundation {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 24px;
+  border-top: 1px solid var(--arch-line);
+  color: #8a8c85;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.architecture-foundation strong { color: #454841; font-weight: 540; }
+.architecture-foundation-rule { height: 1px; flex: 1; background: var(--arch-line); }
+
+.architecture-startup { padding-top: 26px; }
+.architecture-timeline {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--arch-line);
+  border-bottom: 1px solid var(--arch-line);
+  list-style: none;
+}
+.architecture-timeline li {
+  position: relative;
+  display: flex;
+  min-height: 132px;
+  align-items: center;
+  gap: 14px;
+  padding: 22px 18px;
+  border-right: 1px solid var(--arch-line);
+}
+.architecture-timeline li:last-child { border-right: 0; }
+.architecture-timeline li:not(:last-child)::after {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: -6px;
+  width: 11px;
+  height: 11px;
+  border-top: 1px solid #9fa19a;
+  border-right: 1px solid #9fa19a;
+  background: var(--arch-paper);
+  content: "";
+  transform: translateY(-50%) rotate(45deg);
+}
+.architecture-timeline-index {
+  color: #a1a39c;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+}
+.architecture-timeline li > div:last-child { display: grid; gap: 5px; }
+.architecture-timeline strong { color: var(--arch-ink); font-size: 13px; font-weight: 620; }
+.architecture-timeline span { color: #777a73; font-size: 11px; line-height: 1.4; }
+.architecture-note {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 18px;
+  max-width: 620px;
+  margin: 52px 0 0 auto;
+  padding: 22px;
+  border: 1px solid #d8d9d2;
+  border-radius: 14px;
+  background: rgba(255, 255, 252, 0.6);
+}
+.architecture-note-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e5e8dc;
+  color: #65705c;
+  font-size: 20px;
+}
+.architecture-note strong { color: var(--arch-ink); font-size: 13px; }
+.architecture-note p {
+  margin: 7px 0 0;
+  color: #70736c;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.architecture-footer {
+  display: flex;
+  width: min(1240px, calc(100% - 64px));
+  min-height: 78px;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 auto;
+  border-top: 1px solid var(--arch-line);
+  color: #8c8e87;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 900px) {
+  .architecture-layer-grid { grid-template-columns: repeat(2, 1fr); gap: 14px 0; }
+  .architecture-connector { display: none; }
+  .architecture-timeline { grid-template-columns: 1fr; }
+  .architecture-timeline li {
+    min-height: 84px;
+    border-right: 0;
+    border-bottom: 1px solid var(--arch-line);
+  }
+  .architecture-timeline li:last-child { border-bottom: 0; }
+  .architecture-timeline li:not(:last-child)::after {
+    top: auto;
+    right: 26px;
+    bottom: -6px;
+    transform: rotate(135deg);
+  }
+}
+
+@media (max-width: 620px) {
+  .architecture-nav,
+  .architecture-hero,
+  .architecture-section,
+  .architecture-footer { width: calc(100% - 32px); }
+  .architecture-nav { height: 68px; }
+  .architecture-nav nav { display: none; }
+  .architecture-hero { padding: 72px 0 96px; }
+  .architecture-hero h1 { font-size: clamp(52px, 17vw, 76px); }
+  .architecture-hero > p { margin-top: 36px; }
+  .architecture-section { padding-bottom: 94px; }
+  .architecture-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .architecture-section-heading > p { padding-left: 31px; text-align: left; }
+  .architecture-layer-grid { grid-template-columns: 1fr; padding: 10px; }
+  .architecture-layer { min-height: 242px; margin: 0; }
+  .architecture-layer-eyebrow { margin-top: 34px; }
+  .architecture-foundation {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 20px;
+  }
+  .architecture-foundation-rule { width: 100%; flex: 0 0 auto; }
+  .architecture-note { margin-top: 36px; }
+  .architecture-footer { justify-content: center; }
+  .architecture-footer span:last-child { display: none; }
+}

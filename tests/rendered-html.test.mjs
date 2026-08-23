@@ -173,22 +173,20 @@ async function render({
   );
 }
 
-test("server-renders the Omarchy demo launcher", async () => {
+test("server-renders the QEMU/HVF native macOS architecture page", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Try Omarchy — Live in your browser<\/title>/i);
-  assert.match(html, /Try Omarchy/);
-  assert.match(html, /Start Omarchy/);
-  assert.match(html, /href="\/browser"/);
-  assert.match(html, /Browser Edition is recommended/);
-  assert.match(html, /Real x86_64 virtual machine/);
-  assert.match(html, /Arch · Hyprland · Quickshell/);
-  assert.match(html, /Shared memory/);
-  assert.match(html, /Wasm threads/);
-  assert.match(html, /Offscreen canvas/);
+  assert.match(html, /<title>Try Omarchy — Browser VM and Native Mac VM<\/title>/i);
+  assert.match(html, /Linux at native/);
+  assert.match(html, /QEMU \+ HVF/);
+  assert.match(html, /VirGL \+ Virtio/);
+  assert.match(html, /Omarchy Quattro/);
+  assert.match(html, /QEMU devices · HVF CPU · no x86 translation/);
+  assert.match(html, /From first clone to persistent return/);
+  assert.match(html, /Persistent by design/);
   assert.doesNotMatch(html, /<canvas\b/i);
   assert.doesNotMatch(html, /Omarchy desktop ready|Guest report received/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
@@ -205,7 +203,7 @@ test("social metadata uses the incoming public origin and bespoke card", async (
   });
   const html = await response.text();
 
-  assert.match(html, /property="og:title" content="Try Omarchy — Live in your browser"/i);
+  assert.match(html, /property="og:title" content="Try Omarchy — Browser VM and Native Mac VM"/i);
   assert.match(html, /property="og:image" content="https:\/\/try\.example\/og\.png"/i);
   assert.match(html, /name="twitter:card" content="summary_large_image"/i);
   assert.match(html, /name="twitter:image" content="https:\/\/try\.example\/og\.png"/i);
@@ -214,6 +212,18 @@ test("social metadata uses the incoming public origin and bespoke card", async (
     new URL("../public/og.png", import.meta.url),
   );
   assert.ok(socialCard.byteLength > 100_000);
+});
+
+test("browser route renders only the real client-side QEMU VM", async () => {
+  const response = await render({ url: "http://localhost/browser" });
+  assert.equal(response.status, 200);
+
+  const html = await response.text();
+  assert.match(html, /<title>Omarchy Browser VM — fully client-side<\/title>/i);
+  assert.match(html, /Real Quattro VM · No installation/);
+  assert.match(html, /Real x86_64 virtual machine/);
+  assert.match(html, /Nothing is installed on your computer/);
+  assert.doesNotMatch(html, /Native ARM64|Virtualization\.framework|Browser Edition/);
 });
 
 test("isolated VM document owns the only real 1600x900 guest canvas", async () => {
