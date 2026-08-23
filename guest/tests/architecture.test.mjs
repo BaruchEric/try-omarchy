@@ -163,8 +163,8 @@ test("guest identity and initramfs support both runtime device sets", () => {
   assert.match(probe, /expected_architecture not in \{"x86_64", "aarch64"\}/);
   assert.match(probe, /pathlib\.Path\("\/dev\/hvc0"\)/);
   assert.match(probe, /package_version\("quickshell"/);
-  for (const module of ["virtio_mmio", "virtio_console", "virtio_rng", "virtio_net"]) {
-    assert.ok(initramfs.includes(module));
+  for (const kernelModule of ["virtio_mmio", "virtio_console", "virtio_rng", "virtio_net"]) {
+    assert.ok(initramfs.includes(kernelModule));
   }
   assert.doesNotMatch(sharedEnvironment, /LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER/);
   assert.match(sharedEnvironment, /WLR_RENDERER_ALLOW_SOFTWARE=1/);

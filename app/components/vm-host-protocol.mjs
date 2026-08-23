@@ -313,7 +313,10 @@ export function vmHostMessagePayload(value) {
   ) {
     return null;
   }
-  const { channel: _channel, version: _version, runNonce: _runNonce, ...payload } = value;
+  const payload = { ...value };
+  delete payload.channel;
+  delete payload.version;
+  delete payload.runNonce;
   return payload;
 }
 
