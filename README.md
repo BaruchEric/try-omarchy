@@ -1,70 +1,100 @@
-# Try Omarchy: browser VM and native Apple Silicon
+# Try Omarchy
 
-This project retains two runnable builds of the real
-[Basecamp Omarchy](https://github.com/basecamp/omarchy) Quattro desktop:
+Try Omarchy exposes the real
+[Basecamp Omarchy](https://github.com/basecamp/omarchy) Quattro desktop in two
+deliberately separate products:
 
-1. A fully client-side x86_64 QEMU/WebAssembly virtual machine. The browser
-   renders the guest framebuffer, forwards keyboard and pointer input, and
-   discards temporary writes when the tab closes. It works on ARM and x86 hosts,
-   but all guest CPU execution is still emulated and can be slow.
-2. A native Apple Silicon window backed by Apple's Virtualization.framework.
-   Its ARM64 guest runs with hardware virtualization and uses a host-bound
-   resume state for the fast local experience.
+1. **Browser VM** — a fully client-side x86_64 QEMU/WebAssembly VM. The web
+   page runs the guest CPU, renders its framebuffer, forwards input, and keeps
+   temporary disk writes in the browser. It requires no installed VM or remote
+   streaming service, but x86 emulation is inherently slower than native code.
+2. **Native Mac VM** — an ARM64 QEMU VM for Apple Silicon. HVF executes guest
+   ARM instructions with hardware virtualization; VirGL renders through
+   ANGLE/Metal. It adds a dynamic Retina display, persistent storage, host
+   networking, duplex audio, and focused Mac Command-to-guest-Super input.
 
-The original browser-VM path is not recreated with HTML or streamed from a
-server. The guest is Arch Linux booting Hyprland, Quickshell, Omarchy's
-commands, configuration, and themes from upstream commit
-`7488eaded43de68ff9d2d7e4bf50cd48e112eb0f`.
+The landing page and `/browser` route are the web entry points. Neither runtime
+is an HTML imitation of the desktop: both boot Arch Linux, Hyprland,
+Quickshell, and the upstream Omarchy commands, configuration, and themes pinned
+at commit `7488eaded43de68ff9d2d7e4bf50cd48e112eb0f` (Quattro
+`4.0.0.alpha`).
 
-The separate `/browser` route is the browser-native Browser Edition recreation;
-it is not either of the two full-system runtimes above.
-
-An isolated WebRTC proof now provides the performance-oriented alternative: a
-real, architecture-native Omarchy VM stays on a hardware-virtualized host while
-the browser receives its video and sends keyboard, pointer, and wheel input over
-an encrypted peer connection. This POC deliberately does not replace or weaken
-the browser-VM authenticity path.
-
-## How it works
+## Browser VM
 
 ```text
-Launcher page
-  └─ disposable same-origin iframe
-       └─ module Worker + transferred OffscreenCanvas
-            └─ QEMU 8.2 compiled with Emscripten/SDL2
-                 ├─ verified kernel + initramfs
-                 ├─ demand-paged read-only ext4 base from HTTP ranges
+Browser page
+  └─ isolated iframe
+       └─ module Worker + OffscreenCanvas
+            └─ x86_64 QEMU 8.2 compiled with Emscripten/SDL2
+                 ├─ verified kernel and initramfs
+                 ├─ demand-paged read-only ext4 base over HTTP ranges
                  ├─ temporary QEMU snapshot writes
                  └─ real Omarchy/Hyprland/Quickshell guest
 ```
 
-The fixed guest display is 1600×900. A session is shown as ready only after a
-guest-originated authenticity report is followed by a newer framebuffer event
-from QEMU. Merely starting WebAssembly never satisfies readiness.
+The fixed guest display is 1600×900. Readiness requires a guest-originated
+authenticity report followed by a newer QEMU framebuffer event; merely loading
+WebAssembly or drawing a placeholder cannot satisfy it.
 
-Large immutable artifacts live behind the versioned
-`/omarchy/versions/<release>/...` route. `rootfs.ext4` can only be read through
-bounded, identity-pinned byte ranges; a full root filesystem response is
-rejected. QEMU uses `-snapshot`, so the base disk never changes.
+Large immutable artifacts use versioned release paths. The paged-disk adapter
+accepts only bounded, identity-pinned byte ranges and rejects a full root disk
+response. QEMU runs with snapshot writes, so closing or resetting the browser
+session leaves the verified base image unchanged.
 
-## Repository map
+Start the local browser runtime:
 
-- `app/` and `public/vm/`: launcher, disposable iframe, display, input, reset,
-  fullscreen, diagnostics, and honest capability/error states.
-- `runtime/`: pinned QEMU-Wasm build, SDL framebuffer instrumentation,
-  production Worker, input bridge, local browser harness, and artifact checks.
-- `storage/`: fail-closed synchronous paged-disk adapter for Emscripten Workers.
-- `guest/`: reproducible trimmed Arch image containing the authentic pinned
-  Omarchy payload and supported VM-only overlays.
-- `graphics/` and `proofs/`: native guest graphics and end-to-end evidence
-  harnesses; proof pixels always originate in the guest.
-- `worker/`: isolated R2 artifact delivery with strict range and identity rules.
-- `distribution/` and `release/`: SPDX/notices/source evidence and atomic,
-  digest-verified release assembly.
-- `scripts/verification/` and `docs/`: schemas, stop-ship gates, and the
-  canonical five-minute acceptance journey.
+```sh
+npm run omarchy:browser
+```
 
-## Develop the site
+Open `http://127.0.0.1:8094/web/full-guest.html` in a current Chromium browser.
+The loopback process only verifies and serves local artifacts with the required
+COOP/COEP headers; VM execution, display, input, and temporary writes remain on
+the client.
+
+## Native Mac VM
+
+The native runtime requires Apple Silicon, macOS 15 or newer, and the exact
+Homebrew build dependencies checked by the preparation script. Build and sign
+the pinned QEMU/VirGL runtime and the **Omarchy Quattro** launcher app once:
+
+```sh
+npm run omarchy:native:prepare
+```
+
+Launch the persistent guest:
+
+```sh
+npm run omarchy:native
+```
+
+The guest cold-boots on every launch. Its verified root disk persists, so files,
+installed software, and settings survive closing and reopening the app; there
+is no claim of instant memory-snapshot resume. For a throwaway boot or a reset
+to the current verified image:
+
+```sh
+npm run omarchy:native:ephemeral
+npm run omarchy:native:reset
+```
+
+The Cocoa window starts fullscreen and can switch to a freely resizable window
+with Control-Option-F. The patched display path reports backing-pixel size,
+Retina scale changes, the active screen, and its refresh rate to the Virtio GPU
+when the window is resized, moved, or toggled fullscreen.
+
+Networking uses QEMU's unprivileged SLIRP backend and appears as a Virtio
+Ethernet adapter inside Omarchy. SDL provides speaker playback and microphone
+capture through the virtual HDA device. macOS asks for Microphone permission
+for the signed launcher app; denying it leaves playback available but disables
+guest recording. Accessibility permission is used only by the focused input
+bridge so Mac Command acts as Omarchy Super without leaking the shortcut to
+macOS. Physical Option remains guest Alt.
+
+See [native/macos/README.md](native/macos/README.md) for the native runtime's
+architecture, persistence rules, permissions, and security boundaries.
+
+## Landing page development
 
 Node.js 22.13 or newer is required.
 
@@ -74,79 +104,29 @@ npm test
 npm run dev
 ```
 
-The launcher intentionally reports missing VM files until an immutable release
-exists at its pinned artifact path. It never substitutes a screenshot or fake
-desktop.
+The launcher reports missing VM artifacts honestly. It never substitutes a
+screenshot, prerecorded session, streamed VM, or recreated desktop.
 
-## Run the two full-system builds locally
+## Repository map
 
-Start the complete client-side x86_64 VM:
+- `app/`: landing page and browser launcher UI.
+- `public/vm/`: isolated Browser VM host page and client assets.
+- `runtime/`: pinned x86_64 QEMU-Wasm build, Worker, display/input bridge,
+  browser harness, and artifact verification.
+- `storage/`: fail-closed synchronous paged-disk adapter for Emscripten Workers.
+- `guest/`: reproducible x86_64 Browser VM and ARM64 Native Mac VM images.
+- `native/macos/`: pinned QEMU/HVF/VirGL runtime, signed launcher, persistent
+  disk lifecycle, dynamic display patch, audio/network setup, and input bridge.
+- `worker/`: strict immutable range delivery for published Browser VM artifacts.
+- `distribution/` and `release/`: notices, corresponding-source evidence, SBOM,
+  and digest-verified release assembly.
+- `scripts/verification/`, `proofs/`, and `docs/`: schemas, stop-ship gates, and
+  end-to-end evidence.
 
-```sh
-npm run omarchy:browser
-```
+## Build and verify the Browser VM
 
-Then open `http://127.0.0.1:8094/web/full-guest.html`. The loopback server
-verifies the canonical runtime and guest, serves the 6 GiB disk through bounded
-byte ranges without copying it, and keeps execution, display, input, and
-temporary writes in the browser.
-
-On an Apple Silicon Mac, build, ad-hoc sign, validate, and open the native ARM64
-window with host-bound resume enabled:
-
-```sh
-npm run omarchy:native
-```
-
-This is a repo-local developer launcher, not yet a notarized downloadable
-`.app`. It keeps the real guest and native VM window, and it does not involve
-the WebRTC streaming proof.
-
-For the experimental QEMU GPU path, prepare the pinned ARM64 QEMU,
-VirGL, and ANGLE/Metal runtime once, then launch the same real Quattro ARM64
-guest with HVF CPU virtualization:
-
-```sh
-npm run omarchy:native:gpu:prepare
-npm run omarchy:native:gpu
-```
-
-This launcher requires Apple Silicon and one-time Accessibility permission for
-the signed **Omarchy Quattro** helper. The permission is used only to turn
-Command into guest Super while the QEMU window is focused; physical Option
-remains guest Alt. Its verified root disk persists by default, so guest files
-and settings survive close/reopen. Use `npm run omarchy:native:gpu:ephemeral`
-for a clean throwaway session or `npm run omarchy:native:gpu:reset` to replace
-the current bundle's persistent disk with a fresh verified clone.
-
-## Run the WebRTC performance proof
-
-The WebRTC proof is dependency-free and loopback-only by default:
-
-```sh
-npm run stream:poc
-```
-
-Open `http://127.0.0.1:8110/`, create a room, open its capture-host link, and
-start the built-in 60 FPS pattern. Open the viewer link to verify WebRTC video,
-decoded FPS, bitrate, packet loss, and acknowledged keyboard/pointer input.
-
-To stream real Omarchy on Apple Silicon, first build and sign the native helper
-and ARM64 guest, then run the helper for the exact POC origin:
-
-```sh
-native/macos/.build/release/omarchy-vm-helper --serve guest/dist-aarch64 \
-  --allowed-origin http://127.0.0.1:8110 --stream-window
-```
-
-Use **Launch native Omarchy** in the capture host, then **Share Omarchy window**.
-The browser requires a deliberate window-selection click. See
-`native/macos/README.md` for build and macOS permission details.
-
-## Build and verify the VM
-
-Build the real guest in the supplied privileged Arch container. Docker Desktop
-uses a persistent Linux volume for the work tree and package cache.
+Build the x86_64 guest in the supplied privileged Arch container and verify its
+artifacts:
 
 ```sh
 ./guest/test
@@ -154,7 +134,7 @@ uses a persistent Linux volume for the work tree and package cache.
 (cd guest/dist && shasum -a 256 -c SHA256SUMS)
 ```
 
-Build and validate the graphical QEMU-Wasm runtime:
+Build and validate the QEMU-Wasm runtime:
 
 ```sh
 make -C runtime audit
@@ -165,29 +145,32 @@ make -C runtime verify-dist
 make -C runtime package GUEST_DIR=../guest/dist
 ```
 
-Then boot the exact local guest through the production paged Worker without
-copying the 6 GiB raw disk:
+The browser server then uses the same production paged Worker without copying
+the 6 GiB logical root disk:
 
 ```sh
-make -C runtime browser-qemu
+npm run omarchy:browser
 ```
 
-Open `http://127.0.0.1:8094/web/full-guest.html` in a current Chromium browser.
-The local server supplies COOP/COEP isolation, synthesizes a verified combined
-manifest, refuses full rootfs reads, and records range requests at
-`/__requests`.
+## Authenticity and release discipline
 
-## Release discipline
+The guest build pins the upstream commit, normalized source tree digest,
+package transaction, virtual hardware contract, and output hashes separately
+for x86_64 and ARM64. `provenance.json`, `guest-manifest.json`, and
+`SHA256SUMS` bind the installed payload to the artifacts consumed by each
+runtime. Runtime preparation checksum-verifies pinned sources and patches
+before building or staging them.
 
-The blocking criteria are in [docs/acceptance.md](docs/acceptance.md). A public
-release needs the same-run authenticated desktop/frame/input journey, display
-and performance evidence, immutable artifacts, package-level notices and SBOM,
-corresponding source for the modified emulator, and human approval for Omarchy
-name/logo use. Engineering checks never imply legal or trademark clearance.
+Public Browser VM artifacts are immutable and identity-addressed. The release
+gates require same-run guest identity, framebuffer, input, desktop behavior,
+display/performance evidence, package notices, SBOM, and corresponding modified
+emulator source. Engineering checks do not imply trademark clearance; public
+use of the Omarchy name or logo still requires human approval.
 
-See these focused guides for details:
+Focused documentation:
 
 - [guest/README.md](guest/README.md)
+- [native/macos/README.md](native/macos/README.md)
 - [runtime/README.md](runtime/README.md)
 - [storage/README.md](storage/README.md)
 - [distribution/README.md](distribution/README.md)
