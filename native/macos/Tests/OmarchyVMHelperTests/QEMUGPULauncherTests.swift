@@ -69,9 +69,9 @@ struct QEMUGPULaunchRequestTests {
 
 }
 
-@Suite("Repo-local QEMU GPU launcher path")
+@Suite("Bundled QEMU GPU launcher path")
 struct QEMUGPULauncherPathTests {
-    @Test("resolves only the owned executable beside the app build directory")
+    @Test("resolves only the executable inside the app resources")
     func resolvesExpectedLayout() throws {
         let fixture = try makeFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
@@ -93,9 +93,9 @@ struct QEMUGPULauncherPathTests {
         }
     }
 
-    @Test("rejects an app outside the exact repository build layout")
-    func rejectsWrongLayout() throws {
-        let fixture = try makeFixture(buildDirectoryName: "build")
+    @Test("rejects an app with the wrong bundle name")
+    func rejectsWrongBundleName() throws {
+        let fixture = try makeFixture(appName: "Other.app")
         defer { try? FileManager.default.removeItem(at: fixture.root) }
 
         #expect(throws: HelperError.self) {
@@ -110,17 +110,16 @@ struct QEMUGPULauncherPathTests {
     }
 
     private func makeFixture(
-        buildDirectoryName: String = ".build",
+        appName: String = QEMUGPULauncherPath.appName,
         createLauncher: Bool = true
     ) throws -> PathFixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("omarchy-qemu-path-\(UUID().uuidString)", isDirectory: true)
-        let native = root.appendingPathComponent("native/macos", isDirectory: true)
-        let app = native
-            .appendingPathComponent(buildDirectoryName, isDirectory: true)
-            .appendingPathComponent(QEMUGPULauncherPath.appName, isDirectory: true)
-        let launcher = native.appendingPathComponent(QEMUGPULauncherPath.launcherName)
-        try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let app = root.appendingPathComponent(appName, isDirectory: true)
+        let scripts = app
+            .appendingPathComponent("Contents/Resources/scripts", isDirectory: true)
+        let launcher = scripts.appendingPathComponent(QEMUGPULauncherPath.launcherName)
+        try FileManager.default.createDirectory(at: scripts, withIntermediateDirectories: true)
         if createLauncher {
             try Data("#!/bin/bash\nexit 0\n".utf8).write(to: launcher)
             #expect(Darwin.chmod(launcher.path, 0o755) == 0)

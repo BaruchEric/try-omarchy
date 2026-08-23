@@ -77,21 +77,18 @@ enum QEMUGPULauncherPath {
         }
 
         let canonicalBundle = standardizedBundle.resolvingSymlinksInPath()
-        let buildDirectory = canonicalBundle.deletingLastPathComponent()
-        guard buildDirectory.lastPathComponent == ".build" else {
-            throw HelperError.io("Omarchy app is outside its repository build directory")
-        }
-
-        let nativeDirectory = buildDirectory.deletingLastPathComponent()
-        let launcher = nativeDirectory.appendingPathComponent(launcherName, isDirectory: false)
+        let resources = canonicalBundle
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+        let scripts = resources.appendingPathComponent("scripts", isDirectory: true)
+        let launcher = scripts.appendingPathComponent(launcherName, isDirectory: false)
         let canonicalLauncher = launcher.resolvingSymlinksInPath()
         var launcherInformation = stat()
-        guard canonicalLauncher.deletingLastPathComponent() == nativeDirectory,
+        guard canonicalLauncher.deletingLastPathComponent() == scripts,
               Darwin.lstat(launcher.path, &launcherInformation) == 0,
               launcherInformation.st_mode & S_IFMT == S_IFREG,
-              launcherInformation.st_uid == Darwin.geteuid(),
               FileManager.default.isExecutableFile(atPath: launcher.path) else {
-            throw HelperError.io("repo-local QEMU launcher is missing or unsafe: \(launcher.path)")
+            throw HelperError.io("bundled QEMU launcher is missing or unsafe: \(launcher.path)")
         }
         return canonicalLauncher
     }

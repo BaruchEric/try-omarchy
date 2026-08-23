@@ -26,12 +26,13 @@ case ${1:-} in
 esac
 (( $# <= 1 )) || usage
 
-native_dir=$(cd "$(dirname "$0")" && pwd -P)
-repo_dir=$(cd "$native_dir/../.." && pwd -P)
-guest_input=${1:-"$repo_dir/guest/dist-aarch64"}
-qemu_bin="$native_dir/.build/qemu-gpu-runtime/bin/qemu-system-aarch64"
-input_bridge="$native_dir/.build/Omarchy Quattro.app/Contents/MacOS/omarchy-vm-helper"
-storage_library="$native_dir/qemu-persistent-storage.sh"
+script_dir=$(cd "$(dirname "$0")" && pwd -P)
+resources_dir=$(cd "$script_dir/.." && pwd -P)
+contents_dir=$(cd "$resources_dir/.." && pwd -P)
+guest_input=${1:-"$resources_dir/guest"}
+qemu_bin="$resources_dir/runtime/bin/qemu-system-aarch64"
+input_bridge="$contents_dir/MacOS/omarchy-vm-helper"
+storage_library="$script_dir/qemu-persistent-storage.sh"
 
 [[ -f $storage_library && ! -L $storage_library ]] || {
   fail "persistent-storage library is missing or unsafe: $storage_library"
@@ -49,10 +50,10 @@ for command in codesign file getconf id mktemp ps python3 stat sysctl; do
 done
 
 [[ -f $qemu_bin && -x $qemu_bin ]] || {
-  fail "missing staged GPU QEMU runtime at $qemu_bin"
+  fail "missing bundled GPU QEMU runtime at $qemu_bin"
 }
 [[ -f $input_bridge && -x $input_bridge ]] || {
-  fail "missing focused Command-key bridge at $input_bridge; run native/macos/build-app.sh first"
+  fail "missing bundled focused Command-key bridge at $input_bridge"
 }
 file "$qemu_bin" | grep -q 'arm64' || fail "staged QEMU is not an ARM64 executable"
 for marker in \
