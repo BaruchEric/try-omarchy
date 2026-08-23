@@ -5,7 +5,7 @@ import Foundation
 private var terminationSignalSources: [DispatchSourceSignal] = []
 
 private func usage() -> Never {
-    fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] [--stream-window] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT] [--stream-window]\n", stderr)
+    fputs("Usage: omarchy-vm-helper --capabilities | --validate GUEST_DIR | --run GUEST_DIR [--no-resume] [--stream-window] | --serve GUEST_DIR --allowed-origin ORIGIN [--port PORT] [--stream-window] | --bridge-command-super QEMU_PID QMP_SOCKET\n", stderr)
     exit(64)
 }
 
@@ -47,6 +47,34 @@ let arguments = effectiveArguments()
 do {
     if arguments == ["--capabilities"] {
         try printJSON(HostCapabilities.report())
+        exit(0)
+    }
+
+    if arguments.first == "--bridge-command-super" {
+        guard arguments.count == 3,
+              let processIdentifier = Int32(arguments[1]),
+              processIdentifier > 1 else { usage() }
+        if !AXIsProcessTrusted() {
+            _ = NativeInputRelay.requestAccessibilityPermission()
+        }
+        guard AXIsProcessTrusted() else {
+            throw HelperError.io(
+                "Accessibility permission is required for focused Command-key capture; grant it in System Settings, then retry"
+            )
+        }
+        let bridge = try FocusedCommandSuperBridge(
+            targetPID: processIdentifier,
+            qmpSocketPath: arguments[2]
+        )
+        for signalNumber in [SIGINT, SIGTERM] {
+            Darwin.signal(signalNumber, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .main)
+            source.setEventHandler { bridge.stop() }
+            source.resume()
+            terminationSignalSources.append(source)
+        }
+        fputs("[input-bridge] Command is captured as guest Super only while QEMU pid \(processIdentifier) is focused.\n", stderr)
+        try bridge.run()
         exit(0)
     }
 

@@ -12,6 +12,8 @@
     "omarchy:browser": "make -C runtime browser-qemu",
     "omarchy:native": "./native/macos/build-app.sh --open",
     "omarchy:native:cli": "./native/macos/build-sign-run.sh",
+    "omarchy:native:gpu:prepare": "./native/macos/prepare-qemu-gpu-runtime.sh && ./native/macos/build-app.sh",
+    "omarchy:native:gpu": "./native/macos/run-qemu-gpu.sh",
     "stream:poc": "node runtime/scripts/serve-webrtc-poc.mjs --port 8110",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

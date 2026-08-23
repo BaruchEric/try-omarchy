@@ -102,6 +102,21 @@ This is a repo-local developer launcher, not yet a notarized downloadable
 `.app`. It keeps the real guest and native VM window, and it does not involve
 the WebRTC streaming proof.
 
+For the experimental QEMU GPU path, prepare the pinned ARM64 QEMU,
+VirGL, and ANGLE/Metal runtime once, then launch the same real Quattro ARM64
+guest with HVF CPU virtualization:
+
+```sh
+npm run omarchy:native:gpu:prepare
+npm run omarchy:native:gpu
+```
+
+This launcher requires Apple Silicon and one-time Accessibility permission for
+the signed **Omarchy Quattro** helper. The permission is used only to turn
+Command into guest Super while the QEMU window is focused; physical Option
+remains guest Alt. The root disk is APFS-cloned for each run and deleted when
+the window closes.
+
 ## Run the WebRTC performance proof
 
 The WebRTC proof is dependency-free and loopback-only by default:
