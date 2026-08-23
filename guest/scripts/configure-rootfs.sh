@@ -62,11 +62,17 @@ architecture=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["
 if [[ $architecture == x86_64 ]]; then
   hyprland_user_config="$root/etc/skel/.config/hypr/hyprland.lua"
   install -m 0644 "$guest_dir/fragments/hypr-x86-web.lua" "$hyprland_user_config"
+  install -m 0644 "$guest_dir/fragments/environment-x86-web.conf" \
+    "$root/usr/lib/environment.d/91-omarchy-x86-web-renderer.conf"
 fi
 
 # User customizations are additive. The prefix of each file remains byte-for-
 # byte identical to Basecamp's pinned config and can be audited independently.
-cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+# Only the fixed browser canvas needs a forced scale. Native ARM retains
+# Quattro's upstream automatic monitor/HiDPI profile for Retina reconfiguration.
+if [[ $architecture == x86_64 ]]; then
+  cat "$guest_dir/fragments/hypr-monitors.append.lua" >>"$root/etc/skel/.config/hypr/monitors.lua"
+fi
 cat "$guest_dir/fragments/hypr-autostart.append.lua" >>"$root/etc/skel/.config/hypr/autostart.lua"
 
 hostname=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["guest"]["hostname"])' "$spec")

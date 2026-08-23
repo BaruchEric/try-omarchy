@@ -580,18 +580,30 @@ def test_static() -> None:
         "disabled": False,
         "dpmsStatus": True,
     }
+    expected_display = {"width": 1600, "height": 900, "scale": 1}
+    arm_retina_monitor = {**valid_monitor, "width": 2800, "height": 1574, "scale": 2}
     check(
-        probe_namespace["monitor_contract_matches"]([valid_monitor])
-        and not probe_namespace["monitor_contract_matches"](
-            [valid_monitor, {**valid_monitor, "disabled": True}]
+        probe_namespace["monitor_contract_matches"](
+            [valid_monitor], expected_display, "x86_64"
         )
         and not probe_namespace["monitor_contract_matches"](
-            [{**valid_monitor, "dpmsStatus": False}]
+            [valid_monitor, {**valid_monitor, "disabled": True}],
+            expected_display,
+            "x86_64",
         )
         and not probe_namespace["monitor_contract_matches"](
-            [{**valid_monitor, "scale": 2}]
+            [{**valid_monitor, "dpmsStatus": False}], expected_display, "x86_64"
+        )
+        and not probe_namespace["monitor_contract_matches"](
+            [{**valid_monitor, "scale": 2}], expected_display, "x86_64"
+        )
+        and probe_namespace["monitor_contract_matches"](
+            [arm_retina_monitor], expected_display, "aarch64"
+        )
+        and not probe_namespace["monitor_contract_matches"](
+            [{**arm_retina_monitor, "width": 320}], expected_display, "aarch64"
         ),
-        "guest report enforces the exact one-monitor 1600x900 scale-1 DPMS contract",
+        "guest report enforces exact x86 and bounded dynamic ARM monitor contracts",
     )
     version_matches = probe_namespace["omarchy_version_matches"]
     check(

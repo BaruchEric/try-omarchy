@@ -24,6 +24,7 @@ BUILD_SPEC = pathlib.Path("/usr/share/omarchy-web/build-spec.json")
 COMMANDS = [
     ["uname", "-m"],
     ["hyprctl", "version"],
+    ["hyprctl", "systeminfo"],
     ["hyprctl", "monitors", "-j"],
     ["omarchy-version"],
 ]
@@ -1073,18 +1074,35 @@ def wait_for_desktop(
         sleep(POLL_SECONDS)
 
 
-def monitor_contract_matches(monitors: object) -> bool:
+def monitor_contract_matches(
+    monitors: object, expected: object, architecture: str
+) -> bool:
     if not isinstance(monitors, list) or len(monitors) != 1:
         return False
     monitor = monitors[0]
-    return (
-        isinstance(monitor, dict)
-        and monitor.get("width") == 1600
-        and monitor.get("height") == 900
-        and monitor.get("scale") == 1
-        and monitor.get("disabled") is not True
-        and monitor.get("dpmsStatus") is not False
-    )
+    if not isinstance(monitor, dict) or not isinstance(expected, dict):
+        return False
+    if monitor.get("disabled") is True or monitor.get("dpmsStatus") is False:
+        return False
+    width = monitor.get("width")
+    height = monitor.get("height")
+    scale = monitor.get("scale")
+    if not isinstance(width, int) or not isinstance(height, int):
+        return False
+    if not isinstance(scale, (int, float)) or isinstance(scale, bool):
+        return False
+    if architecture == "x86_64":
+        return (
+            width == expected.get("width")
+            and height == expected.get("height")
+            and scale == expected.get("scale")
+        )
+    if architecture == "aarch64":
+        # Virtualization.framework follows the host window's backing pixels at
+        # runtime. Accept a bounded active scanout while keeping the fixed x86
+        # browser contract exact.
+        return 640 <= width <= 8192 and 360 <= height <= 8192 and 0.5 <= scale <= 4
+    return False
 
 
 def omarchy_version_matches(installed: str, expected: str) -> bool:
@@ -1149,9 +1167,10 @@ def build_report(environment: dict[str, str]) -> dict[str, object]:
         raise RuntimeError(
             f"hyprctl monitor evidence is invalid JSON: {error}"
         ) from error
-    if not monitor_contract_matches(monitors):
+    expected_display = build_spec["guest"]["virtualDisplay"]
+    if not monitor_contract_matches(monitors, expected_display, expected_architecture):
         raise RuntimeError(
-            "Hyprland does not expose exactly one active, DPMS-on 1600x900 scale-1 monitor"
+            "Hyprland does not expose one active, DPMS-on monitor matching the runtime profile"
         )
     installed_version = str(command_map[("omarchy-version",)]["stdout"]).strip()
     expected_version = str(provenance["upstream"]["version"])

@@ -117,6 +117,9 @@ test("ARM wrapper selects native arm64 Docker and an isolated output", () => {
 test("guest identity and initramfs support both runtime device sets", () => {
   const probe = text("overlay/usr/local/bin/omarchy-web-guest-probe");
   const initramfs = text("overlay/etc/mkinitcpio.conf.d/90-omarchy-web.conf");
+  const sharedEnvironment = text("overlay/usr/lib/environment.d/90-omarchy-web.conf");
+  const browserEnvironment = text("fragments/environment-x86-web.conf");
+  const configure = text("scripts/configure-rootfs.sh");
   const terminal = text("overlay/usr/local/bin/xdg-terminal-exec");
 
   assert.match(probe, /expected_architecture not in \{"x86_64", "aarch64"\}/);
@@ -125,6 +128,12 @@ test("guest identity and initramfs support both runtime device sets", () => {
   for (const module of ["virtio_mmio", "virtio_console", "virtio_rng", "virtio_net"]) {
     assert.ok(initramfs.includes(module));
   }
+  assert.doesNotMatch(sharedEnvironment, /LIBGL_ALWAYS_SOFTWARE|GALLIUM_DRIVER/);
+  assert.match(sharedEnvironment, /WLR_RENDERER_ALLOW_SOFTWARE=1/);
+  assert.match(browserEnvironment, /LIBGL_ALWAYS_SOFTWARE=true/);
+  assert.match(browserEnvironment, /GALLIUM_DRIVER=llvmpipe/);
+  assert.match(configure, /if \[\[ \$architecture == x86_64 \]\]; then[\s\S]*environment-x86-web\.conf/);
+  assert.match(probe, /\["hyprctl", "systeminfo"\]/);
   assert.match(terminal, /exec \/usr\/bin\/foot/);
   assert.doesNotMatch(terminal, /eval|source /);
 });

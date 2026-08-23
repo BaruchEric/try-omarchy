@@ -19,6 +19,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
     private var saveScheduled = false
     private var terminationRequested = false
     private var virtualMachine: VZVirtualMachine?
+    private var machineView: VZVirtualMachineView?
     private var window: NSWindow?
 
     init(
@@ -102,6 +103,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
                             switch result {
                             case .success:
                                 print("[native] ARM snapshot resumed")
+                                self.scheduleDisplayDiagnostics(stage: "snapshot-resume")
                             case .failure(let error):
                                 self.fail("snapshot resume failed: \(error.localizedDescription)")
                             }
@@ -116,6 +118,7 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
                     switch result {
                     case .success:
                         print("[native] ARM virtual machine started")
+                        self?.scheduleDisplayDiagnostics(stage: "cold-start")
                     case .failure(let error):
                         self?.fail("VM start failed: \(error.localizedDescription)")
                     }
@@ -125,11 +128,18 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
     }
 
     private func showWindow(machine: VZVirtualMachine) {
-        let frame = NSRect(x: 0, y: 0, width: plan.width, height: plan.height)
+        let displayPolicy = NativeDisplayPolicy.make(
+            framebufferWidth: plan.width,
+            framebufferHeight: plan.height,
+            streamWindow: streamWindow,
+            visibleFrame: NSScreen.main?.visibleFrame
+        )
+        let frame = NSRect(origin: .zero, size: displayPolicy.initialContentSize)
         let view = VZVirtualMachineView(frame: frame)
         view.virtualMachine = machine
         view.capturesSystemKeys = true
-        view.automaticallyReconfiguresDisplay = false
+        view.autoresizingMask = [.width, .height]
+        view.automaticallyReconfiguresDisplay = displayPolicy.automaticallyReconfiguresDisplay
 
         let window = NSWindow(
             contentRect: frame,
@@ -138,15 +148,44 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
             defer: false
         )
         window.title = "Omarchy Quattro · ARM64"
+        window.backgroundColor = .black
         window.contentView = view
         if !streamWindow {
-            window.contentAspectRatio = NSSize(width: plan.width, height: plan.height)
+            window.contentMinSize = displayPolicy.minimumContentSize
+            window.collectionBehavior.insert(.fullScreenPrimary)
+            window.tabbingMode = .disallowed
         }
         window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
+        self.machineView = view
         self.window = window
+        reportDisplayGeometry(stage: "window-attached")
+    }
+
+    private func scheduleDisplayDiagnostics(stage: String) {
+        for (delay, suffix) in [(0.25, "settling"), (1.5, "settled")] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.reportDisplayGeometry(stage: "\(stage)-\(suffix)")
+            }
+        }
+    }
+
+    private func reportDisplayGeometry(stage: String) {
+        guard let view = machineView, let window else { return }
+        let points = view.bounds.size
+        let backing = view.convertToBacking(view.bounds).size
+        let scanout = virtualMachine?.graphicsDevices.first?.displays.first?.sizeInPixels
+        let scanoutDescription = scanout.map {
+            "\(Int($0.width.rounded()))x\(Int($0.height.rounded()))"
+        } ?? "unavailable"
+        print(
+            "[native] Display \(stage): points=\(Int(points.width.rounded()))x\(Int(points.height.rounded())) " +
+            "backing=\(Int(backing.width.rounded()))x\(Int(backing.height.rounded())) " +
+            "scale=\(String(format: "%.2f", window.backingScaleFactor)) " +
+            "scanout=\(scanoutDescription) auto=\(view.automaticallyReconfiguresDisplay)"
+        )
     }
 
     private func configureSerialReader() {
@@ -274,6 +313,18 @@ final class MachineController: NSObject, VZVirtualMachineDelegate, NSApplication
 
     func windowWillClose(_ notification: Notification) {
         requestTermination()
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        scheduleDisplayDiagnostics(stage: "window-resize")
+    }
+
+    func windowDidChangeBackingProperties(_ notification: Notification) {
+        scheduleDisplayDiagnostics(stage: "backing-change")
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        scheduleDisplayDiagnostics(stage: "screen-change")
     }
 
     func requestTermination() {

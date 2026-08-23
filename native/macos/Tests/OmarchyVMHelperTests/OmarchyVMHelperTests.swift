@@ -119,6 +119,51 @@ private struct Fixture {
     }
 }
 
+@Suite("Native Retina display policy")
+struct NativeDisplayPolicyTests {
+    @Test("native window fits the visible screen and enables dynamic pixels")
+    func nativeWindowUsesBackingAwareDisplay() {
+        let policy = NativeDisplayPolicy.make(
+            framebufferWidth: 1600,
+            framebufferHeight: 900,
+            streamWindow: false,
+            visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 982)
+        )
+
+        #expect(policy.automaticallyReconfiguresDisplay)
+        #expect(policy.initialContentSize == CGSize(width: 1391, height: 782))
+        #expect(policy.minimumContentSize == CGSize(width: 800, height: 450))
+    }
+
+    @Test("native window remains usable on a compact screen")
+    func nativeWindowFitsCompactScreen() {
+        let policy = NativeDisplayPolicy.make(
+            framebufferWidth: 1600,
+            framebufferHeight: 900,
+            streamWindow: false,
+            visibleFrame: CGRect(x: 0, y: 0, width: 1024, height: 640)
+        )
+
+        #expect(policy.initialContentSize.width <= 1024 * NativeDisplayPolicy.visibleWidthFraction)
+        #expect(policy.initialContentSize.height <= 640 * NativeDisplayPolicy.visibleHeightFraction)
+        #expect(policy.minimumContentSize.width <= policy.initialContentSize.width)
+    }
+
+    @Test("stream capture preserves its exact fixed framebuffer")
+    func streamWindowRemainsFixed() {
+        let policy = NativeDisplayPolicy.make(
+            framebufferWidth: 1600,
+            framebufferHeight: 900,
+            streamWindow: true,
+            visibleFrame: CGRect(x: 0, y: 0, width: 1512, height: 982)
+        )
+
+        #expect(!policy.automaticallyReconfiguresDisplay)
+        #expect(policy.initialContentSize == CGSize(width: 1600, height: 900))
+        #expect(policy.minimumContentSize == CGSize(width: 1600, height: 900))
+    }
+}
+
 @Suite("ARM guest bundle")
 struct GuestBundleTests {
     @Test("accepts a complete pinned Quattro bundle")

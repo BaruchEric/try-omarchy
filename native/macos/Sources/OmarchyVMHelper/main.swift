@@ -16,7 +16,34 @@ private func printJSON<T: Encodable>(_ value: T) throws {
     FileHandle.standardOutput.write(Data("\n".utf8))
 }
 
-let arguments = Array(CommandLine.arguments.dropFirst())
+private func effectiveArguments() -> [String] {
+    let supplied = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-psn_") }
+    if !supplied.isEmpty {
+        return Array(supplied)
+    }
+    guard Bundle.main.bundleURL.pathExtension == "app" else {
+        return []
+    }
+
+    var candidates: [URL] = []
+    if let resources = Bundle.main.resourceURL {
+        candidates.append(resources.appendingPathComponent("guest", isDirectory: true))
+    }
+    let developmentRoot = Bundle.main.bundleURL
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    candidates.append(
+        developmentRoot.appendingPathComponent("guest/dist-aarch64", isDirectory: true)
+    )
+    guard let guest = candidates.first(where: {
+        FileManager.default.fileExists(atPath: $0.appendingPathComponent("guest-manifest.json").path)
+    }) else { return [] }
+    return ["--run", guest.path]
+}
+
+let arguments = effectiveArguments()
 do {
     if arguments == ["--capabilities"] {
         try printJSON(HostCapabilities.report())
