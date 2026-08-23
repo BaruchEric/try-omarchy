@@ -209,17 +209,23 @@ exact_keys(
 )
 if manifest.get("schemaVersion") != 1 or manifest.get("kind") != "omarchy-web-guest-artifacts":
     fail("guest manifest identity is invalid")
-manifest_guest = exact_keys(
-    manifest.get("guest"),
-    {"architecture", "display", "distribution", "kernelCommandLine", "username"},
-    "guest manifest guest",
-)
+manifest_guest_raw = manifest.get("guest")
+if not isinstance(manifest_guest_raw, dict):
+    fail("guest manifest guest has an unexpected schema")
+manifest_profile = manifest_guest_raw.get("profile", "demo")
+manifest_guest_keys = {"architecture", "display", "distribution", "kernelCommandLine", "username"}
+if manifest_profile == "factory":
+    manifest_guest_keys.add("profile")
+elif manifest_profile != "demo" or "profile" in manifest_guest_raw:
+    fail("guest manifest profile is unsupported")
+manifest_guest = exact_keys(manifest_guest_raw, manifest_guest_keys, "guest manifest guest")
 if (
     manifest_guest.get("architecture") != "aarch64"
     or manifest_guest.get("distribution") != "Arch Linux"
-    or manifest_guest.get("username") != "omarchy"
+    or (manifest_profile == "demo" and manifest_guest.get("username") != "omarchy")
+    or (manifest_profile == "factory" and manifest_guest.get("username") is not None)
 ):
-    fail("guest manifest is not the ARM64 Omarchy guest")
+    fail("guest manifest is not a supported ARM64 Omarchy guest")
 
 spec, _ = load_json(guest / "build-spec.json", "build-spec.json")
 exact_keys(
@@ -244,29 +250,57 @@ image = exact_keys(
     {"architecture", "filesystem", "filesystemLabel", "filesystemUuid", "sizeMiB", "sourceDateEpoch"},
     "build spec image",
 )
+spec_guest_raw = spec.get("guest")
+if not isinstance(spec_guest_raw, dict):
+    fail("build spec guest has an unexpected schema")
+spec_profile = spec_guest_raw.get("profile", "demo")
+spec_guest_keys = {"defaultTheme", "hostname", "uid", "username", "virtualDisplay"}
+if spec_profile == "factory":
+    spec_guest_keys.add("profile")
+elif spec_profile != "demo" or "profile" in spec_guest_raw:
+    fail("build spec profile is unsupported")
+spec_guest = exact_keys(spec_guest_raw, spec_guest_keys, "build spec guest")
+if spec_profile != manifest_profile:
+    fail("manifest and build spec profiles differ")
+
+profile_contracts = {
+    "demo": {
+        "filesystemLabel": "omarchy-arm64",
+        "filesystemUuid": "e9e7c363-3c0b-4a90-8dcf-27579f061653",
+        "hostname": "omarchy-arm64",
+        "username": "omarchy",
+        "uid": 1000,
+        "defaultTheme": "tokyo-night",
+    },
+    "factory": {
+        "filesystemLabel": "omarchy-factory",
+        "filesystemUuid": "89054943-1f4e-4f14-b934-d6db3fba4254",
+        "hostname": "omarchy-factory",
+        "username": None,
+        "uid": None,
+        "defaultTheme": None,
+    },
+}
+profile_contract = profile_contracts[spec_profile]
 if (
     image.get("architecture") != "aarch64"
     or image.get("filesystem") != "ext4"
-    or image.get("filesystemLabel") != "omarchy-arm64"
-    or image.get("filesystemUuid") != "e9e7c363-3c0b-4a90-8dcf-27579f061653"
+    or image.get("filesystemLabel") != profile_contract["filesystemLabel"]
+    or image.get("filesystemUuid") != profile_contract["filesystemUuid"]
     or image.get("sizeMiB") != 6144
 ):
     fail("build spec image contract is invalid")
 
-spec_guest = exact_keys(
-    spec.get("guest"),
-    {"defaultTheme", "hostname", "uid", "username", "virtualDisplay"},
-    "build spec guest",
-)
 display = exact_keys(
     spec_guest.get("virtualDisplay"),
     {"height", "refreshHz", "scale", "width"},
     "build spec display",
 )
 if (
-    spec_guest.get("hostname") != "omarchy-arm64"
-    or spec_guest.get("username") != "omarchy"
-    or spec_guest.get("uid") != 1000
+    spec_guest.get("hostname") != profile_contract["hostname"]
+    or spec_guest.get("username") != profile_contract["username"]
+    or spec_guest.get("uid") != profile_contract["uid"]
+    or spec_guest.get("defaultTheme") != profile_contract["defaultTheme"]
     or display != {"width": 1600, "height": 900, "refreshHz": 60, "scale": 1}
     or manifest_guest.get("display") != display
 ):
@@ -328,7 +362,7 @@ audio = {
 storage = {
     "device": "virtio-blk-pci",
     "format": "raw",
-    "mode": "persistent",
+    "mode": "ephemeral" if spec_profile == "factory" else "persistent",
     "initialization": "apfs-clone",
     "fallback": "full-copy",
 }
@@ -379,6 +413,10 @@ for required in ("root=/dev/vda", "rw", "rootwait", "console=tty0", "console=hvc
         fail(f"kernel command line must contain exactly one {required}")
 if any(argument.startswith("omarchy.qemu_virgl=") for argument in arguments):
     fail("kernel command line already contains a QEMU VirGL role")
+if spec_profile == "demo" and arguments.count("omarchy.web_demo=1") != 1:
+    fail("demo kernel command line is missing its role")
+if spec_profile == "factory" and any(argument.startswith("omarchy.web_demo=") for argument in arguments):
+    fail("factory kernel command line contains a demo role")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):

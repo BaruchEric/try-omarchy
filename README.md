@@ -78,6 +78,18 @@ npm run omarchy:native:ephemeral
 npm run omarchy:native:reset
 ```
 
+To evaluate an untouched factory-state image, build the separate
+`guest/dist-aarch64-unprovisioned` bundle and run:
+
+```sh
+npm run omarchy:native:factory
+```
+
+That command always uses a disposable disk and starts Quattro's own first-boot
+owner setup. It has no preset account, theme, demo menu, welcome notification,
+or completed setup markers. It is still a normal cold boot—not a restored RAM
+snapshot—and it does not modify the normal persistent VM.
+
 The Cocoa window starts fullscreen and can switch to a freely resizable window
 with Control-Option-F. The patched display path reports backing-pixel size,
 Retina scale changes, the active screen, and its refresh rate to the Virtio GPU

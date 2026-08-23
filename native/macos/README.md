@@ -71,6 +71,18 @@ npm run omarchy:native:reset
 `omarchy:native:reset` replaces only the persistent disk selected by the
 current guest manifest. It does not delete other guest versions.
 
+For the separate factory-state comparison image:
+
+```sh
+npm run omarchy:native:factory
+```
+
+This command requires `guest/dist-aarch64-unprovisioned` and always launches
+it ephemerally. The bundle contains the real pinned Quattro tree and its own
+first-boot owner provisioner, but no preset user, selected theme, demo menu,
+welcome notification, or completed setup markers. Closing it discards choices
+made during that comparison; the normal persistent VM is unaffected.
+
 ## Boot and persistence model
 
 Every launch is an ordinary guest cold boot. The runtime does not distribute or
