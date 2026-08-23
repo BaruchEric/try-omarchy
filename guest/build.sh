@@ -74,7 +74,7 @@ package_lock_file="$guest_dir/$package_lock_file"
 [[ -f $packages_file ]] || fail "package list not found: $packages_file"
 [[ -f $package_lock_file ]] || fail "package lock not found: $package_lock_file"
 (( EUID == 0 )) || fail "run as root (pacstrap and arch-chroot require it)"
-for command in pacstrap arch-chroot git python3 mke2fs repo-add zstd; do
+for command in pacstrap arch-chroot curl git gzip python3 mke2fs repo-add sha256sum zstd; do
   command -v "$command" >/dev/null || fail "$command is required; use the supplied Arch builder container"
 done
 
@@ -225,6 +225,12 @@ done
   --work "$work" \
   --spec "$spec" \
   --pacman-config "$pacman_config"
+"$guest_dir/scripts/register-pinned-mise.sh" \
+  --root "$root" \
+  --work "$work" \
+  --spec "$spec" \
+  --pacman-config "$pacman_config"
+"$guest_dir/scripts/register-local-repository.sh" --root "$root" --spec "$spec"
 arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
 arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/packages.lock.txt"
 

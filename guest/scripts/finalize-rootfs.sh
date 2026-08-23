@@ -29,8 +29,19 @@ if [[ $profile == factory ]]; then
   # orders the display manager behind the setup flow.
   [[ -x /usr/bin/omarchy-provision-owner ]] || { echo "Missing upstream owner provisioner" >&2; exit 1; }
   [[ -f /var/lib/omarchy/provisioning/pending ]] || { echo "Factory provisioning is not armed" >&2; exit 1; }
+  expected_mise=$(read_spec '["supplyChain"]["mise"]["reportedVersion"]')
+  [[ -x /usr/bin/mise ]] || { echo "Missing pinned ARM64 mise" >&2; exit 1; }
+  [[ $(/usr/bin/mise --version) == "$expected_mise" ]] || { echo "Pinned mise identity mismatch" >&2; exit 1; }
   systemctl enable omarchy-provision-owner.service
   systemctl enable sddm.service
+
+  # The immutable artifact stays compact, while the native launcher enlarges
+  # only its disposable APFS clone. Grow ext4 online before the owner wizard so
+  # Omarchy's 10 GiB update-safety check sees the full working capacity.
+  [[ -f /usr/lib/systemd/system/systemd-growfs-root.service ]] || { echo "Missing systemd root grow service" >&2; exit 1; }
+  mkdir -p /etc/systemd/system/local-fs.target.wants
+  ln -sfn /usr/lib/systemd/system/systemd-growfs-root.service \
+    /etc/systemd/system/local-fs.target.wants/systemd-growfs-root.service
 
   fc-cache -f
   update-desktop-database /usr/share/applications || true

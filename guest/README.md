@@ -1,7 +1,7 @@
 # Real Omarchy guest images
 
-This directory builds the two architecture-specific base images used by Try
-Omarchy:
+This directory builds two architecture targets across three guest profiles
+used by Try Omarchy:
 
 - `guest/dist`: x86_64 Arch Linux for the fully client-side QEMU/WebAssembly
   Browser VM.
@@ -54,18 +54,21 @@ payload and `/etc/skel` defaults, but does not create an account, choose a
 theme, enable tty autologin, install demo menu/welcome/browser overrides, write
 first-run completion markers, or apply demo service masks. It arms the pinned
 upstream `omarchy-provision-owner` service, which asks the owner for keyboard,
-account, hostname, and timezone on tty1 before SDDM starts. Its only local
-files are the Virtio initramfs/environment integration, the ARM QEMU host-cursor
-fragment, the ARM `xdg-terminal-exec` compatibility command, and a no-op
-`ttfx` compatibility command that leaves the upstream wizard's already-painted
-static splash intact because no reviewed ARM64 `ttfx` package exists.
+account, hostname, and timezone on tty1 before SDDM starts. Its VM integration
+is limited to Virtio/initramfs support, the ARM QEMU host-cursor fragment, the
+ARM `xdg-terminal-exec` compatibility command, update-safe local package
+metadata/storage growth, and a no-op `ttfx` compatibility command that leaves
+the upstream wizard's already-painted static splash intact because no reviewed
+ARM64 `ttfx` package exists.
 
-The reviewed ARM repositories also do not currently publish `tzupdate` or
-`mise`. The upstream timezone form already falls back to its manual picker when
-`tzupdate` is absent. User finalization applies the core theme, browser, Git,
-and XCompose setup before reaching `mise`; it then reports the upstream warning
-and proceeds to SDDM rather than pretending developer-tool installation
-succeeded.
+The reviewed ARM repositories do not currently publish `tzupdate`. The
+upstream timezone form already falls back to its manual picker when it is
+absent. For the required developer-tool setup, the factory spec pins the
+official ARM64 `mise` release URL, archive digest, extracted binary digest, and
+reported version. The builder installs that asset as an owned local Arch
+package, so the real upstream setup flow can complete instead of warning that
+`mise` is missing. Toolchains that `mise` installs for the owner, including
+Node.js, still require outbound guest networking on first setup.
 
 ## Guest identity and readiness evidence
 
@@ -107,11 +110,14 @@ appears. It records unit failure state and keeps retrying report generation with
 bounded backoff. The tty1 getty retains a five-second restart backoff, avoiding
 a hot failure loop on a slow emulated CPU.
 
-The verified upstream payload is registered as a local
-`omarchy-web-runtime` Arch package providing `omarchy`. This preserves the
+The verified upstream payload is registered as a local `omarchy-web-runtime`
+Arch package providing `omarchy`. The factory profile also registers its pinned
+official binary as `omarchy-web-mise` providing `mise`. Both immutable package
+archives are published through the guest-local `[omarchy-web]` sync repository,
+so pacman does not misclassify them as foreign/AUR software. This preserves the
 upstream command bytes while making the official `omarchy-version` path report
-the pinned package version normally. The build also rejects missing owned files
-with `pacman -Qk` before packing the image.
+the pinned package version normally. The build rejects missing owned files and
+unexpected foreign packages before packing the image.
 
 ## Fast verification
 
@@ -211,7 +217,18 @@ With no explicit output, the factory spec writes only to
 `guest/dist-aarch64-unprovisioned`; it never overwrites the configured native
 bundle. Launch it ephemerally so every evaluation starts at the owner wizard.
 Completing that wizard is a real first boot, not preconfiguration performed by
-the image builder.
+the image builder. The distributed root disk remains 6 GiB; at launch, only the
+disposable APFS clone is sparsely extended to 24 GiB and the guest grows ext4
+online before setup. This keeps the artifact compact while satisfying
+Omarchy's 10 GiB free-space safety check for system updates.
+
+The factory image also contains `pacman-contrib`, pins `linux-aarch64` until the
+launcher can atomically update its externally booted kernel/initramfs, and
+publishes the source-built Omarchy runtime plus pinned `mise` package through
+an immutable local sync repository. That prevents the upstream updater from
+misclassifying either package as AUR software. Factory launches remain
+ephemeral: an update can be exercised during the session, but closing the VM
+intentionally discards it.
 
 ## Build gates and output contract
 

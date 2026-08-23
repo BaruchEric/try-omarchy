@@ -86,7 +86,9 @@ This command requires `guest/dist-aarch64-unprovisioned` and always launches
 it ephemerally. The bundle contains the real pinned Quattro tree and its own
 first-boot owner provisioner, but no preset user, selected theme, demo menu,
 welcome notification, or completed setup markers. Closing it discards choices
-made during that comparison; the normal persistent VM is unaffected.
+made during that comparison; the normal persistent VM is unaffected. Its 6 GiB
+source disk is sparsely extended to 24 GiB only after the disposable clone is
+created, and ext4 grows during boot so setup and the updater have working room.
 
 ## Boot and persistence model
 
@@ -103,8 +105,10 @@ work therefore survive close/reopen. Persistent data lives under:
 ~/Library/Application Support/OmarchyVMHelper/QEMU/v1/disks/<manifest-sha256>
 ```
 
-The source image is 6 GiB logically, but an APFS clone normally consumes little
-additional physical space until blocks change. The directory identity binds the
+The normal persistent source image is 6 GiB logically, but an APFS clone
+normally consumes little additional physical space until blocks change. The
+factory source also stays 6 GiB and expands only its ephemeral working clone.
+The directory identity binds the
 exact `guest-manifest.json` digest, source-disk digest and size, and storage
 schema. A changed guest bundle receives a separate disk instead of silently
 migrating an older one.

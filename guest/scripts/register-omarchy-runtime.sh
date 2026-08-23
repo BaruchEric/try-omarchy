@@ -124,7 +124,7 @@ cat >"$stage/.PKGINFO" <<EOF
 pkgname = $package_name
 pkgbase = $package_name
 pkgver = $package_version
-pkgdesc = Pinned Basecamp Omarchy runtime $commit for the disposable browser guest
+pkgdesc = Pinned Basecamp Omarchy runtime $commit for the Try Omarchy guest
 url = $repository
 builddate = $source_date_epoch
 packager = Omarchy Web reproducible guest builder
@@ -161,5 +161,12 @@ query=$(pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/
 [[ $query == "$package_name $package_version" ]] || fail "provider query returned: $query"
 pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" -Qk "$package_name" >/dev/null ||
   fail "registered package does not own the complete staged runtime"
+
+# Keep an immutable package copy in the guest's local sync repository. Without
+# a matching sync record, pacman classifies this source-pinned runtime as an AUR
+# package and the upstream updater attempts to hand it to yay.
+repo_dir="$root/usr/share/omarchy-web/repo"
+install -d -m 0755 "$repo_dir"
+install -m 0644 "$archive" "$repo_dir/$(basename "$archive")"
 
 echo "Registered $query for pinned source $commit"

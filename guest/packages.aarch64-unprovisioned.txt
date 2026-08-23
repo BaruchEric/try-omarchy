@@ -41,6 +41,7 @@ networkmanager
 noto-fonts
 noto-fonts-emoji
 omarchy-keyring
+pacman-contrib
 pipewire
 pipewire-alsa
 pipewire-pulse

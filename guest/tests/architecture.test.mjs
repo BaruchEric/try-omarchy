@@ -133,6 +133,8 @@ test("ARM factory contract is unprovisioned, ephemeral, and isolated", () => {
 
   assert.deepEqual(factory.upstream, demo.upstream);
   assert.equal(factory.image.architecture, "aarch64");
+  assert.equal(demo.image.sizeMiB, 6144);
+  assert.equal(factory.image.sizeMiB, demo.image.sizeMiB);
   assert.equal(factory.image.filesystemLabel, "omarchy-factory");
   assert.equal(factory.image.filesystemUuid, "89054943-1f4e-4f14-b934-d6db3fba4254");
   assert.notEqual(factory.image.filesystemUuid, demo.image.filesystemUuid);
@@ -144,17 +146,33 @@ test("ARM factory contract is unprovisioned, ephemeral, and isolated", () => {
     defaultTheme: null,
     virtualDisplay: demo.guest.virtualDisplay,
   });
-  assert.equal(factory.runtime.storage.mode, "ephemeral");
+  assert.deepEqual(factory.runtime.storage, {
+    device: "virtio-blk-pci",
+    format: "raw",
+    mode: "ephemeral",
+    initialization: "apfs-clone",
+    fallback: "full-copy",
+    expandedSizeMiB: 24576,
+  });
   assert.ok(!factory.runtime.kernelCommandLine.includes("omarchy.web_demo=1"));
   assert.deepEqual(factoryPackages, [...new Set(factoryPackages)].sort());
-  assert.deepEqual(factoryPackages, [...demoPackages, "sddm"].sort());
+  assert.deepEqual(factoryPackages, [...demoPackages, "pacman-contrib", "sddm"].sort());
   assert.equal(factoryLock.architecture, "aarch64");
   assert.equal(factoryLock.requestedFileSha256, sha256(text(factory.inputs.packages)));
+  assert.equal(typeof factoryLock.packages["pacman-contrib"], "string");
   assert.equal(typeof factoryLock.packages.sddm, "string");
   assert.ok(Object.keys(factoryLock.packages).length > 500);
   for (const unavailable of ["mise", "mise-bin", "ttfx", "ttfx-bin", "tzupdate", "tzupdate-bin"]) {
     assert.ok(!factoryPackages.includes(unavailable));
   }
+  assert.deepEqual(factory.supplyChain.mise, {
+    version: "2026.8.6",
+    url: "https://github.com/jdx/mise/releases/download/v2026.8.6/mise-v2026.8.6-linux-arm64.tar.xz",
+    sha256: "dfdb41a4654f473f504625ffa1e011e119e5fd1880ccbed8dcb0b21a58ccd309",
+    binarySha256: "f9bd051912beb8861bf248289bfb2d8c281ff00fcdf1e44d730b8ea7e859e9a4",
+    reportedVersion: "2026.8.6 linux-arm64 (2026-08-14)",
+    license: "MIT",
+  });
   for (const requiredPath of [
     "bin/omarchy-provision-owner",
     "bin/omarchy-provision-user",
@@ -232,6 +250,41 @@ test("factory profile excludes every demo customization", () => {
   assert.match(finalize, /if \[\[ \$profile == factory \]\]; then[\s\S]*exit 0[\s\S]*username=\$\(read_spec/);
   assert.doesNotMatch(ttfx, /curl|wget|exec|eval|source /);
   assert.match(manifest, /if "profile" in spec\["guest"\]:/);
+});
+
+test("factory setup and update prerequisites are pinned and locally represented", () => {
+  const build = text("build.sh");
+  const mise = text("scripts/register-pinned-mise.sh");
+  const repository = text("scripts/register-local-repository.sh");
+  const runtime = text("scripts/register-omarchy-runtime.sh");
+  const finalize = text("scripts/finalize-rootfs.sh");
+  const pacman = text("pacman.aarch64.conf");
+  const launcher = readFileSync(
+    new URL("../../native/macos/run-qemu-gpu.sh", import.meta.url),
+    "utf8",
+  );
+
+  assert.ok(
+    build.indexOf("register-omarchy-runtime.sh") < build.indexOf("register-pinned-mise.sh")
+      && build.indexOf("register-pinned-mise.sh") < build.indexOf("register-local-repository.sh"),
+  );
+  assert.match(mise, /mise-v\$version-linux-arm64\.tar\.xz/);
+  assert.match(mise, /sha256sum -c -/);
+  assert.match(mise, /unexpected member set/);
+  assert.match(mise, /pacman[\s\\\n]+--noconfirm[\s\S]+-U "\$package_archive"/);
+  assert.match(mise, /-T mise/);
+  assert.match(runtime, /usr\/share\/omarchy-web\/repo/);
+  assert.match(repository, /repo-add --quiet/);
+  assert.match(repository, /var\/lib\/pacman\/sync\/\$repo_name\.db/);
+  assert.doesNotMatch(repository, /pacman -Syy/);
+  assert.match(repository, /pacman -Qem/);
+  assert.match(pacman, /^IgnorePkg = linux-aarch64$/m);
+  assert.match(finalize, /systemd-growfs-root\.service/);
+  assert.match(launcher, /expandedSizeMiB/);
+  assert.match(launcher, /os\.O_WRONLY \| os\.O_NOFOLLOW/);
+  assert.match(launcher, /os\.ftruncate\(descriptor, expanded_size\)/);
+  assert.match(launcher, /this guest requires --ephemeral working-disk expansion/);
+  assert.match(launcher, /only disposable disks may use runtime expansion/);
 });
 
 test("guest identity and initramfs support both runtime device sets", () => {

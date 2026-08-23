@@ -433,6 +433,7 @@
     "osinfo-db": "20260812-1",
     "p11-kit": "0.26.5-1",
     "pacman": "7.1.0.r9.g54d9411-2",
+    "pacman-contrib": "1.13.1-1",
     "pacman-mirrorlist": "20260411-2",
     "pam": "1.7.2-2",
     "pambase": "20260616-1",
@@ -588,6 +589,6 @@
     "zram-generator": "1.2.1-1",
     "zstd": "1.5.7-3"
   },
-  "requestedFileSha256": "1351ec23b9777beef6b03a1afd9a90ca5a290bd726ba32ba83d7c7359a996cbf",
+  "requestedFileSha256": "795c6a7db23399f01feb6860fb784bc81dedf7c268c5d4e4a3f728d8fcd7c9b6",
   "schemaVersion": 1
 }

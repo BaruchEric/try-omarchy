@@ -110,6 +110,7 @@ def test_static() -> None:
     for script in scripts:
         result = run("bash", "-n", script)
         check(result.returncode == 0, f"shell syntax: {script.relative_to(GUEST)}")
+        check(os.access(script, os.X_OK), f"shell executable: {script.relative_to(GUEST)}")
     python_files = sorted((GUEST / "scripts").glob("*.py")) + [GUEST / "overlay/usr/local/bin/omarchy-web-guest-probe"]
     for script in python_files:
         try:
@@ -700,15 +701,29 @@ def test_static() -> None:
     configure = (GUEST / "scripts/configure-rootfs.sh").read_text()
     arm_qemu_monitors = (GUEST / "fragments/hypr-monitors-arm-qemu.append.lua").read_text()
     identity = (GUEST / "scripts/register-omarchy-runtime.sh").read_text()
+    mise = (GUEST / "scripts/register-pinned-mise.sh").read_text()
+    local_repository = (GUEST / "scripts/register-local-repository.sh").read_text()
     identity_call = '"$guest_dir/scripts/register-omarchy-runtime.sh"'
-    check(identity_call in build and build.find(identity_call) < build.find('arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs'), "local Omarchy runtime package is registered before guest finalization")
+    mise_call = '"$guest_dir/scripts/register-pinned-mise.sh"'
+    repository_call = '"$guest_dir/scripts/register-local-repository.sh"'
+    finalization_call = 'arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs'
+    check(
+        identity_call in build
+        and mise_call in build
+        and repository_call in build
+        and build.find(identity_call) < build.find(mise_call)
+        < build.find(repository_call) < build.find(finalization_call),
+        "local runtime, pinned mise, and sync repository are registered before guest finalization",
+    )
     check("package_name=omarchy-web-runtime" in identity and "provides = omarchy=$version" in identity and "-U --dbonly" in identity, "local package transparently provides the official Omarchy identity")
     check('cp -a "$root/usr/share/omarchy"' in identity and 'cp -a "$command"' in identity and '-Qk "$package_name"' in identity, "local package owns and verifies the exact staged Omarchy runtime")
+    check("binarySha256" in mise and "sha256sum -c -" in mise and "-T mise" in mise, "factory mise package verifies its pinned archive, binary, and provider")
+    check("repo-add --quiet" in local_repository and "pacman -Qem" in local_repository and "pacman -Syy" not in local_repository, "local sync repository represents pinned packages without refreshing remote state")
     check('package_cache="$work/pacman-cache"' in build and 'CacheDir = %s\\n' in build, "package cache is persistent under the selected work storage")
     check('pacstrap -c -P -C "$pacman_config"' in build, "pacstrap uses its configured host-cache mode")
     check('if [[ ${OMARCHY_PACMAN_DISABLE_SANDBOX:-0} == "1" ]]' in build and "printf 'DisableSandbox\\n'" in build, "emulated builder sandbox override remains conditional")
     pinned_guest_config = 'install -m 0644 "$root/usr/share/omarchy/default/pacman/pacman-stable.conf" "$root/etc/pacman.conf"'
-    check(pinned_guest_config in configure, "guest receives the unmodified pinned pacman configuration")
+    check(pinned_guest_config in configure, "guest starts from the pinned architecture pacman configuration")
     check(
         'pcall(io.open, "/proc/cmdline", "r")' in arm_qemu_monitors
         and 'if omarchy_kernel_option_enabled("omarchy.qemu_virgl=1") then'

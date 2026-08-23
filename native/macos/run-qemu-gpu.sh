@@ -267,6 +267,7 @@ profile_contracts = {
     "demo": {
         "filesystemLabel": "omarchy-arm64",
         "filesystemUuid": "e9e7c363-3c0b-4a90-8dcf-27579f061653",
+        "sizeMiB": 6144,
         "hostname": "omarchy-arm64",
         "username": "omarchy",
         "uid": 1000,
@@ -275,6 +276,7 @@ profile_contracts = {
     "factory": {
         "filesystemLabel": "omarchy-factory",
         "filesystemUuid": "89054943-1f4e-4f14-b934-d6db3fba4254",
+        "sizeMiB": 6144,
         "hostname": "omarchy-factory",
         "username": None,
         "uid": None,
@@ -287,7 +289,7 @@ if (
     or image.get("filesystem") != "ext4"
     or image.get("filesystemLabel") != profile_contract["filesystemLabel"]
     or image.get("filesystemUuid") != profile_contract["filesystemUuid"]
-    or image.get("sizeMiB") != 6144
+    or image.get("sizeMiB") != profile_contract["sizeMiB"]
 ):
     fail("build spec image contract is invalid")
 
@@ -366,6 +368,8 @@ storage = {
     "initialization": "apfs-clone",
     "fallback": "full-copy",
 }
+if spec_profile == "factory":
+    storage["expandedSizeMiB"] = 24576
 if (
     runtime.get("kernel") != "vmlinuz-linux"
     or runtime.get("kernelSource") != "/boot/Image"
@@ -401,6 +405,38 @@ if (
     or not re.fullmatch(r"[0-9a-f]{64}", str(upstream.get("treeSha256", "")))
 ):
     fail("upstream identity is not pinned")
+
+supply_chain_keys = {
+    "archLinuxArmPackagesCommit",
+    "archLinuxArmPackagesRepository",
+    "omarchyPackagesCommit",
+    "omarchyPackagesRepository",
+}
+if spec_profile == "factory":
+    supply_chain_keys.add("mise")
+supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
+if (
+    supply_chain.get("omarchyPackagesRepository") != "https://github.com/omacom-io/omarchy-pkgs"
+    or supply_chain.get("omarchyPackagesCommit") != "7e448b90313fea4fb78da9a78607287691d3b241"
+    or supply_chain.get("archLinuxArmPackagesRepository") != "https://github.com/archlinuxarm/PKGBUILDs"
+    or supply_chain.get("archLinuxArmPackagesCommit") != "0b5418fc3f62860b191cd872cb2f933f9fc77841"
+):
+    fail("ARM package supply chain is not pinned")
+if spec_profile == "factory":
+    mise = exact_keys(
+        supply_chain.get("mise"),
+        {"binarySha256", "license", "reportedVersion", "sha256", "url", "version"},
+        "build spec mise component",
+    )
+    if mise != {
+        "version": "2026.8.6",
+        "url": "https://github.com/jdx/mise/releases/download/v2026.8.6/mise-v2026.8.6-linux-arm64.tar.xz",
+        "sha256": "dfdb41a4654f473f504625ffa1e011e119e5fd1880ccbed8dcb0b21a58ccd309",
+        "binarySha256": "f9bd051912beb8861bf248289bfb2d8c281ff00fcdf1e44d730b8ea7e859e9a4",
+        "reportedVersion": "2026.8.6 linux-arm64 (2026-08-14)",
+        "license": "MIT",
+    }:
+        fail("factory mise component is not the reviewed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):
@@ -487,24 +523,33 @@ with (guest / "rootfs.ext4.zst").open("rb") as handle:
         fail("rootfs.ext4.zst is not a Zstandard frame")
 
 rootfs_record = records_by_path["rootfs.ext4"]
+expanded_size_mib = storage.get("expandedSizeMiB", image["sizeMiB"])
+if not isinstance(expanded_size_mib, int) or isinstance(expanded_size_mib, bool) or expanded_size_mib < image["sizeMiB"]:
+    fail("working-disk expansion size is invalid")
 sys.stdout.write(
     "\t".join(
         (
             calculated["guest-manifest.json"],
             str(rootfs_record["sha256"]),
             str(rootfs_record["bytes"]),
+            str(expanded_size_mib * 1024 * 1024),
             command_line,
         )
     )
 )
 PY
 )
-IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes kernel_command_line \
+IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes expanded_disk_bytes kernel_command_line \
   <<<"$bundle_validation"
 [[ $bundle_identity =~ ^[0-9a-f]{64}$ ]] || fail "validated bundle identity is invalid"
 [[ $source_disk_sha =~ ^[0-9a-f]{64}$ ]] || fail "validated rootfs digest is invalid"
 [[ $source_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated rootfs size is invalid"
+[[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
+(( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
+if (( expanded_disk_bytes > source_disk_bytes )); then
+  [[ $storage_mode == ephemeral ]] || fail "this guest requires --ephemeral working-disk expansion"
+fi
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -655,6 +700,38 @@ qemu_persistent_storage_select \
   "$source_disk_bytes" \
   "$work_dir" || fail "could not prepare the selected root disk"
 working_disk=$QEMU_SELECTED_DISK
+if (( expanded_disk_bytes > source_disk_bytes )); then
+  [[ $QEMU_SELECTED_STORAGE_MODE == ephemeral ]] || fail "only disposable disks may use runtime expansion"
+  python3 - "$working_disk" "$source_disk_bytes" "$expanded_disk_bytes" <<'PY' ||
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+source_size = int(sys.argv[2])
+expanded_size = int(sys.argv[3])
+flags = os.O_WRONLY | os.O_NOFOLLOW
+if hasattr(os, "O_CLOEXEC"):
+    flags |= os.O_CLOEXEC
+descriptor = os.open(path, flags)
+try:
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_size != source_size:
+        raise SystemExit("disposable root disk changed before expansion")
+    os.ftruncate(descriptor, expanded_size)
+    os.fsync(descriptor)
+    after = os.fstat(descriptor)
+    if after.st_size != expanded_size:
+        raise SystemExit("disposable root disk has the wrong expanded size")
+finally:
+    os.close(descriptor)
+PY
+  {
+    fail "could not safely expand the disposable root disk"
+  }
+  [[ $(stat -f '%z' "$working_disk") == "$expanded_disk_bytes" ]] || fail "expanded root disk has the wrong size"
+  echo "[qemu-gpu] Expanded the disposable sparse disk to $((expanded_disk_bytes / 1024 / 1024)) MiB." >&2
+fi
 
 qemu_args=(
   -name 'Omarchy Quattro ARM64 - QEMU VirGL'
