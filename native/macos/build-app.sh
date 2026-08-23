@@ -13,17 +13,10 @@ if (($#)); then
 fi
 
 native_dir=$(cd "$(dirname "$0")" && pwd)
-repo_dir=$(cd "$native_dir/../.." && pwd)
-guest_dir="$repo_dir/guest/dist-aarch64"
 helper="$native_dir/.build/release/omarchy-vm-helper"
 app="$native_dir/.build/Omarchy Quattro.app"
 contents="$app/Contents"
 module_cache="$native_dir/.build/module-cache"
-
-[[ -d $guest_dir ]] || {
-  echo "native-app: missing ARM64 guest at $guest_dir" >&2
-  exit 1
-}
 
 cd "$native_dir"
 mkdir -p "$module_cache/swift" "$module_cache/clang"
@@ -43,5 +36,5 @@ codesign --verify --strict "$app"
 
 echo "[native] Built $app"
 if (( open_app )); then
-  open "$app" --args --run "$guest_dir"
+  open "$app" --args --run-qemu
 fi
