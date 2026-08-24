@@ -70,6 +70,13 @@ def main() -> None:
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
+    check(
+        '"$root/usr/bin/omarchy-audio-input-set-default"' in configure
+        and "audio_helper_source_digest=$(sha256sum" in configure
+        and "native audio input helper did not replace" in configure,
+        "native input selection replaces the upstream command",
+    )
+    check("cmp -s" not in configure, "rootfs configuration uses only declared build tools")
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
@@ -83,6 +90,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as temporary:
         py_compile.compile(str(audio_bridge), cfile=str(Path(temporary) / "audio.pyc"), doraise=True)
     check(True, "native audio bridge compiles")
+
+    audio_input_helper = GUEST / "native-overlay/usr/bin/omarchy-audio-input-set-default"
+    check(audio_input_helper.stat().st_mode & stat.S_IXUSR != 0, "native audio input helper is executable")
 
     display_sync = GUEST / "native-overlay/usr/local/bin/omarchy-native-display-sync"
     check(display_sync.stat().st_mode & stat.S_IXUSR != 0, "native display sync is executable")

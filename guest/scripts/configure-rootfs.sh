@@ -61,14 +61,24 @@ cp -a "$guest_dir/factory-overlay/." "$root/"
 mkdir -p "$root/usr/local/bin"
 install -m 0755 "$guest_dir/compat/ttfx-arm64" "$root/usr/local/bin/ttfx"
 
-# User customizations are additive. The prefix of each file remains byte-for-
-# byte identical to Basecamp's pinned config and can be audited independently.
-# The native fragment selects Cocoa's host-composited cursor path and keeps the
-# guest mode synchronized when QEMU changes the virtual display EDID.
+# Session-config customizations are additive, so each fragment remains
+# independently auditable against Basecamp's pinned config. The native overlay
+# also carries one deliberate command replacement for safe PipeWire input
+# switching. The display fragment selects Cocoa's host-composited cursor path
+# and keeps the guest mode synchronized when QEMU changes the virtual EDID.
 cp -a "$guest_dir/native-overlay/." "$root/"
 chmod 0755 \
+  "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-display-sync"
+audio_helper_source_digest=$(sha256sum \
+  "$guest_dir/native-overlay/usr/bin/omarchy-audio-input-set-default")
+audio_helper_source_digest=${audio_helper_source_digest%% *}
+audio_helper_installed_digest=$(sha256sum \
+  "$root/usr/bin/omarchy-audio-input-set-default")
+audio_helper_installed_digest=${audio_helper_installed_digest%% *}
+[[ $audio_helper_installed_digest == "$audio_helper_source_digest" ]] || \
+  fail "native audio input helper did not replace the upstream command"
 mkdir -p "$root/etc/systemd/user/default.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"
