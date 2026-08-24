@@ -347,6 +347,9 @@ test("native ARM audio devices are mirrored into Omarchy's live audio panel", ()
   assert.match(configure, /omarchy-native-audio-bridge\.service/);
   assert.match(bridge, /module-null-sink/);
   assert.match(bridge, /module-loopback/);
+  assert.match(bridge, /module-remap-source/);
+  assert.match(bridge, /self\.input_uids\[name\] = uid/);
+  assert.doesNotMatch(bridge, /self\.input_uids\[f"\{name\}\.monitor"\]/);
   assert.match(bridge, /get-default-sink/);
   assert.match(bridge, /get-default-source/);
   assert.match(unit, /Restart=on-failure/);

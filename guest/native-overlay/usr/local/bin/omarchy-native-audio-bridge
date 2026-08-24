@@ -220,24 +220,15 @@ class PipeWireMirror:
             name = endpoint_name("input", uid)
             description = pulse_property(record["name"])
             self._load(
-                "module-null-sink",
-                f"sink_name={name}",
-                "sink_properties=node.hidden=true",
+                "module-remap-source",
+                f"master={transport_source}",
+                f"source_name={name}",
                 (
                     'source_properties=node.virtual=true device.icon_name="audio-input-microphone" '
                     f'device.description="{description}"'
                 ),
             )
-            self._load(
-                "module-loopback",
-                f"source={transport_source}",
-                f"sink={name}",
-                "latency_msec=20",
-                "source_dont_move=true",
-                "sink_dont_move=true",
-                "sink_input_properties=node.hidden=true media.role=filter",
-            )
-            self.input_uids[f"{name}.monitor"] = uid
+            self.input_uids[name] = uid
 
     def _set_selected(self, direction: str, uid: str | None) -> None:
         mapping = self.output_uids if direction == "output" else self.input_uids
