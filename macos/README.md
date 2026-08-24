@@ -32,5 +32,18 @@ macos/build-app.sh \
 Local app builds are ad-hoc signed. Runtime caches are private to
 `macos/.build/`; user-facing output always goes to `dist/`.
 
+Normal app launches maintain one stable user VM disk. Storage integration tests
+and specialized development runs can opt into identity-keyed parallel disks by
+setting `OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1`; release behavior leaves it
+unset. The disk's guest-build identity is immutable so an older root filesystem
+can never boot with incompatible bundled kernel modules. A changed guest build
+requires the user-facing, confirmed Reset Omarchy flow.
+
+Ad-hoc local builds have a code-hash identity that changes when the helper is
+rebuilt. If macOS keeps showing Accessibility as disabled, remove the stale Try
+Omarchy entry from Privacy & Security > Accessibility, then use the current
+build's **Open Settings** action and enable it again. Developer ID-signed release
+builds keep a stable signing identity and do not have this local rebuild issue.
+
 See the root `README.md`, `docs/architecture.md`, and `docs/releasing.md` for the
 supported platform, runtime boundaries, and distribution checklist.

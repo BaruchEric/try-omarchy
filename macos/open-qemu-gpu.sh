@@ -77,6 +77,7 @@ microphone_usage=$(/usr/libexec/PlistBuddy -c 'Print :NSMicrophoneUsageDescripti
 exec /usr/bin/open \
   -n \
   -W \
+  --env OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1 \
   --stdin /dev/null \
   --stdout /dev/null \
   --stderr /dev/null \

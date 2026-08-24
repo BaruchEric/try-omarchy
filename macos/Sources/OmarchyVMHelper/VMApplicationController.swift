@@ -11,9 +11,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
-    private let setupCompletionStore: PermissionSetupCompletionStore
-    private let launchStatusWindow = LaunchStatusWindow()
-    private var permissionSetupWindow: PermissionSetupWindow?
+    private var startMenuWindow: StartMenuWindow?
 
     private var lifecycle = VMRunLifecycle()
     private var childRunning = false
@@ -28,8 +26,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
-        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider(),
-        setupCompletionStore: PermissionSetupCompletionStore = PermissionSetupCompletionStore()
+        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
     ) {
         self.launcherURL = launcherURL
         self.initialArguments = initialArguments
@@ -37,23 +34,24 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
         self.deviceProvider = deviceProvider
-        self.setupCompletionStore = setupCompletionStore
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        if setupCompletionStore.isComplete {
-            startVirtualMachine(showLaunchStatus: true)
-        } else {
-            showPermissionSetup()
-        }
+        showStartMenu()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        permissionSetupWindow?.refreshPermissionStatus()
+        startMenuWindow?.refreshPermissionStatus()
     }
 
-    private func showPermissionSetup() {
-        let setupWindow = PermissionSetupWindow(
+    private func showStartMenu() {
+        let resetOptions = [
+            QEMUGPUStorageOption.resetStorage.rawValue,
+            QEMUGPUStorageOption.resetStorageOnly.rawValue,
+        ]
+        let initialResetRequested = initialArguments.first.map(resetOptions.contains) ?? false
+        let canResetStorage = initialArguments.first != QEMUGPUStorageOption.ephemeral.rawValue
+        let startMenu = StartMenuWindow(
             accessibilityStatus: { AXIsProcessTrusted() },
             microphoneStatus: { MicrophonePreflight.authorizationState() },
             requestAccessibility: { [weak self] in
@@ -62,24 +60,29 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             requestMicrophone: { completion in
                 MicrophonePreflight.requestAccess(completion: completion)
             },
-            finish: { [weak self] in
-                self?.completePermissionSetup()
+            canResetStorage: canResetStorage,
+            storageSpaceEstimate: { [baseEnvironment] in
+                QEMUGPUStorageSpaceEstimate.formattedReclaimableSpace(
+                    environment: baseEnvironment,
+                    bundleIdentity: QEMUGPUStorageSpaceEstimate.bundledIdentity()
+                )
+            },
+            resetStorage: { [weak self] in
+                self?.resetVirtualMachine()
+            },
+            launch: { [weak self] in
+                self?.startVirtualMachine()
             }
         )
-        permissionSetupWindow = setupWindow
-        setupWindow.show()
-    }
-
-    private func completePermissionSetup() {
-        setupCompletionStore.markComplete()
-        startVirtualMachine(showLaunchStatus: false)
-    }
-
-    private func startVirtualMachine(showLaunchStatus: Bool) {
-        virtualMachineReachedStart = false
-        if showLaunchStatus {
-            launchStatusWindow.show()
+        startMenuWindow = startMenu
+        startMenu.show()
+        if initialResetRequested {
+            startMenu.promptForReset()
         }
+    }
+
+    private func startVirtualMachine() {
+        virtualMachineReachedStart = false
         do {
             let accessibilityDecision = AccessibilityLaunchDecision.make(
                 for: AXIsProcessTrusted() ? .authorized : .unavailable
@@ -97,9 +100,60 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             guard microphoneDecision.allowsLaunch else {
                 throw HelperError.io("microphone policy unexpectedly prevented audio playback")
             }
-            try launch(arguments: initialArguments)
+            try launch(arguments: launchArguments())
         } catch {
             failLaunch(error)
+        }
+    }
+
+    private func launchArguments() -> [String] {
+        var arguments = initialArguments
+        let resetOptions = [
+            QEMUGPUStorageOption.resetStorage.rawValue,
+            QEMUGPUStorageOption.resetStorageOnly.rawValue,
+        ]
+        if let first = arguments.first, resetOptions.contains(first) {
+            arguments.removeFirst()
+        }
+        return arguments
+    }
+
+    private func resetArguments() -> [String] {
+        var arguments = launchArguments()
+        arguments.insert(QEMUGPUStorageOption.resetStorageOnly.rawValue, at: 0)
+        return arguments
+    }
+
+    private func resetVirtualMachine() {
+        do {
+            try supervisor.start(
+                executableURL: launcherURL,
+                arguments: resetArguments(),
+                environment: baseEnvironment
+            ) { [weak self] status in
+                self?.resetDidExit(status: status)
+            }
+            childRunning = true
+        } catch {
+            startMenuWindow?.resetDidFinish(errorMessage: error.localizedDescription)
+        }
+    }
+
+    private func resetDidExit(status: Int32) {
+        guard childRunning else { return }
+        childRunning = false
+        let wasStopping = lifecycle.isStopping
+        lifecycle.childExited()
+        if applicationTerminationPending {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        } else if wasStopping {
+            finish(status: status)
+        } else if status == 0 {
+            startMenuWindow?.resetDidFinish(errorMessage: nil)
+        } else {
+            startMenuWindow?.resetDidFinish(
+                errorMessage: "The VM disk could not be reset. Try again, or reinstall the latest Try Omarchy app."
+            )
         }
     }
 
@@ -149,15 +203,20 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func virtualMachineDidStart() {
         virtualMachineReachedStart = true
-        permissionSetupWindow?.dismiss()
-        permissionSetupWindow = nil
-        launchStatusWindow.dismiss()
+        startMenuWindow?.dismiss()
+        startMenuWindow = nil
     }
 
     private func requestOptionalAccessibilityPermission() {
         guard !AXIsProcessTrusted() else { return }
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+        guard let settingsURL = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        ) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            NSWorkspace.shared.open(settingsURL)
+        }
     }
 
     private func childDidExit(status: Int32) {
@@ -171,11 +230,16 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             wasStopping: wasStopping
         )
         lifecycle.childExited()
-        launchStatusWindow.dismiss()
         if applicationTerminationPending {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
+            if presentation.requiresWorkspaceReset {
+                startMenuWindow?.launchRequiresReset()
+                return
+            }
             if presentation.showsStartupFailure {
+                startMenuWindow?.dismiss()
+                startMenuWindow = nil
                 let alert = NSAlert()
                 alert.alertStyle = .critical
                 alert.messageText = "Try Omarchy couldn’t start"
@@ -189,9 +253,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func failLaunch(_ error: Error) {
         fputs("omarchy-vm-helper: \(error.localizedDescription)\n", stderr)
-        permissionSetupWindow?.dismiss()
-        permissionSetupWindow = nil
-        launchStatusWindow.dismiss()
+        startMenuWindow?.dismiss()
+        startMenuWindow = nil
         let alert = NSAlert()
         alert.alertStyle = .critical
         alert.messageText = "Try Omarchy couldn’t start"

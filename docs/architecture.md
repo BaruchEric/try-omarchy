@@ -16,10 +16,11 @@ Try Omarchy.app
 
 ## What happens when the app opens
 
-The Swift launcher handles macOS permissions, startup, shutdown, host audio
-devices, and Command-to-Super key mapping. It prepares a writable copy of the
-Linux disk and starts QEMU. Swift does not replace QEMU or run the Omarchy
-desktop itself.
+The Swift launcher presents a start menu on every app open. It reports optional
+macOS Accessibility and Microphone permission state, handles confirmed factory
+resets, startup, shutdown, host audio devices, and Command-to-Super key mapping.
+It prepares a writable copy of the Linux disk and starts QEMU. Swift does not
+replace QEMU or run the Omarchy desktop itself.
 
 QEMU presents the hardware that Linux expects: CPUs, memory, storage, networking,
 graphics, audio, keyboard, and pointer devices. Because both the Mac and the
@@ -52,8 +53,16 @@ creates the account on first boot.
   the QEMU and ARM64 integration around them.
 
 Nothing is overwritten while the app runs. The app bundle and packaged factory
-disk remain unchanged. Normal launches use a private writable disk in the
-user's Application Support directory; ephemeral mode uses a disposable disk.
+disk remain unchanged. Normal user launches use one private writable disk in the
+user's Application Support directory. Its factory-image identity is immutable:
+the launcher never pairs a saved root filesystem with a different bundled kernel
+or initramfs. When a guest build changes, the start menu asks for an explicitly
+confirmed factory reset before creating the replacement disk. A compatible
+legacy identity-keyed disk can be migrated into the single workspace without
+discarding its contents. If several recognized legacy disks exist, normal launch
+stops at the start menu; confirmed reset safely removes them before publishing
+one fresh workspace. Unrecognized host files are always left untouched.
+Ephemeral mode uses a disposable disk.
 
 ## Build layout
 

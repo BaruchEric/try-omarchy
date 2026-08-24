@@ -26,7 +26,7 @@ help:
 	  '' \
 	  'Storage:' \
 	  '  make run-ephemeral  Run without retaining VM changes' \
-	  '  make reset          Reset the persistent VM disk, then run' \
+	  '  make reset          Open the confirmed factory-reset flow' \
 	  '  make clean          Remove app, DMG, and native build cache' \
 	  '  make clean-guest    Also remove the generated guest image'
 

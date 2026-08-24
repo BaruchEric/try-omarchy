@@ -50,15 +50,25 @@ dist/
 Run `make help` for component builds, tests, persistent-storage reset, ephemeral
 mode, and cleanup commands.
 
-## What happens on first launch
+## What happens when the app opens
 
-The app validates the bundled guest and QEMU runtime, asks for any required macOS
-permissions, creates a private writable VM disk, expands it to 24 GiB, and boots
-Omarchy. The image has no preconfigured user; Omarchy's real owner-provisioning
-flow creates your account inside the VM.
+The app always opens to a start menu. It shows whether optional Accessibility
+and Microphone access are enabled, offers the relevant macOS permission actions,
+and launches Omarchy only after you choose **Launch Omarchy**. The image has no
+preconfigured user; Omarchy's real owner-provisioning flow creates your account
+inside the VM.
 
-Normal launches retain changes. `make reset` replaces the working disk from the
-packaged factory image. `make run-ephemeral` discards changes when the VM closes.
+Normal launches retain changes in one private 24 GiB VM disk. **Reset Omarchy**
+explains that its contents cannot be recovered and requires confirmation before
+replacing that disk from the packaged factory image. It estimates the space that
+may be reclaimed and returns to the start menu without launching. `make
+run-ephemeral` discards changes when the VM closes.
+
+A saved disk is used only with the exact guest build that created it, keeping its
+Linux kernel and installed modules in sync. After a guest-image update, the app
+keeps the start menu open and asks you to use **Reset Omarchy** before launching.
+The same confirmed reset consolidates any recognized legacy VM disks back to the
+single supported disk and includes them in the space estimate.
 
 ## Repository layout
 

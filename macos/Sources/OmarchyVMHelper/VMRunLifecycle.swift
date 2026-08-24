@@ -29,12 +29,20 @@ struct VMRunLifecycle: Equatable {
 
 struct VMExitPresentationDecision: Equatable {
     let showsStartupFailure: Bool
+    let requiresWorkspaceReset: Bool
+
+    static let incompatibleWorkspaceStatus: Int32 = 78
 
     static func make(status: Int32, reachedVirtualMachineStart: Bool, wasStopping: Bool) -> Self {
-        Self(
+        let requiresWorkspaceReset = status == incompatibleWorkspaceStatus
+            && !reachedVirtualMachineStart
+            && !wasStopping
+        return Self(
             showsStartupFailure: status != 0
                 && !reachedVirtualMachineStart
                 && !wasStopping
+                && !requiresWorkspaceReset,
+            requiresWorkspaceReset: requiresWorkspaceReset
         )
     }
 }

@@ -70,6 +70,15 @@ def main() -> None:
     check("factory-overlay" in configure and "native-overlay" in configure, "rootfs receives only native factory overlays")
     check("omarchy-provision-owner.service" in configure, "first boot uses upstream owner provisioning")
     check("omarchy-native-audio-bridge" in configure, "guest installs native host-audio integration")
+    zram_override = read(
+        GUEST
+        / "factory-overlay/etc/systemd/zram-generator.conf.d/99-try-omarchy.conf"
+    )
+    check(
+        "[zram0]" in zram_override
+        and "compression-algorithm = lzo-rle" in zram_override,
+        "factory zram uses the ARM kernel's supported lzo-rle backend",
+    )
     check(
         '"$root/usr/bin/omarchy-audio-input-set-default"' in configure
         and "audio_helper_source_digest=$(sha256sum" in configure

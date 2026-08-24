@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage] [GUEST_DIR]" >&2
+  echo "Usage: macos/run-qemu-gpu.sh [--ephemeral | --reset-storage | --reset-storage-only] [GUEST_DIR]" >&2
   exit 64
 }
 
@@ -13,6 +13,7 @@ fail() {
 }
 
 storage_mode=persistent
+reset_only=0
 case ${1:-} in
   --ephemeral)
     storage_mode=ephemeral
@@ -20,6 +21,11 @@ case ${1:-} in
     ;;
   --reset-storage)
     storage_mode=reset
+    shift
+    ;;
+  --reset-storage-only)
+    storage_mode=reset
+    reset_only=1
     shift
     ;;
   --*) usage ;;
@@ -731,15 +737,29 @@ if [[ ! -e $source_disk && ! -L $source_disk ]]; then
     "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
   source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
 fi
-qemu_persistent_storage_select \
+if qemu_persistent_storage_select \
   "$storage_mode" \
   "$bundle_identity" \
   "$source_disk" \
   "$source_disk_sha" \
   "$source_disk_bytes" \
   "$work_dir" \
-  "$expanded_disk_bytes" || fail "could not prepare the selected root disk"
+  "$expanded_disk_bytes"; then
+  :
+else
+  storage_status=$?
+  if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+    exit "$storage_status"
+  fi
+  fail "could not prepare the selected root disk"
+fi
 working_disk=$QEMU_SELECTED_DISK
+
+if ((reset_only)); then
+  qemu_persistent_storage_release_lock
+  echo "[qemu-gpu] Reset complete." >&2
+  exit 0
+fi
 
 qemu_args=(
   -name 'Try Omarchy'

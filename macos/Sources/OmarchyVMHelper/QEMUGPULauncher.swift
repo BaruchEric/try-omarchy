@@ -5,6 +5,213 @@ import Foundation
 enum QEMUGPUStorageOption: String, Equatable {
     case ephemeral = "--ephemeral"
     case resetStorage = "--reset-storage"
+    case resetStorageOnly = "--reset-storage-only"
+}
+
+enum QEMUGPUStorageSpaceEstimate {
+    static func formattedReclaimableSpace(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleIdentity: String? = nil,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let bytes = reclaimableBytes(
+            environment: environment,
+            bundleIdentity: bundleIdentity,
+            fileManager: fileManager
+        ) else { return nil }
+        return format(bytes: bytes)
+    }
+
+    static func reclaimableBytes(
+        environment: [String: String],
+        bundleIdentity: String?,
+        fileManager: FileManager = .default
+    ) -> Int64? {
+        guard let directories = resettableWorkspaceDirectories(
+            environment: environment,
+            bundleIdentity: bundleIdentity,
+            fileManager: fileManager
+        ) else { return nil }
+
+        var total: Int64 = 0
+        for directory in directories {
+            guard let diskURL = recordedDiskURL(
+                in: directory,
+                fileManager: fileManager
+            ),
+                  let values = try? diskURL.resourceValues(forKeys: [
+                    .totalFileAllocatedSizeKey,
+                    .fileAllocatedSizeKey,
+                  ]),
+                  let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize,
+                  allocated > 0 else { continue }
+            let (sum, overflow) = total.addingReportingOverflow(Int64(allocated))
+            guard !overflow else { return nil }
+            total = sum
+        }
+        return total > 0 ? total : nil
+    }
+
+    static func format(bytes: Int64) -> String? {
+        guard bytes > 0 else { return nil }
+        let gigabytes = Double(bytes) / 1_000_000_000
+        if gigabytes < 0.1 {
+            return "less than 0.1 GB"
+        }
+        return String(format: "%.1f GB", gigabytes)
+    }
+
+    static func bundledIdentity(bundle: Bundle = .main) -> String? {
+        guard let resourceURL = bundle.resourceURL,
+              let data = try? Data(
+                contentsOf: resourceURL.appendingPathComponent("guest/launch.plist")
+              ),
+              let propertyList = try? PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+              ),
+              let dictionary = propertyList as? [String: Any],
+              let identity = dictionary["bundleIdentity"] as? String,
+              isIdentity(identity) else { return nil }
+        return identity
+    }
+
+    static func storageKey(
+        environment: [String: String],
+        bundleIdentity: String?
+    ) -> String? {
+        switch environment["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK"] ?? "0" {
+        case "0":
+            return "current"
+        case "1":
+            guard let bundleIdentity, isIdentity(bundleIdentity) else { return nil }
+            return bundleIdentity
+        default:
+            return nil
+        }
+    }
+
+    private static func resettableWorkspaceDirectories(
+        environment: [String: String],
+        bundleIdentity: String?,
+        fileManager: FileManager
+    ) -> [URL]? {
+        guard let storageKey = storageKey(
+            environment: environment,
+            bundleIdentity: bundleIdentity
+        ) else { return nil }
+        let root: URL
+        if let configuredRoot = environment["OMARCHY_QEMU_GPU_STATE_ROOT"],
+           configuredRoot.hasPrefix("/"),
+           !configuredRoot.contains("\n"),
+           !configuredRoot.contains("\r") {
+            root = URL(fileURLWithPath: configuredRoot, isDirectory: true)
+        } else {
+            guard let applicationSupport = fileManager.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first else { return nil }
+            root = applicationSupport.appendingPathComponent("Omarchy/QEMU/v1", isDirectory: true)
+        }
+        let disks = root.appendingPathComponent("disks", isDirectory: true)
+        if storageKey != "current" {
+            return [disks.appendingPathComponent(storageKey, isDirectory: true)]
+        }
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: disks,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else { return [] }
+        return contents.filter {
+            $0.lastPathComponent == "current" || isIdentity($0.lastPathComponent)
+        }
+    }
+
+    private static func recordedDiskURL(
+        in directory: URL,
+        fileManager: FileManager
+    ) -> URL? {
+        guard hasAttributes(
+            directory,
+            type: .typeDirectory,
+            permissions: 0o700,
+            fileManager: fileManager
+        ),
+              let entries = try? fileManager.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil,
+                options: []
+              ),
+              Set(entries.map(\.lastPathComponent)) == ["metadata.json", "rootfs.ext4"]
+        else { return nil }
+
+        let metadataURL = directory.appendingPathComponent("metadata.json", isDirectory: false)
+        let diskURL = directory.appendingPathComponent("rootfs.ext4", isDirectory: false)
+        guard hasAttributes(
+            metadataURL,
+            type: .typeRegular,
+            permissions: 0o600,
+            fileManager: fileManager
+        ),
+              hasAttributes(
+                diskURL,
+                type: .typeRegular,
+                permissions: 0o600,
+                fileManager: fileManager
+              ),
+              let metadataData = try? Data(contentsOf: metadataURL),
+              metadataData.count <= 16_384,
+              var serializedMetadata = String(data: metadataData, encoding: .utf8),
+              let rawMetadata = try? JSONSerialization.jsonObject(with: metadataData),
+              let metadata = rawMetadata as? [String: Any],
+              Set(metadata.keys) == ["bundleIdentity", "kind", "schemaVersion", "sourceRootfs"],
+              metadata["kind"] as? String == "omarchy-qemu-persistent-disk",
+              let identity = metadata["bundleIdentity"] as? String,
+              isIdentity(identity),
+              let schemaNumber = metadata["schemaVersion"] as? NSNumber,
+              [1, 2].contains(schemaNumber.intValue),
+              let source = metadata["sourceRootfs"] as? [String: Any],
+              Set(source.keys) == ["bytes", "sha256"],
+              let sourceBytesNumber = source["bytes"] as? NSNumber,
+              sourceBytesNumber.int64Value > 0,
+              let sourceSHA = source["sha256"] as? String,
+              isIdentity(sourceSHA)
+        else { return nil }
+
+        while serializedMetadata.last == "\n" {
+            serializedMetadata.removeLast()
+        }
+        let canonicalMetadata = "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":\(schemaNumber.intValue),\"sourceRootfs\":{\"bytes\":\(sourceBytesNumber.int64Value),\"sha256\":\"\(sourceSHA)\"}}"
+        guard serializedMetadata == canonicalMetadata,
+              directory.lastPathComponent == "current" || directory.lastPathComponent == identity,
+              let diskSize = try? diskURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              Int64(diskSize) >= sourceBytesNumber.int64Value
+        else { return nil }
+        return diskURL
+    }
+
+    private static func hasAttributes(
+        _ url: URL,
+        type: FileAttributeType,
+        permissions: Int,
+        fileManager: FileManager
+    ) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey]),
+              values.isSymbolicLink != true,
+              let attributes = try? fileManager.attributesOfItem(atPath: url.path),
+              attributes[.type] as? FileAttributeType == type,
+              (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
+              (attributes[.posixPermissions] as? NSNumber)?.intValue == permissions
+        else { return false }
+        return true
+    }
+
+    private static func isIdentity(_ value: String) -> Bool {
+        value.utf8.count == 64 && value.utf8.allSatisfy {
+            ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+        }
+    }
 }
 
 struct QEMUGPULaunchRequest: Equatable {

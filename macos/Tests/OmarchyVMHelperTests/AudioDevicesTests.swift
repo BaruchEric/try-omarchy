@@ -254,5 +254,17 @@ struct VMRunLifecycleTests {
             wasStopping: false
         )
         #expect(decision.showsStartupFailure)
+        #expect(!decision.requiresWorkspaceReset)
+    }
+
+    @Test("an incompatible saved VM stays on the start menu for reset")
+    func incompatibleWorkspaceOffersReset() {
+        let decision = VMExitPresentationDecision.make(
+            status: VMExitPresentationDecision.incompatibleWorkspaceStatus,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(!decision.showsStartupFailure)
+        #expect(decision.requiresWorkspaceReset)
     }
 }

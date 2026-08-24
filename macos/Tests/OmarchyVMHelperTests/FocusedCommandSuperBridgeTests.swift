@@ -57,6 +57,32 @@ struct FocusedCommandCaptureTests {
         #expect(!state.isCapturing)
     }
 
+    @Test("captures Command-Space before the host can open Spotlight")
+    func capturesCommandSpace() {
+        let space: CGKeyCode = 49
+        var state = FocusedCommandCaptureState()
+
+        #expect(FocusedCommandSuperBridge.eventTapLocation == .cghidEventTap)
+
+        _ = state.process(event(
+            .flagsChanged,
+            FocusedCommandCaptureState.leftCommand,
+            flags: [.maskCommand]
+        ), focused: true)
+        let spaceDown = state.process(event(
+            .keyDown,
+            space,
+            flags: [.maskCommand]
+        ), focused: true)
+
+        #expect(spaceDown.suppress)
+        #expect(spaceDown.forwarded == [event(
+            .keyDown,
+            space,
+            marker: FocusedCommandCaptureState.recursionMarker
+        )])
+    }
+
     @Test("does not capture Command outside the focused QEMU window")
     func ignoresUnfocusedCommand() {
         var state = FocusedCommandCaptureState()

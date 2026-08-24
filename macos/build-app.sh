@@ -56,6 +56,7 @@ guest_dir=${guest_dir:-"$repo_dir/dist/guest"}
 dependency_bundler="$macos_dir/bundle-macho-dependencies.sh"
 package_dmg="$macos_dir/package-dmg.sh"
 app_icon_source="$macos_dir/OmarchyIcon.svg"
+app_icon_fallback="$macos_dir/Omarchy.icns"
 app_icon_renderer_source="$macos_dir/render-app-icon.swift"
 icon_renderer="$macos_dir/.build/app-icon-renderer"
 iconset="$macos_dir/.build/TryOmarchy.iconset"
@@ -77,6 +78,10 @@ guest_dir=$(cd "$guest_dir" && pwd -P)
 }
 [[ -f $app_icon_source && ! -L $app_icon_source ]] || {
   echo "build-app: app icon source is missing or unsafe" >&2
+  exit 1
+}
+[[ -f $app_icon_fallback && ! -L $app_icon_fallback ]] || {
+  echo "build-app: fallback app icon is missing or unsafe" >&2
   exit 1
 }
 [[ -f $app_icon_renderer_source && ! -L $app_icon_renderer_source ]] || {
@@ -130,7 +135,14 @@ icon_256x256.png	256
 icon_256x256@2x.png	512
 icon_512x512.png	512
 ICON_SIZES
-iconutil -c icns "$iconset" -o "$generated_icon"
+if ! iconutil -c icns "$iconset" -o "$generated_icon"; then
+  echo "build-app: iconutil rejected the generated iconset; using the tracked verified icon" >&2
+  cp "$app_icon_fallback" "$generated_icon"
+fi
+[[ -f $generated_icon && ! -L $generated_icon ]] || {
+  echo "build-app: generated app icon is missing or unsafe" >&2
+  exit 1
+}
 
 rm -rf "$app"
 mkdir -p \

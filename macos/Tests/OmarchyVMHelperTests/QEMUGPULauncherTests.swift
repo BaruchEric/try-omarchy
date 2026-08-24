@@ -20,6 +20,10 @@ struct QEMUGPULaunchRequestTests {
             storageOption: .resetStorage,
             guestDirectoryPath: guest
         ))
+        #expect(QEMUGPULaunchRequest(arguments: ["--reset-storage-only", guest]) == QEMUGPULaunchRequest(
+            storageOption: .resetStorageOnly,
+            guestDirectoryPath: guest
+        ))
         #expect(QEMUGPULaunchRequest(arguments: [guest]) == QEMUGPULaunchRequest(
             storageOption: nil,
             guestDirectoryPath: guest
@@ -67,6 +71,202 @@ struct QEMUGPULaunchRequestTests {
         }
     }
 
+}
+
+@Suite("QEMU storage-space estimate")
+struct QEMUGPUStorageSpaceEstimateTests {
+    @Test("formats allocated bytes as a readable decimal gigabyte estimate")
+    func formatsGigabytes() {
+        #expect(QEMUGPUStorageSpaceEstimate.format(bytes: 0) == nil)
+        #expect(QEMUGPUStorageSpaceEstimate.format(bytes: 50_000_000) == "less than 0.1 GB")
+        #expect(QEMUGPUStorageSpaceEstimate.format(bytes: 3_250_000_000) == "3.2 GB")
+    }
+
+    @Test("selects the same single or development workspace used by the launcher")
+    func selectsStorageKey() {
+        let identity = String(repeating: "a", count: 64)
+        #expect(QEMUGPUStorageSpaceEstimate.storageKey(
+            environment: [:],
+            bundleIdentity: identity
+        ) == "current")
+        #expect(QEMUGPUStorageSpaceEstimate.storageKey(
+            environment: ["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK": "0"],
+            bundleIdentity: identity
+        ) == "current")
+        #expect(QEMUGPUStorageSpaceEstimate.storageKey(
+            environment: ["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK": "1"],
+            bundleIdentity: identity
+        ) == identity)
+        #expect(QEMUGPUStorageSpaceEstimate.storageKey(
+            environment: ["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK": "1"],
+            bundleIdentity: nil
+        ) == nil)
+        #expect(QEMUGPUStorageSpaceEstimate.storageKey(
+            environment: ["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK": "invalid"],
+            bundleIdentity: identity
+        ) == nil)
+    }
+
+    @Test("counts every safely recognized disk removed by a single-disk reset")
+    func countsResettableLegacyDisks() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "try-omarchy-space-estimate-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: root) }
+        let disks = root.appendingPathComponent("state/disks", isDirectory: true)
+        try fileManager.createDirectory(at: disks, withIntermediateDirectories: true)
+
+        let identityA = String(repeating: "a", count: 64)
+        let identityB = String(repeating: "b", count: 64)
+        let identityC = String(repeating: "c", count: 64)
+        let current = try makeWorkspace(
+            in: disks,
+            name: "current",
+            identity: identityA,
+            payloadBytes: 8_192
+        )
+        let legacy = try makeWorkspace(
+            in: disks,
+            name: identityB,
+            identity: identityB,
+            payloadBytes: 12_288
+        )
+        _ = try makeWorkspace(
+            in: disks,
+            name: identityC,
+            identity: identityC,
+            payloadBytes: 16_384,
+            addUnknownFile: true
+        )
+
+        let allocated = try [current, legacy].reduce(Int64(0)) { total, disk in
+            let values = try disk.resourceValues(forKeys: [
+                .totalFileAllocatedSizeKey,
+                .fileAllocatedSizeKey,
+            ])
+            return total + Int64(try #require(
+                values.totalFileAllocatedSize ?? values.fileAllocatedSize
+            ))
+        }
+        let environment = ["OMARCHY_QEMU_GPU_STATE_ROOT": root.appendingPathComponent("state").path]
+        #expect(QEMUGPUStorageSpaceEstimate.reclaimableBytes(
+            environment: environment,
+            bundleIdentity: identityA,
+            fileManager: fileManager
+        ) == allocated)
+
+        #expect(QEMUGPUStorageSpaceEstimate.reclaimableBytes(
+            environment: environment.merging(
+                ["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK": "1"],
+                uniquingKeysWith: { _, new in new }
+            ),
+            bundleIdentity: identityB,
+            fileManager: fileManager
+        ) == allocatedSize(of: legacy))
+    }
+
+    @Test("ignores semantically valid metadata with noncanonical whitespace or key order")
+    func ignoresNoncanonicalSerializedMetadata() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "try-omarchy-space-estimate-noncanonical-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: root) }
+        let disks = root.appendingPathComponent("state/disks", isDirectory: true)
+        try fileManager.createDirectory(at: disks, withIntermediateDirectories: true)
+
+        let identity = String(repeating: "a", count: 64)
+        let sourceSHA = String(repeating: "d", count: 64)
+        _ = try makeWorkspace(
+            in: disks,
+            name: "current",
+            identity: identity,
+            payloadBytes: 8_192,
+            metadataContents: """
+            { "kind": "omarchy-qemu-persistent-disk", "bundleIdentity": "\(identity)", "sourceRootfs": { "sha256": "\(sourceSHA)", "bytes": 1 }, "schemaVersion": 2 }
+            """
+        )
+
+        let environment = ["OMARCHY_QEMU_GPU_STATE_ROOT": root.appendingPathComponent("state").path]
+        #expect(QEMUGPUStorageSpaceEstimate.reclaimableBytes(
+            environment: environment,
+            bundleIdentity: identity,
+            fileManager: fileManager
+        ) == nil)
+    }
+
+    @Test("ignores fractional schema and source byte values")
+    func ignoresFractionalMetadataNumbers() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent(
+            "try-omarchy-space-estimate-fractional-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        defer { try? fileManager.removeItem(at: root) }
+        let disks = root.appendingPathComponent("state/disks", isDirectory: true)
+        try fileManager.createDirectory(at: disks, withIntermediateDirectories: true)
+
+        let identity = String(repeating: "b", count: 64)
+        let sourceSHA = String(repeating: "d", count: 64)
+        _ = try makeWorkspace(
+            in: disks,
+            name: identity,
+            identity: identity,
+            payloadBytes: 8_192,
+            metadataContents: "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":2.5,\"sourceRootfs\":{\"bytes\":1.5,\"sha256\":\"\(sourceSHA)\"}}\n"
+        )
+
+        let environment = ["OMARCHY_QEMU_GPU_STATE_ROOT": root.appendingPathComponent("state").path]
+        #expect(QEMUGPUStorageSpaceEstimate.reclaimableBytes(
+            environment: environment,
+            bundleIdentity: identity,
+            fileManager: fileManager
+        ) == nil)
+    }
+
+    private func makeWorkspace(
+        in disks: URL,
+        name: String,
+        identity: String,
+        payloadBytes: Int,
+        addUnknownFile: Bool = false,
+        metadataContents: String? = nil
+    ) throws -> URL {
+        let fileManager = FileManager.default
+        let directory = disks.appendingPathComponent(name, isDirectory: true)
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: false)
+        #expect(Darwin.chmod(directory.path, 0o700) == 0)
+
+        let metadata = directory.appendingPathComponent("metadata.json")
+        let sourceSHA = String(repeating: "d", count: 64)
+        try Data(
+            (metadataContents ?? "{\"bundleIdentity\":\"\(identity)\",\"kind\":\"omarchy-qemu-persistent-disk\",\"schemaVersion\":2,\"sourceRootfs\":{\"bytes\":1,\"sha256\":\"\(sourceSHA)\"}}\n").utf8
+        ).write(to: metadata)
+        #expect(Darwin.chmod(metadata.path, 0o600) == 0)
+
+        let disk = directory.appendingPathComponent("rootfs.ext4")
+        try Data(repeating: 0x5a, count: payloadBytes).write(to: disk)
+        #expect(Darwin.chmod(disk.path, 0o600) == 0)
+        if addUnknownFile {
+            let unknown = directory.appendingPathComponent("unknown.txt")
+            try Data("preserve".utf8).write(to: unknown)
+            #expect(Darwin.chmod(unknown.path, 0o600) == 0)
+        }
+        return disk
+    }
+
+    private func allocatedSize(of disk: URL) -> Int64? {
+        guard let values = try? disk.resourceValues(forKeys: [
+            .totalFileAllocatedSizeKey,
+            .fileAllocatedSizeKey,
+        ]),
+              let bytes = values.totalFileAllocatedSize ?? values.fileAllocatedSize
+        else { return nil }
+        return Int64(bytes)
+    }
 }
 
 @Suite("Bundled QEMU GPU launcher path")
@@ -161,32 +361,6 @@ struct MicrophoneLaunchDecisionTests {
         let decision = MicrophoneLaunchDecision.make(for: .notDetermined)
         #expect(decision.allowsLaunch)
         #expect(decision.warning?.contains("was not requested") == true)
-    }
-}
-
-@Suite("First-launch permission setup")
-struct PermissionSetupCompletionStoreTests {
-    @Test("setup is shown until the person explicitly finishes it")
-    func completionPersists() throws {
-        let suiteName = "PermissionSetupCompletionStoreTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let store = PermissionSetupCompletionStore(defaults: defaults)
-
-        #expect(!store.isComplete)
-        store.markComplete()
-        #expect(store.isComplete)
-    }
-
-    @Test("an older onboarding revision does not suppress the current setup")
-    func olderRevisionShowsSetupAgain() throws {
-        let suiteName = "PermissionSetupCompletionStoreTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(true, forKey: "permissionSetupCompleted.v1")
-
-        let store = PermissionSetupCompletionStore(defaults: defaults)
-        #expect(!store.isComplete)
     }
 }
 
