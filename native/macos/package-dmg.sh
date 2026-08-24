@@ -29,15 +29,26 @@ output=${2:-"${app%.app}.dmg"}
 [[ $output == /* && $output == *.dmg ]] || fail "OUTPUT_DMG must be an absolute .dmg path"
 [[ ! -e $output && ! -L $output ]] || fail "output already exists: $output"
 
-for tool in codesign ditto hdiutil ln mkdir mktemp rm; do
+for tool in codesign ditto hdiutil ln mkdir mktemp osascript rm sync; do
   command -v "$tool" >/dev/null 2>&1 || fail "required tool is unavailable: $tool"
 done
 codesign --verify --deep --strict --verbose=2 "$app"
 
+native_dir=$(cd "$(dirname "$0")" && pwd -P)
+layout_source="$native_dir/dmg-layout.applescript"
+[[ -f $layout_source && ! -L $layout_source ]] || {
+  fail "DMG Finder layout is missing or unsafe"
+}
+
 work_dir=$(mktemp -d /private/tmp/omarchy-dmg.XXXXXX)
+mounted=0
+mount_dir="$work_dir/mount"
 cleanup() {
   status=$?
   trap - EXIT HUP INT TERM
+  if (( mounted )); then
+    hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true
+  fi
   rm -rf -- "$work_dir"
   exit "$status"
 }
@@ -53,15 +64,37 @@ if [[ -n $notarize_profile ]]; then
 fi
 
 staging="$work_dir/dmg"
-mkdir "$staging"
+mkdir -p "$staging"
 ditto "$app" "$staging/${app##*/}"
 ln -s /Applications "$staging/Applications"
+
+read_write_dmg="$work_dir/Omarchy-rw.dmg"
 hdiutil create \
-  -volname "Omarchy" \
+  -volname "Try Omarchy" \
   -srcfolder "$staging" \
+  -fs APFS \
+  -format UDRW \
+  "$read_write_dmg" >/dev/null
+
+mkdir "$mount_dir"
+hdiutil attach \
+  -readwrite \
+  -noverify \
+  -noautoopen \
+  -mountpoint "$mount_dir" \
+  "$read_write_dmg" >/dev/null
+mounted=1
+
+osascript "$layout_source" "$mount_dir" "${app##*/}"
+
+sync
+hdiutil detach "$mount_dir" >/dev/null
+mounted=0
+hdiutil convert \
+  "$read_write_dmg" \
   -format UDZO \
   -imagekey zlib-level=9 \
-  "$output"
+  -o "$output" >/dev/null
 
 if [[ -n $notarize_profile ]]; then
   xcrun notarytool submit "$output" --keychain-profile "$notarize_profile" --wait

@@ -10,7 +10,7 @@ const layers = [
   {
     index: "01",
     eyebrow: "Native launcher",
-    title: "Omarchy Quattro.app",
+    title: "Try Omarchy.app",
     detail: "Swift + AppKit",
     description:
       "Owns macOS permissions, launches the verified VM, and maps focused Command shortcuts to guest Super.",

@@ -46,7 +46,7 @@ done
 
 native_dir=$(cd "$(dirname "$0")" && pwd)
 helper="$native_dir/.build/release/omarchy-vm-helper"
-app="$native_dir/.build/Omarchy Quattro.app"
+app="$native_dir/.build/Try Omarchy.app"
 contents="$app/Contents"
 module_cache="$native_dir/.build/module-cache"
 runtime_source="$native_dir/.build/qemu-gpu-runtime"
@@ -54,6 +54,10 @@ repo_dir=$(cd "$native_dir/../.." && pwd -P)
 guest_dir=${guest_dir:-"$repo_dir/guest/dist-aarch64-unprovisioned"}
 dependency_bundler="$native_dir/bundle-macho-dependencies.sh"
 package_dmg="$native_dir/package-dmg.sh"
+app_icon_source="$native_dir/app-icon.swift"
+icon_renderer="$native_dir/.build/app-icon-renderer"
+iconset="$native_dir/.build/TryOmarchy.iconset"
+generated_icon="$native_dir/.build/TryOmarchy.icns"
 zstd_bin=$(command -v zstd || true)
 
 [[ -d $runtime_source && ! -L $runtime_source ]] || {
@@ -69,10 +73,16 @@ guest_dir=$(cd "$guest_dir" && pwd -P)
   echo "build-app: dependency bundler is missing or unsafe" >&2
   exit 1
 }
-[[ -f $native_dir/Omarchy.icns && ! -L $native_dir/Omarchy.icns ]] || {
-  echo "build-app: Omarchy.icns is missing or unsafe" >&2
+[[ -f $app_icon_source && ! -L $app_icon_source ]] || {
+  echo "build-app: app icon renderer is missing or unsafe" >&2
   exit 1
 }
+for tool in iconutil sips xcrun; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "build-app: $tool is required to render the app icon" >&2
+    exit 1
+  }
+done
 if [[ -n $notarize_profile && $sign_identity == - ]]; then
   echo "build-app: notarization requires --sign-identity with a Developer ID Application identity" >&2
   exit 1
@@ -83,10 +93,37 @@ fi
 }
 
 cd "$native_dir"
-mkdir -p "$module_cache/swift" "$module_cache/clang"
+mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"
 export CLANG_MODULE_CACHE_PATH="$module_cache/clang"
 swift build --disable-sandbox -c release -debug-info-format none
+
+rm -rf "$iconset"
+rm -f "$generated_icon"
+mkdir "$iconset"
+xcrun swiftc \
+  -module-cache-path "$module_cache/icon" \
+  -framework AppKit \
+  "$app_icon_source" \
+  -o "$icon_renderer"
+"$icon_renderer" "$iconset/icon_512x512@2x.png"
+while IFS=$'\t' read -r icon_name icon_pixels; do
+  sips \
+    -z "$icon_pixels" "$icon_pixels" \
+    "$iconset/icon_512x512@2x.png" \
+    --out "$iconset/$icon_name" >/dev/null
+done <<'ICON_SIZES'
+icon_16x16.png	16
+icon_16x16@2x.png	32
+icon_32x32.png	32
+icon_32x32@2x.png	64
+icon_128x128.png	128
+icon_128x128@2x.png	256
+icon_256x256.png	256
+icon_256x256@2x.png	512
+icon_512x512.png	512
+ICON_SIZES
+iconutil -c icns "$iconset" -o "$generated_icon"
 
 rm -rf "$app"
 mkdir -p \
@@ -96,7 +133,7 @@ mkdir -p \
   "$contents/Resources/scripts"
 install -m 0755 "$helper" "$contents/MacOS/omarchy-vm-helper"
 install -m 0644 "$native_dir/Info.plist" "$contents/Info.plist"
-install -m 0644 "$native_dir/Omarchy.icns" "$contents/Resources/Omarchy.icns"
+install -m 0644 "$generated_icon" "$contents/Resources/TryOmarchy.icns"
 ditto "$runtime_source" "$contents/Resources/runtime"
 install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$native_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"
@@ -156,7 +193,7 @@ codesign --verify --deep --strict --verbose=2 "$app"
 
 echo "[native] Built $app"
 if (( build_dmg )); then
-  dmg="$native_dir/.build/Omarchy Quattro.dmg"
+  dmg="$native_dir/.build/Try Omarchy.dmg"
   rm -f "$dmg"
   if [[ -n $notarize_profile ]]; then
     "$package_dmg" --notarize-profile "$notarize_profile" "$app" "$dmg"

@@ -64,7 +64,7 @@ struct QEMUGPULaunchRequest: Equatable {
 }
 
 enum QEMUGPULauncherPath {
-    static let appName = "Omarchy Quattro.app"
+    static let appName = "Try Omarchy.app"
     static let launcherName = "run-qemu-gpu.sh"
 
     static func resolve(bundleURL: URL) throws -> URL {
@@ -133,12 +133,12 @@ struct MicrophoneLaunchDecision: Equatable {
         case .denied:
             Self(
                 allowsLaunch: true,
-                warning: "Microphone access is denied. Audio playback will continue, but guest recording is unavailable. Enable Omarchy Quattro in System Settings > Privacy & Security > Microphone, then relaunch."
+                warning: "Microphone access is denied. Audio playback will continue, but guest recording is unavailable. Enable Try Omarchy in System Settings > Privacy & Security > Microphone, then relaunch."
             )
         case .restricted:
             Self(
                 allowsLaunch: true,
-                warning: "Microphone access is restricted by macOS policy. Audio playback will continue, but guest recording is unavailable. Ask the Mac administrator to allow microphone access for Omarchy Quattro."
+                warning: "Microphone access is restricted by macOS policy. Audio playback will continue, but guest recording is unavailable. Ask the Mac administrator to allow microphone access for Try Omarchy."
             )
         }
     }

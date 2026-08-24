@@ -767,7 +767,7 @@ qemu_persistent_storage_select \
 working_disk=$QEMU_SELECTED_DISK
 
 qemu_args=(
-  -name 'Omarchy Quattro ARM64 - QEMU VirGL'
+  -name 'Try Omarchy ARM64 - QEMU VirGL'
   # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
   # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
   -machine 'virt,accel=hvf,gic-version=2'

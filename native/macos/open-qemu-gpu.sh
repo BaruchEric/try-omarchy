@@ -41,7 +41,7 @@ if (($#)); then
   launcher_arguments+=("$guest_dir")
 fi
 
-app="$native_dir/.build/Omarchy Quattro.app"
+app="$native_dir/.build/Try Omarchy.app"
 helper="$app/Contents/MacOS/omarchy-vm-helper"
 info_plist="$app/Contents/Info.plist"
 [[ -d $app && ! -L $app ]] || {

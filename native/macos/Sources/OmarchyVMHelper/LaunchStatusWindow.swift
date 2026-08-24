@@ -12,13 +12,13 @@ final class LaunchStatusWindow {
             backing: .buffered,
             defer: false
         )
-        window.title = "Omarchy"
+        window.title = "Try Omarchy"
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.level = .floating
 
-        let title = NSTextField(labelWithString: "Starting Omarchy")
+        let title = NSTextField(labelWithString: "Starting Try Omarchy")
         title.font = .systemFont(ofSize: 20, weight: .semibold)
         title.alignment = .center
 

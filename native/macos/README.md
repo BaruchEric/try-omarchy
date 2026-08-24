@@ -32,7 +32,7 @@ their non-system dynamic-library closure are signed inside the app.
 
 ## Install and first launch
 
-Open the DMG, drag **Omarchy Quattro** to Applications, and open it. The first
+Open the DMG, drag **Try Omarchy** to Applications, and open it. The first
 launch shows a small preparation window while the signed compressed factory
 image is expanded and verified. Omarchy then presents its own owner setup for
 keyboard, account, hostname, timezone, and the rest of the normal setup flow.
@@ -68,14 +68,14 @@ npm run omarchy:native
 
 The first launch may ask for two macOS permissions:
 
-- **Accessibility** lets **Omarchy Quattro** capture Command only while its QEMU
+- **Accessibility** lets **Try Omarchy** capture Command only while its QEMU
   window is focused and translate it to guest Super.
 - **Microphone** lets software inside the guest record host audio input. If it
   is denied, speaker playback still works and only guest recording is disabled.
 
 Accessibility is optional and never blocks the VM from starting. If macOS does
 not recognize the grant until the app is relaunched, Omarchy continues without
-Command-to-Super mapping for that session. Enable **Omarchy Quattro** in
+Command-to-Super mapping for that session. Enable **Try Omarchy** in
 Accessibility settings and the mapping becomes available on a later launch.
 
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
@@ -88,7 +88,8 @@ CoreAudio hardware appears, disappears, or changes, and choosing a route takes
 effect without restarting Omarchy. Selections retain stable CoreAudio identities
 and survive app relaunches and guest-storage resets.
 
-Create a compressed DMG with an Applications shortcut:
+Create a compressed DMG with a minimal, pre-arranged drag-to-Applications
+installer window:
 
 ```sh
 npm run omarchy:native:package
@@ -247,7 +248,7 @@ is atomic. An optional local archive cache can be passed directly to the build
 script for an offline replay; cache contents are still re-verified.
 
 `build-app.sh` compiles the Swift launcher, creates
-`native/macos/.build/Omarchy Quattro.app`, embeds the launch contract, icon,
+`native/macos/.build/Try Omarchy.app`, embeds the launch contract, icon,
 factory guest, QEMU runtime, decoder, scripts, and full non-system dylib closure,
 then signs nested code inside-out. Local builds use ad-hoc signing. Release
 builds support a stable Developer ID, hardened runtime, notarization, stapling,
@@ -279,10 +280,10 @@ the guest and runtime before creating the QEMU process.
 
 - If a developer build reports a missing staged runtime or app, run
   `npm run omarchy:native:prepare`.
-- If Command shortcuts reach macOS, grant Accessibility access to **Omarchy
-  Quattro**, quit the VM, and run `npm run omarchy:native` again.
+- If Command shortcuts reach macOS, grant Accessibility access to **Try
+  Omarchy**, quit the VM, and run `npm run omarchy:native` again.
 - If guest recording is unavailable after denying the prompt, enable Microphone
-  access for **Omarchy Quattro** in System Settings and relaunch.
+  access for **Try Omarchy** in System Settings and relaunch.
 - If a persistent guest change is unwanted, use
   `npm run omarchy:native:reset`. Use `omarchy:native:ephemeral` when testing
   without modifying saved guest state.

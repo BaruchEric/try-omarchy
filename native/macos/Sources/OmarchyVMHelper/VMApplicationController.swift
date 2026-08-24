@@ -121,7 +121,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             if status != 0 {
                 let alert = NSAlert()
                 alert.alertStyle = .critical
-                alert.messageText = "Omarchy couldn’t start"
+                alert.messageText = "Try Omarchy couldn’t start"
                 alert.informativeText = "The app’s virtual machine stopped during startup. Reinstall the latest Omarchy app and try again."
                 alert.addButton(withTitle: "Close")
                 alert.runModal()
@@ -135,7 +135,7 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         launchStatusWindow.dismiss()
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "Omarchy couldn’t start"
+        alert.messageText = "Try Omarchy couldn’t start"
         alert.informativeText = error.localizedDescription
         alert.addButton(withTitle: "Close")
         alert.runModal()

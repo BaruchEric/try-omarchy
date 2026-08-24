@@ -54,7 +54,7 @@ the client.
 
 ## Native Mac app
 
-The downloadable **Omarchy Quattro** app is a self-contained Apple Silicon
+The downloadable **Try Omarchy** app is a self-contained Apple Silicon
 virtual Mac for macOS 15 or newer. Open its DMG, drag the app to Applications,
 and launch it like any other Mac app. It does not require Homebrew, Python,
 QEMU, a container runtime, or an existing Omarchy installation.
