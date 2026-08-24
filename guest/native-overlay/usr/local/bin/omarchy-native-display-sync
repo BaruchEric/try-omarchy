@@ -8,6 +8,7 @@ preferred_mode_from_edid() {
   python3 - "$1" <<'PY'
 import pathlib
 import sys
+from math import hypot
 
 data = pathlib.Path(sys.argv[1]).read_bytes()
 if (
@@ -63,10 +64,46 @@ def modeline(
     )
 
 
+def scale_for_mode(
+    width: int,
+    height: int,
+    physical_width_mm: int,
+    physical_height_mm: int,
+) -> str:
+    if physical_width_mm <= 0 or physical_height_mm <= 0:
+        return "auto"
+
+    diagonal_inches = hypot(physical_width_mm, physical_height_mm) / 25.4
+    if diagonal_inches <= 0:
+        return "auto"
+
+    ppi = hypot(width, height) / diagonal_inches
+    requested = 2.0 if ppi > 200 else 1.5 if ppi > 140 else 1.0
+
+    # Hyprland requires the scaled logical dimensions to land on whole pixels.
+    # It searches scale values in 1/120 increments around the requested value;
+    # choose the closest clean value here so an explicit dynamic scale does not
+    # trigger its stale-physical-size fallback or a warning notification.
+    requested_120 = round(requested * 120)
+    clean_120 = min(
+        (
+            candidate
+            for candidate in range(30, 481)
+            if (width * 120) % candidate == 0
+            and (height * 120) % candidate == 0
+        ),
+        key=lambda candidate: (abs(candidate - requested_120), -candidate),
+    )
+    return f"{clean_120 / 120:.6f}".rstrip("0").rstrip(".")
+
+
+base_physical_width_mm = data[21] * 10
+base_physical_height_mm = data[22] * 10
+
 # QEMU puts large and dynamically generated modes in a DisplayID 1.3 Type I
 # timing block. Its base EDID contains only compatibility modes, so inspect
 # DisplayID before falling back to a legacy base-block detailed timing.
-displayid_timings: list[tuple[bool, str]] = []
+displayid_timings: list[tuple[bool, str, int, int]] = []
 available_extensions = len(data) // 128 - 1
 extension_count = min(data[126], available_extensions)
 for extension_index in range(extension_count):
@@ -124,16 +161,24 @@ for extension_index in range(extension_count):
                     bool(raw_vfront & 0x8000),
                 )
                 if decoded:
-                    displayid_timings.append((bool(timing[3] & 0x80), decoded))
+                    displayid_timings.append(
+                        (bool(timing[3] & 0x80), decoded, width, height)
+                    )
 
         position = payload_end
 
 if displayid_timings:
-    preferred = next(
-        (timing for is_preferred, timing in displayid_timings if is_preferred),
-        displayid_timings[0][1],
+    _, preferred, preferred_width, preferred_height = next(
+        (entry for entry in displayid_timings if entry[0]),
+        displayid_timings[0],
     )
-    print(preferred)
+    scale = scale_for_mode(
+        preferred_width,
+        preferred_height,
+        base_physical_width_mm,
+        base_physical_height_mm,
+    )
+    print(f"{preferred}\t{scale}")
     raise SystemExit(0)
 
 for offset in range(54, 126, 18):
@@ -157,6 +202,11 @@ for offset in range(54, 126, 18):
     vblank = timing[6] | ((timing[7] & 0x0F) << 8)
     vfront = (timing[10] >> 4) | ((timing[11] & 0x0C) << 2)
     vsync = (timing[10] & 0x0F) | ((timing[11] & 0x03) << 4)
+    physical_width_mm = timing[12] | ((timing[14] & 0xF0) << 4)
+    physical_height_mm = timing[13] | ((timing[14] & 0x0F) << 8)
+    if not physical_width_mm or not physical_height_mm:
+        physical_width_mm = base_physical_width_mm
+        physical_height_mm = base_physical_height_mm
     decoded = modeline(
         pixel_clock,
         width,
@@ -171,7 +221,13 @@ for offset in range(54, 126, 18):
         bool(timing[17] & 0x04),
     )
     if decoded:
-        print(decoded)
+        scale = scale_for_mode(
+            width,
+            height,
+            physical_width_mm,
+            physical_height_mm,
+        )
+        print(f"{decoded}\t{scale}")
         raise SystemExit(0)
 
 raise SystemExit(1)
@@ -183,8 +239,10 @@ apply_preferred_modes() {
   local connector_name
   local mode
   local output
+  local preferred
   local response
   local rule
+  local scale
 
   shopt -s nullglob
   for connector in "$drm_root"/card*-Virtual-*; do
@@ -193,17 +251,21 @@ apply_preferred_modes() {
 
     connector_name=${connector##*/}
     output=${connector_name#*-}
-    if ! mode=$(preferred_mode_from_edid "$connector/edid"); then
+    if ! preferred=$(preferred_mode_from_edid "$connector/edid"); then
       continue
     fi
+    IFS=$'\t' read -r mode scale <<<"$preferred"
+    [[ -n $mode && -n $scale ]] || continue
 
     # Aquamarine 0.14 does not refresh its mode cache when an existing DRM
-    # connector's EDID changes. A complete modeline bypasses that stale cache.
+    # connector's EDID or physical size changes. A complete modeline bypasses
+    # the stale mode cache; an explicit scale calculated from the fresh EDID
+    # avoids using the stale fullscreen dimensions for Hyprland's auto scale.
     # Hyprland's Lua config parser requires eval instead of the legacy keyword
-    # command. Change only Omarchy's single-output catch-all mode so its scale,
-    # placement, color, and other policy remain intact; an explicit per-output
-    # user rule still wins.
-    rule="hl.monitor({ output = \"\", mode = \"$mode\" })"
+    # command. Update Omarchy's single-output catch-all mode and dynamic scale;
+    # its placement, color, and other policy remain intact, while an explicit
+    # per-output user rule still wins.
+    rule="hl.monitor({ output = \"\", mode = \"$mode\", scale = \"$scale\" })"
     if ! response=$(hyprctl eval "$rule" 2>&1); then
       printf 'omarchy-native-display-sync: failed to apply %s to %s: %s\n' \
         "$mode" "$output" "$response" >&2

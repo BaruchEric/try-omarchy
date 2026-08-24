@@ -11,9 +11,10 @@ Applies after startergo/homebrew-qemu-virgl-kosmickrisp v1.0.27:
 
 Keep startergo's VirGL/ANGLE/Metal rendering path unchanged. Report Cocoa
 backing pixels and the current screen refresh through QEMU UI info, including a
-reliable maximumFramesPerSecond fallback for variable-refresh displays. Update
-that information after screen, backing-scale, and fullscreen changes. Start at
-a 1920x1080 backing-pixel window when the host has room for it.
+reliable maximumFramesPerSecond fallback for variable-refresh displays. Encode
+the Cocoa backing scale as a stable virtual EDID density so the guest can match
+macOS 1x and 2x scale after every resize or screen change. Start at a 1920x1080
+backing-pixel window when the host has room for it.
 
 diff --git a/ui/cocoa.m b/ui/cocoa.m
 --- a/ui/cocoa.m
@@ -27,8 +28,12 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
      if (!qemu_console_is_graphic(dcl.con)) {
          return;
-@@ -688,17 +688,31 @@
-         CGSize screenPhysicalSize = CGDisplayScreenSize(display);
+@@ -684,25 +684,45 @@
+     if ([self window]) {
+         NSDictionary *description = [[[self window] screen] deviceDescription];
+         CGDirectDisplayID display = [[description objectForKey:@"NSScreenNumber"] unsignedIntValue];
+-        NSSize screenSize = [[[self window] screen] frame].size;
+-        CGSize screenPhysicalSize = CGDisplayScreenSize(display);
          bool isFullscreen = ([[self window] styleMask] & NSWindowStyleMaskFullScreen) != 0;
          CVDisplayLinkRef displayLink;
 +        uint32_t refreshRate = 0;
@@ -45,37 +50,59 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +            if (!(period.flags & kCVTimeIsIndefinite) &&
 +                period.timeValue > 0 && period.timeScale > 0) {
 +                refreshRate = (int64_t)1000 * period.timeScale / period.timeValue;
-+            }
-+        }
-+
+             }
+         }
+ 
+-        info.width_mm = frameSize.width / screenSize.width * screenPhysicalSize.width;
+-        info.height_mm = frameSize.height / screenSize.height * screenPhysicalSize.height;
 +        if (!refreshRate) {
 +            NSInteger framesPerSecond = [[[self window] screen] maximumFramesPerSecond];
 +
 +            if (framesPerSecond > 0) {
 +                refreshRate = (uint32_t)framesPerSecond * 1000;
-             }
++            }
 +        }
 +
 +        if (refreshRate) {
 +            update_displaychangelistener(&dcl,
 +                                         MAX(1u, 1000000u / refreshRate));
 +            info.refresh_rate = refreshRate;
-         }
- 
-         info.width_mm = frameSize.width / screenSize.width * screenPhysicalSize.width;
-@@ -711,8 +725,9 @@
++        }
++
++        /*
++         * Encode Cocoa's backing scale in the virtual display's EDID density.
++         * At 110 logical DPI, normal 1x and 2x backing map to Hyprland scales
++         * 1 and 2. Round to whole centimetres because base EDID stores that
++         * precision and the guest reads those fresh bytes after every resize.
++         */
++        info.width_mm = 10 * MIN(255, MAX(1, (int)lround(
++            frameSize.width * 2.54 / 110.0)));
++        info.height_mm = 10 * MIN(255, MAX(1, (int)lround(
++            frameSize.height * 2.54 / 110.0)));
+     } else {
+         frameSize = [self frame].size;
+         info.width_mm = 0;
+@@ -711,8 +731,17 @@
  
      info.xoff = 0;
      info.yoff = 0;
 -    info.width = frameSize.width * [[self window] backingScaleFactor];
 -    info.height = frameSize.height * [[self window] backingScaleFactor];
 +    NSSize backingFrameSize = [self convertSizeToBacking:frameSize];
-+    info.width = backingFrameSize.width;
-+    info.height = backingFrameSize.height;
++    CGFloat backingScale = [[self window] backingScaleFactor];
++    /* Keep the corresponding Hyprland logical dimensions integral. */
++    uint32_t cleanScaleDivisor = backingScale > 1.75 ? 2 :
++                                 backingScale > 1.25 ? 3 : 1;
++    info.width = MAX(cleanScaleDivisor,
++                     (uint32_t)backingFrameSize.width / cleanScaleDivisor *
++                         cleanScaleDivisor);
++    info.height = MAX(cleanScaleDivisor,
++                      (uint32_t)backingFrameSize.height / cleanScaleDivisor *
++                          cleanScaleDivisor);
  
      dpy_set_ui_info(dcl.con, &info, TRUE);
  }
-@@ -1290,7 +1305,25 @@
+@@ -1290,7 +1319,25 @@
  - (IBAction) do_about_menu_item: (id) sender;
  - (void)adjustSpeed:(id)sender;
  @end
@@ -86,7 +113,7 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +    CGFloat backingScale = hostScreen ? [hostScreen backingScaleFactor] : 1.0;
 +    NSSize size = NSMakeSize(1920.0 / MAX(backingScale, 1.0),
 +                             1080.0 / MAX(backingScale, 1.0));
- 
++
 +    if (hostScreen) {
 +        NSSize available = [hostScreen visibleFrame].size;
 +        CGFloat fit = MIN(1.0, MIN(available.width * 0.9 / size.width,
@@ -94,14 +121,14 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
 +        size.width = floor(size.width * fit);
 +        size.height = floor(size.height * fit);
 +    }
-+
+ 
 +    return NSMakeRect(0.0, 0.0, size.width, size.height);
 +}
 +
  @implementation QemuCocoaAppController
  #ifdef CONFIG_OPENGL
  - (id) initWithCGL:(BOOL)cgl
-@@ -1304,7 +1337,7 @@
+@@ -1304,7 +1351,7 @@
  
      self = [super init];
      if (self) {
@@ -110,21 +137,20 @@ diff --git a/ui/cocoa.m b/ui/cocoa.m
  
          // create a view and add it to the window
  #ifdef CONFIG_OPENGL
-@@ -1395,18 +1428,29 @@
- }
+@@ -1398,17 +1445,28 @@
  
  - (void)windowDidChangeScreen:(NSNotification *)notification
-+{
-+    [cocoaView updateScale];
-+    [cocoaView updateUIInfo];
-+}
-+
-+- (void)windowDidChangeBackingProperties:(NSNotification *)notification
  {
 +    [cocoaView updateScale];
      [cocoaView updateUIInfo];
  }
  
++- (void)windowDidChangeBackingProperties:(NSNotification *)notification
++{
++    [cocoaView updateScale];
++    [cocoaView updateUIInfo];
++}
++
  - (void)windowDidEnterFullScreen:(NSNotification *)notification
  {
 +    [cocoaView updateScale];

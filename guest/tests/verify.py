@@ -103,6 +103,9 @@ def main() -> None:
         (connector / "status").write_text("connected\n", encoding="utf-8")
         qemu_edid = bytearray(384)
         qemu_edid[:8] = b"\x00\xff\xff\xff\xff\xff\xff\x00"
+        # A 2560x1440-point Cocoa window encoded at 110 logical DPI. With 2x
+        # backing this 5120x2880 mode maps to Hyprland scale 2.
+        qemu_edid[21:23] = bytes([59, 33])
         qemu_edid[126] = 2
         # QEMU encodes its dynamic 5120x2880@60 mode in a DisplayID 1.3
         # Type I detailed timing block, not in the base EDID descriptors.
@@ -122,10 +125,10 @@ def main() -> None:
         (legacy_connector / "status").write_text("connected\n", encoding="utf-8")
         legacy_edid = bytearray(128)
         legacy_edid[:8] = b"\x00\xff\xff\xff\xff\xff\xff\x00"
-        # Legacy 1920x1080@60 DTD: 148.5 MHz, 280 H blanking, 45 V blanking,
-        # with negative horizontal and vertical sync.
+        # Legacy 1920x1080@60 DTD on a low-PPI 509x286 mm display, with
+        # 280 H blanking, 45 V blanking, and negative H/V sync.
         legacy_edid[54:72] = bytes.fromhex(
-            "02 3a 80 18 71 38 2d 40 58 2c 45 00 00 00 00 00 00 18"
+            "02 3a 80 18 71 38 2d 40 58 2c 45 00 fd 1e 11 00 00 18"
         )
         legacy_edid[127] = (-sum(legacy_edid[:127])) & 0xFF
         (legacy_connector / "edid").write_bytes(legacy_edid)
@@ -166,10 +169,10 @@ HOTPLUG=1
         check(
             reload_log.read_text(encoding="utf-8").splitlines()
             == [
-                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync" })',
-                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync" })',
-                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync" })',
-                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync" })',
+                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync", scale = "2" })',
+                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync", scale = "1" })',
+                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync", scale = "2" })',
+                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync", scale = "1" })',
             ],
             "native display sync handles QEMU DisplayID and legacy EDID hotplug modes",
         )
