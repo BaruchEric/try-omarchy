@@ -26,3 +26,15 @@ struct VMRunLifecycle: Equatable {
         stopIntent = .none
     }
 }
+
+struct VMExitPresentationDecision: Equatable {
+    let showsStartupFailure: Bool
+
+    static func make(status: Int32, reachedVirtualMachineStart: Bool, wasStopping: Bool) -> Self {
+        Self(
+            showsStartupFailure: status != 0
+                && !reachedVirtualMachineStart
+                && !wasStopping
+        )
+    }
+}

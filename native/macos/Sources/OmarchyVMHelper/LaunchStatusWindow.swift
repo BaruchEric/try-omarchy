@@ -16,7 +16,6 @@ final class LaunchStatusWindow {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.level = .floating
 
         let title = NSTextField(labelWithString: "Starting Try Omarchy")
         title.font = .systemFont(ofSize: 20, weight: .semibold)

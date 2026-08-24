@@ -155,6 +155,28 @@ struct MicrophoneLaunchDecisionTests {
         #expect(decision.allowsLaunch)
         #expect(decision.warning == nil)
     }
+
+    @Test("an unrequested microphone remains optional")
+    func notDeterminedStillLaunches() {
+        let decision = MicrophoneLaunchDecision.make(for: .notDetermined)
+        #expect(decision.allowsLaunch)
+        #expect(decision.warning?.contains("was not requested") == true)
+    }
+}
+
+@Suite("First-launch permission setup")
+struct PermissionSetupCompletionStoreTests {
+    @Test("setup is shown until the person explicitly finishes it")
+    func completionPersists() throws {
+        let suiteName = "PermissionSetupCompletionStoreTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = PermissionSetupCompletionStore(defaults: defaults)
+
+        #expect(!store.isComplete)
+        store.markComplete()
+        #expect(store.isComplete)
+    }
 }
 
 @Suite("Accessibility launch policy")

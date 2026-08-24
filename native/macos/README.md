@@ -32,10 +32,14 @@ their non-system dynamic-library closure are signed inside the app.
 
 ## Install and first launch
 
-Open the DMG, drag **Try Omarchy** to Applications, and open it. The first
-launch shows a small preparation window while the signed compressed factory
-image is expanded and verified. Omarchy then presents its own owner setup for
-keyboard, account, hostname, timezone, and the rest of the normal setup flow.
+Open the DMG, drag **Try Omarchy** to Applications, and open it. On the first
+launch, a short setup window explains Accessibility and Microphone access one
+at a time. Each permission is optional and macOS only asks for it after the
+person clicks its Allow button. After the person clicks **Launch Omarchy**, that
+button shows launch progress while the signed compressed factory image is
+expanded and verified. The setup window closes when the VM is ready. Omarchy
+then presents its own owner setup for keyboard, account, hostname, timezone, and
+the rest of the normal setup flow.
 
 Closing the QEMU window ends the current cold-boot session. Opening the app
 again boots the same disk: the owner account, settings, files, installed
@@ -66,7 +70,7 @@ Launch it:
 npm run omarchy:native
 ```
 
-The first launch may ask for two macOS permissions:
+The first-launch setup offers two macOS permissions:
 
 - **Accessibility** lets **Try Omarchy** capture Command only while its QEMU
   window is focused and translate it to guest Super.
@@ -77,6 +81,8 @@ Accessibility is optional and never blocks the VM from starting. If macOS does
 not recognize the grant until the app is relaunched, Omarchy continues without
 Command-to-Super mapping for that session. Enable **Try Omarchy** in
 Accessibility settings and the mapping becomes available on a later launch.
+Microphone access is not requested during startup or when the permission is
+skipped.
 
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
 resizable window and back. Closing QEMU powers off that session cleanly.

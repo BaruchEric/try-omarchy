@@ -7,7 +7,8 @@ usage() {
 Usage: native/macos/build-qemu-gpu-runtime.sh [--archive-dir DIR]
 
 Build the pinned startergo QEMU/VirGL source stack with Try Omarchy's Cocoa
-dynamic-display patch, then relocate, sign, validate, and atomically stage it at:
+identity and dynamic-display patches, then relocate, sign, validate, and
+atomically stage it at:
   native/macos/.build/qemu-gpu-runtime
 
 The build is Apple-Silicon/HVF-only. It enables Cocoa+VirGL, SLIRP user
@@ -40,6 +41,7 @@ while (($#)); do
 done
 
 native_dir=$(cd "$(dirname "$0")" && pwd -P)
+identity_patch="$native_dir/patches/qemu-cocoa-product-identity.patch"
 display_patch="$native_dir/patches/qemu-cocoa-dynamic-display.patch"
 audio_device_patch="$native_dir/patches/qemu-sdl-audio-device-selection.patch"
 prepare_runtime="$native_dir/prepare-qemu-gpu-runtime.sh"
@@ -57,6 +59,7 @@ startergo_url="https://github.com/startergo/homebrew-qemu-virgl-kosmickrisp/arch
 startergo_sha256=8b02c2bc4177047cb516f0cd5b510aa7a7aed2bdb3fb1d8507faf45fa5adc5a9
 texture_patch_sha256=428528d3203fe487e7aac21f313bc83e53ad22168e8fd39aa9eb1791bc157903
 gpu_fix_patch_sha256=2b0a589d5821fbbfaa65177c97395ec50382373373e5c6860821279f07d62bb2
+identity_patch_sha256=5c9358c2858a74d6a678eacaae550a021f3e616c98c4e4e98c0e50bd869a0666
 display_patch_sha256=93fc190b8fb4d71e53b0c1b58c77ff81c4f742126913310c2bcbfc90f7af8302
 audio_device_patch_sha256=20469691f4cdabcd6b9513d6bf00fab9f66983e17b1e8477cc2e5ac47416feed
 
@@ -114,6 +117,8 @@ done
 macos_major=$(sw_vers -productVersion | awk -F. '{ print $1 }')
 [[ $macos_major =~ ^[0-9]+$ ]] || die "could not determine the macOS version"
 ((macos_major >= 15)) || die "the pinned GPU bottles require macOS 15 or newer"
+[[ -f $identity_patch && ! -L $identity_patch ]] || \
+  die "missing Cocoa product-identity patch: $identity_patch"
 [[ -f $display_patch && ! -L $display_patch ]] || \
   die "missing dynamic-display patch: $display_patch"
 [[ -f $audio_device_patch && ! -L $audio_device_patch ]] || \
@@ -292,13 +297,16 @@ texture_patch="$startergo_dir/patches/qemu-texture-borrowing.patch"
 gpu_fix_patch="$startergo_dir/patches/gpu-spike-resolution-fix.patch"
 verify_file_sha "startergo texture-borrowing patch" "$texture_patch" "$texture_patch_sha256"
 verify_file_sha "startergo GPU-resolution patch" "$gpu_fix_patch" "$gpu_fix_patch_sha256"
+verify_file_sha "Try Omarchy Cocoa product-identity patch" \
+  "$identity_patch" "$identity_patch_sha256"
 verify_file_sha "Try Omarchy dynamic-display patch" "$display_patch" "$display_patch_sha256"
 verify_file_sha "Try Omarchy SDL audio-device patch" \
   "$audio_device_patch" "$audio_device_patch_sha256"
 
-log "Applying the exact render, dynamic-display, and audio-device patches"
+log "Applying the exact render, product-identity, dynamic-display, and audio-device patches"
 patch -d "$source_dir" -p1 -f -i "$texture_patch"
 patch -d "$source_dir" -p1 -f -i "$gpu_fix_patch"
+patch -d "$source_dir" -p1 -f -i "$identity_patch"
 patch -d "$source_dir" -p1 -f -i "$display_patch"
 patch -d "$source_dir" -p1 -f -i "$audio_device_patch"
 

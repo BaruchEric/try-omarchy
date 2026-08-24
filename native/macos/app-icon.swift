@@ -55,40 +55,43 @@ NSGraphicsContext.current = graphicsContext
 NSColor.clear.setFill()
 NSRect(origin: .zero, size: iconSize).fill()
 
-let tile = NSRect(x: 42, y: 42, width: 940, height: 940)
+// Keep the artwork inside macOS's app-icon safe area. A nearly edge-to-edge
+// tile is visually enlarged again by the Dock and looks bigger than native
+// neighboring icons.
+let tile = NSRect(x: 100, y: 100, width: 824, height: 824)
 roundedRect(
     tile,
-    radius: 218,
+    radius: 191,
     fill: color(21, 25, 18),
     stroke: color(168, 205, 114, alpha: 0.28),
     lineWidth: 4
 )
 NSGraphicsContext.saveGraphicsState()
-NSBezierPath(roundedRect: tile, xRadius: 218, yRadius: 218).addClip()
+NSBezierPath(roundedRect: tile, xRadius: 191, yRadius: 191).addClip()
 NSGradient(
     starting: color(38, 45, 31, alpha: 0.72),
     ending: color(21, 25, 18, alpha: 0)
-)?.draw(in: NSRect(x: 44, y: 44, width: 936, height: 470), angle: 90)
+)?.draw(in: NSRect(x: 102, y: 102, width: 820, height: 412), angle: 90)
 NSGraphicsContext.restoreGraphicsState()
 
 roundedRect(
-    NSRect(x: 168, y: 168, width: 334, height: 334),
-    radius: 76,
+    NSRect(x: 211, y: 211, width: 293, height: 293),
+    radius: 67,
     fill: color(168, 205, 114)
 )
 roundedRect(
-    NSRect(x: 590, y: 168, width: 264, height: 264),
-    radius: 64,
+    NSRect(x: 581, y: 211, width: 231, height: 231),
+    radius: 56,
     fill: color(124, 158, 76)
 )
 roundedRect(
-    NSRect(x: 168, y: 590, width: 264, height: 264),
-    radius: 64,
+    NSRect(x: 211, y: 581, width: 231, height: 231),
+    radius: 56,
     fill: color(124, 158, 76)
 )
 roundedRect(
-    NSRect(x: 522, y: 522, width: 332, height: 332),
-    radius: 76,
+    NSRect(x: 521, y: 521, width: 291, height: 291),
+    radius: 67,
     fill: color(202, 224, 166)
 )
 

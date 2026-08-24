@@ -31,7 +31,7 @@ resources_dir=$(cd "$script_dir/.." && pwd -P)
 contents_dir=$(cd "$resources_dir/.." && pwd -P)
 app_bundle=$(cd "$contents_dir/.." && pwd -P)
 guest_input=${1:-"$resources_dir/guest"}
-qemu_bin="$resources_dir/runtime/bin/qemu-system-aarch64"
+qemu_bin="$resources_dir/runtime/bin/Try Omarchy"
 input_bridge="$contents_dir/MacOS/omarchy-vm-helper"
 storage_library="$script_dir/qemu-persistent-storage.sh"
 
@@ -63,6 +63,9 @@ fi
   fail "missing bundled focused Command-key bridge at $input_bridge"
 }
 file "$qemu_bin" | grep -q 'arm64' || fail "staged QEMU is not an ARM64 executable"
+LC_ALL=C grep -aFq 'TryOmarchy.icns' "$qemu_bin" || {
+  fail "staged QEMU lacks the Try Omarchy macOS identity; rerun npm run omarchy:native:prepare"
+}
 for marker in \
   OMARCHY_SDL_AUDIO_CONTROL_DIRECTORY \
   OMARCHY_SDL_INPUT_DEVICE_NAME \
@@ -766,7 +769,7 @@ qemu_persistent_storage_select \
 working_disk=$QEMU_SELECTED_DISK
 
 qemu_args=(
-  -name 'Try Omarchy ARM64 - QEMU VirGL'
+  -name 'Try Omarchy'
   # HVF exposes the ARM virtual GICv2 interface on current Apple Silicon.
   # Eight vCPUs is the architectural GICv2 limit and matches our host cap.
   -machine 'virt,accel=hvf,gic-version=2'
@@ -852,6 +855,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+echo "[qemu-gpu] Ready." >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling input
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.

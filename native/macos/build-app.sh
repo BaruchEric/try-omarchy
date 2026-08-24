@@ -48,6 +48,7 @@ native_dir=$(cd "$(dirname "$0")" && pwd)
 helper="$native_dir/.build/release/omarchy-vm-helper"
 app="$native_dir/.build/Try Omarchy.app"
 contents="$app/Contents"
+bundled_qemu="$contents/Resources/runtime/bin/Try Omarchy"
 module_cache="$native_dir/.build/module-cache"
 runtime_source="$native_dir/.build/qemu-gpu-runtime"
 repo_dir=$(cd "$native_dir/../.." && pwd -P)
@@ -153,10 +154,16 @@ for guest_resource in \
     echo "build-app: factory guest resource is missing or unsafe: $guest_resource" >&2
     exit 1
   }
-  install -m 0644 "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
+  if [[ $guest_resource == rootfs.ext4.zst ]]; then
+    cp -c "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
+  else
+    cp "$guest_dir/$guest_resource" "$contents/Resources/guest/$guest_resource"
+  fi
+  chmod 0644 "$contents/Resources/guest/$guest_resource"
 done
 
 "$dependency_bundler" "$contents/Resources/runtime"
+mv "$contents/Resources/runtime/bin/qemu-system-aarch64" "$bundled_qemu"
 
 sign_options=(--force --sign "$sign_identity")
 if [[ $sign_identity != - ]]; then
@@ -168,7 +175,7 @@ done
 codesign "${sign_options[@]}" "$contents/Resources/runtime/bin/zstd"
 codesign "${sign_options[@]}" \
   --entitlements "$native_dir/qemu-hvf.entitlements" \
-  "$contents/Resources/runtime/bin/qemu-system-aarch64"
+  "$bundled_qemu"
 codesign "${sign_options[@]}" \
   --entitlements "$native_dir/omarchy-vm-helper.entitlements" \
   "$contents/MacOS/omarchy-vm-helper"

@@ -98,6 +98,7 @@ enum MicrophoneAuthorizationState: Equatable {
     case authorized
     case denied
     case restricted
+    case notDetermined
 }
 
 enum AccessibilityAuthorizationState: Equatable {
@@ -140,59 +141,43 @@ struct MicrophoneLaunchDecision: Equatable {
                 allowsLaunch: true,
                 warning: "Microphone access is restricted by macOS policy. Audio playback will continue, but guest recording is unavailable. Ask the Mac administrator to allow microphone access for Try Omarchy."
             )
+        case .notDetermined:
+            Self(
+                allowsLaunch: true,
+                warning: "Microphone access was not requested. Audio playback will continue, but guest recording is unavailable until access is enabled."
+            )
         }
     }
 }
 
 enum MicrophonePreflight {
-    private final class RequestResult: @unchecked Sendable {
-        private let lock = NSLock()
-        private var granted = false
-
-        func set(_ granted: Bool) {
-            lock.lock()
-            self.granted = granted
-            lock.unlock()
-        }
-
-        func get() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return granted
+    static func authorizationState() -> MicrophoneAuthorizationState {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return .authorized
+        case .denied:
+            return .denied
+        case .restricted:
+            return .restricted
+        case .notDetermined:
+            return .notDetermined
+        @unknown default:
+            return .restricted
         }
     }
 
+    static func requestAccess(completion: @escaping (Bool) -> Void) {
+        AVCaptureDevice.requestAccess(for: .audio, completionHandler: completion)
+    }
+
     static func decision() -> MicrophoneLaunchDecision {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return .make(for: .authorized)
-        case .denied:
-            return .make(for: .denied)
-        case .restricted:
-            return .make(for: .restricted)
-        case .notDetermined:
-            let completion = DispatchSemaphore(value: 0)
-            let result = RequestResult()
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                result.set(granted)
-                completion.signal()
-            }
-            while completion.wait(timeout: .now() + 0.05) == .timedOut {
-                _ = RunLoop.current.run(
-                    mode: .default,
-                    before: Date(timeIntervalSinceNow: 0.05)
-                )
-            }
-            return .make(for: result.get() ? .authorized : .denied)
-        @unknown default:
-            return .make(for: .restricted)
-        }
+        .make(for: authorizationState())
     }
 }
 
 final class QEMUGPUProcessSupervisor: @unchecked Sendable {
     enum LaunchEvent: Equatable {
-        case virtualMachineStarting
+        case virtualMachineReady
     }
 
     private let lock = NSLock()
@@ -225,7 +210,7 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             try? FileHandle.standardError.write(contentsOf: data)
             if self?.recordStandardError(data) == true {
                 DispatchQueue.main.async {
-                    launchEvent(.virtualMachineStarting)
+                    launchEvent(.virtualMachineReady)
                 }
             }
         }
@@ -290,7 +275,7 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             errorBuffer = String(errorBuffer.suffix(4_096))
         }
         guard !didReportVirtualMachineStart,
-              errorBuffer.contains("[qemu-gpu] Starting") else { return false }
+              errorBuffer.contains("[qemu-gpu] Ready") else { return false }
         didReportVirtualMachineStart = true
         return true
     }

@@ -11,11 +11,14 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     private let supervisor: QEMUGPUProcessSupervisor
     private let preferenceStore: AudioRoutingPreferenceStore
     private let deviceProvider: HostAudioDeviceProviding
+    private let setupCompletionStore: PermissionSetupCompletionStore
     private let launchStatusWindow = LaunchStatusWindow()
+    private var permissionSetupWindow: PermissionSetupWindow?
 
     private var lifecycle = VMRunLifecycle()
     private var childRunning = false
     private var applicationTerminationPending = false
+    private var virtualMachineReachedStart = false
 
     private(set) var exitStatus: Int32 = 0
 
@@ -25,7 +28,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         baseEnvironment: [String: String] = ProcessInfo.processInfo.environment,
         supervisor: QEMUGPUProcessSupervisor = QEMUGPUProcessSupervisor(),
         preferenceStore: AudioRoutingPreferenceStore = AudioRoutingPreferenceStore(),
-        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider()
+        deviceProvider: HostAudioDeviceProviding = CoreAudioHostAudioDeviceProvider(),
+        setupCompletionStore: PermissionSetupCompletionStore = PermissionSetupCompletionStore()
     ) {
         self.launcherURL = launcherURL
         self.initialArguments = initialArguments
@@ -33,12 +37,53 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         self.supervisor = supervisor
         self.preferenceStore = preferenceStore
         self.deviceProvider = deviceProvider
+        self.setupCompletionStore = setupCompletionStore
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        launchStatusWindow.show()
+        if setupCompletionStore.isComplete {
+            startVirtualMachine(showLaunchStatus: true)
+        } else {
+            showPermissionSetup()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        permissionSetupWindow?.refreshPermissionStatus()
+    }
+
+    private func showPermissionSetup() {
+        let setupWindow = PermissionSetupWindow(
+            accessibilityStatus: { AXIsProcessTrusted() },
+            microphoneStatus: { MicrophonePreflight.authorizationState() },
+            requestAccessibility: { [weak self] in
+                self?.requestOptionalAccessibilityPermission()
+            },
+            requestMicrophone: { completion in
+                MicrophonePreflight.requestAccess(completion: completion)
+            },
+            finish: { [weak self] in
+                self?.completePermissionSetup()
+            }
+        )
+        permissionSetupWindow = setupWindow
+        setupWindow.show()
+    }
+
+    private func completePermissionSetup() {
+        setupCompletionStore.markComplete()
+        startVirtualMachine(showLaunchStatus: false)
+    }
+
+    private func startVirtualMachine(showLaunchStatus: Bool) {
+        virtualMachineReachedStart = false
+        if showLaunchStatus {
+            launchStatusWindow.show()
+        }
         do {
-            let accessibilityDecision = requestOptionalAccessibilityPermission()
+            let accessibilityDecision = AccessibilityLaunchDecision.make(
+                for: AXIsProcessTrusted() ? .authorized : .unavailable
+            )
             if let warning = accessibilityDecision.warning {
                 fputs("[input-bridge] \(warning)\n", stderr)
             }
@@ -92,8 +137,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             arguments: arguments,
             environment: configuration.environment,
             launchEvent: { [weak self] event in
-                if event == .virtualMachineStarting {
-                    self?.launchStatusWindow.dismiss()
+                if event == .virtualMachineReady {
+                    self?.virtualMachineDidStart()
                 }
             }
         ) { [weak self] status in
@@ -102,23 +147,35 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
         childRunning = true
     }
 
-    private func requestOptionalAccessibilityPermission() -> AccessibilityLaunchDecision {
-        guard !AXIsProcessTrusted() else { return .make(for: .authorized) }
+    private func virtualMachineDidStart() {
+        virtualMachineReachedStart = true
+        permissionSetupWindow?.dismiss()
+        permissionSetupWindow = nil
+        launchStatusWindow.dismiss()
+    }
+
+    private func requestOptionalAccessibilityPermission() {
+        guard !AXIsProcessTrusted() else { return }
         let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
         _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-        return .make(for: AXIsProcessTrusted() ? .authorized : .unavailable)
     }
 
     private func childDidExit(status: Int32) {
         guard childRunning else { return }
         childRunning = false
 
+        let wasStopping = lifecycle.isStopping
+        let presentation = VMExitPresentationDecision.make(
+            status: status,
+            reachedVirtualMachineStart: virtualMachineReachedStart,
+            wasStopping: wasStopping
+        )
         lifecycle.childExited()
         launchStatusWindow.dismiss()
         if applicationTerminationPending {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
-            if status != 0 {
+            if presentation.showsStartupFailure {
                 let alert = NSAlert()
                 alert.alertStyle = .critical
                 alert.messageText = "Try Omarchy couldn’t start"
@@ -132,6 +189,8 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
 
     private func failLaunch(_ error: Error) {
         fputs("omarchy-vm-helper: \(error.localizedDescription)\n", stderr)
+        permissionSetupWindow?.dismiss()
+        permissionSetupWindow = nil
         launchStatusWindow.dismiss()
         let alert = NSAlert()
         alert.alertStyle = .critical

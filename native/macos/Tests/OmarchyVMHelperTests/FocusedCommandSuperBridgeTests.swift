@@ -173,17 +173,24 @@ struct QMPMetaKeyClientTests {
 
 @Suite("Kernel QEMU process identity")
 struct KernelProcessIdentityTests {
-    @Test("accepts only an exact qemu-system executable basename")
+    @Test("accepts the branded app runtime and exact qemu-system basenames")
     func validatesExecutableName() {
-        let valid = KernelProcessIdentity(
-            processIdentifier: 42,
-            executablePath: "/private/runtime/qemu-system-aarch64",
-            startSeconds: 100,
-            startMicroseconds: 200
-        )
-        #expect(valid.isQEMUSystemProcess)
+        for path in [
+            "/private/runtime/Try Omarchy",
+            "/private/runtime/qemu-system-aarch64",
+        ] {
+            let valid = KernelProcessIdentity(
+                processIdentifier: 42,
+                executablePath: path,
+                startSeconds: 100,
+                startMicroseconds: 200
+            )
+            #expect(valid.isQEMUSystemProcess)
+        }
 
         for path in [
+            "/private/runtime/Try Omarchy.app",
+            "/private/runtime/not Try Omarchy",
             "/private/runtime/qemu-system-",
             "/private/runtime/not-qemu-system-aarch64",
             "/private/runtime/qemu-system-aarch64.app",

@@ -225,4 +225,34 @@ struct VMRunLifecycleTests {
         lifecycle.childExited()
         #expect(!lifecycle.isStopping)
     }
+
+    @Test("a forced VM close after launch is not reported as a startup failure")
+    func forcedCloseAfterLaunchDoesNotWarn() {
+        let decision = VMExitPresentationDecision.make(
+            status: 137,
+            reachedVirtualMachineStart: true,
+            wasStopping: false
+        )
+        #expect(!decision.showsStartupFailure)
+    }
+
+    @Test("an app termination during launch is not reported as a startup failure")
+    func terminationDuringLaunchDoesNotWarn() {
+        let decision = VMExitPresentationDecision.make(
+            status: 143,
+            reachedVirtualMachineStart: false,
+            wasStopping: true
+        )
+        #expect(!decision.showsStartupFailure)
+    }
+
+    @Test("a genuine non-zero exit before launch still reports a startup failure")
+    func genuineStartupFailureWarns() {
+        let decision = VMExitPresentationDecision.make(
+            status: 1,
+            reachedVirtualMachineStart: false,
+            wasStopping: false
+        )
+        #expect(decision.showsStartupFailure)
+    }
 }
