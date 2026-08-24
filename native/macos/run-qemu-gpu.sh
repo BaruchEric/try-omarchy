@@ -862,21 +862,24 @@ bridge_pid=$!
   "$qemu_pid" "$audio_bridge_socket" "$audio_route_dir" 9>&- &
 audio_bridge_pid=$!
 
-# Bash 3.2 has no `wait -n`. Poll both children so a bridge failure at any
-# point terminates QEMU instead of leaving an unmodified Command key behind.
+# Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
+# transport, but Command-to-Super is an optional convenience: a delayed or
+# stale macOS Accessibility grant must never prevent Omarchy from booting.
 while true; do
   qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
   [[ -n $qemu_state && $qemu_state != *Z* ]] || break
 
-  bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-  if [[ -z $bridge_state || $bridge_state == *Z* ]]; then
-    if wait "$bridge_pid"; then
-      bridge_status=0
-    else
-      bridge_status=$?
+  if [[ -n $bridge_pid ]]; then
+    bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $bridge_state || $bridge_state == *Z* ]]; then
+      if wait "$bridge_pid"; then
+        bridge_status=0
+      else
+        bridge_status=$?
+      fi
+      bridge_pid=""
+      echo "[qemu-gpu] Command-to-Super mapping is unavailable (status $bridge_status); continuing without it." >&2
     fi
-    bridge_pid=""
-    fail "focused Command-key bridge exited while QEMU was running (status $bridge_status)"
   fi
 
   audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)
@@ -899,16 +902,18 @@ else
 fi
 qemu_pid=""
 
-for ((attempt = 0; attempt < 40; attempt++)); do
+if [[ -n $bridge_pid ]]; then
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
+    [[ -n $bridge_state && $bridge_state != *Z* ]] || break
+    sleep 0.05
+  done
   bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-  [[ -n $bridge_state && $bridge_state != *Z* ]] || break
-  sleep 0.05
-done
-bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-if [[ -n $bridge_state && $bridge_state != *Z* ]]; then
-  terminate_child "$bridge_pid" 20
-else
-  wait "$bridge_pid" 2>/dev/null || true
+  if [[ -n $bridge_state && $bridge_state != *Z* ]]; then
+    terminate_child "$bridge_pid" 20
+  else
+    wait "$bridge_pid" 2>/dev/null || true
+  fi
 fi
 bridge_pid=""
 

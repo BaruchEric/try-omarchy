@@ -156,3 +156,21 @@ struct MicrophoneLaunchDecisionTests {
         #expect(decision.warning == nil)
     }
 }
+
+@Suite("Accessibility launch policy")
+struct AccessibilityLaunchDecisionTests {
+    @Test("an unavailable grant never blocks Omarchy startup")
+    func unavailableStillLaunches() {
+        let decision = AccessibilityLaunchDecision.make(for: .unavailable)
+        #expect(decision.allowsLaunch)
+        #expect(decision.warning?.contains("start without Command-to-Super mapping") == true)
+        #expect(decision.warning?.contains("later launch") == true)
+    }
+
+    @Test("authorization launches without a warning")
+    func authorizedHasNoWarning() {
+        let decision = AccessibilityLaunchDecision.make(for: .authorized)
+        #expect(decision.allowsLaunch)
+        #expect(decision.warning == nil)
+    }
+}

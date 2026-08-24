@@ -100,6 +100,28 @@ enum MicrophoneAuthorizationState: Equatable {
     case restricted
 }
 
+enum AccessibilityAuthorizationState: Equatable {
+    case authorized
+    case unavailable
+}
+
+struct AccessibilityLaunchDecision: Equatable {
+    let allowsLaunch: Bool
+    let warning: String?
+
+    static func make(for state: AccessibilityAuthorizationState) -> Self {
+        switch state {
+        case .authorized:
+            Self(allowsLaunch: true, warning: nil)
+        case .unavailable:
+            Self(
+                allowsLaunch: true,
+                warning: "Accessibility is not active yet; Omarchy will start without Command-to-Super mapping. The mapping becomes available on a later launch after macOS recognizes the grant."
+            )
+        }
+    }
+}
+
 struct MicrophoneLaunchDecision: Equatable {
     let allowsLaunch: Bool
     let warning: String?

@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import Darwin
 import Foundation
 
@@ -16,30 +15,6 @@ private func effectiveArguments() -> [String] {
         return Array(supplied)
     }
     return Bundle.main.bundleURL.pathExtension == "app" ? ["--run-qemu"] : []
-}
-
-@discardableResult
-private func requestAccessibilityPermission() -> Bool {
-    let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-    return AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
-}
-
-@MainActor
-private func waitForAccessibilityPermission() -> Bool {
-    guard !AXIsProcessTrusted() else { return true }
-
-    requestAccessibilityPermission()
-    let deadline = Date(timeIntervalSinceNow: 300)
-    while Date() < deadline {
-        if AXIsProcessTrusted() {
-            return true
-        }
-        _ = RunLoop.current.run(
-            mode: .default,
-            before: Date(timeIntervalSinceNow: 0.25)
-        )
-    }
-    return AXIsProcessTrusted()
 }
 
 let arguments = effectiveArguments()
@@ -74,9 +49,6 @@ do {
         guard arguments.count == 3,
               let processIdentifier = Int32(arguments[1]),
               processIdentifier > 1 else { usage() }
-        if !AXIsProcessTrusted() {
-            requestAccessibilityPermission()
-        }
         guard AXIsProcessTrusted() else {
             throw HelperError.io(
                 "Accessibility permission is required for focused Command-key capture; grant it in System Settings, then retry"
@@ -104,18 +76,6 @@ do {
         }
         let launcher = try QEMUGPULauncherPath.resolve(bundleURL: Bundle.main.bundleURL)
         let launcherArguments = try request.validatedScriptArguments()
-        guard MainActor.assumeIsolated({ waitForAccessibilityPermission() }) else {
-            throw HelperError.io(
-                "timed out waiting for Accessibility permission; enable Omarchy Quattro in System Settings, then retry"
-            )
-        }
-        let microphoneDecision = MicrophonePreflight.decision()
-        if let warning = microphoneDecision.warning {
-            fputs("[audio] \(warning)\n", stderr)
-        }
-        guard microphoneDecision.allowsLaunch else {
-            throw HelperError.io("microphone policy unexpectedly prevented audio playback")
-        }
 
         // The executable's top level starts on the process main thread. Make
         // that invariant explicit so the AppKit lifecycle stays MainActor

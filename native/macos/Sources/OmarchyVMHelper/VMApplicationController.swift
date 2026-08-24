@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Darwin
 import Foundation
 
@@ -37,6 +38,20 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         launchStatusWindow.show()
         do {
+            let accessibilityDecision = requestOptionalAccessibilityPermission()
+            if let warning = accessibilityDecision.warning {
+                fputs("[input-bridge] \(warning)\n", stderr)
+            }
+            guard accessibilityDecision.allowsLaunch else {
+                throw HelperError.io("accessibility policy unexpectedly prevented launch")
+            }
+            let microphoneDecision = MicrophonePreflight.decision()
+            if let warning = microphoneDecision.warning {
+                fputs("[audio] \(warning)\n", stderr)
+            }
+            guard microphoneDecision.allowsLaunch else {
+                throw HelperError.io("microphone policy unexpectedly prevented audio playback")
+            }
             try launch(arguments: initialArguments)
         } catch {
             failLaunch(error)
@@ -85,6 +100,13 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             self?.childDidExit(status: status)
         }
         childRunning = true
+    }
+
+    private func requestOptionalAccessibilityPermission() -> AccessibilityLaunchDecision {
+        guard !AXIsProcessTrusted() else { return .make(for: .authorized) }
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+        return .make(for: AXIsProcessTrusted() ? .authorized : .unavailable)
     }
 
     private func childDidExit(status: Int32) {

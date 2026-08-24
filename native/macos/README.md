@@ -73,10 +73,10 @@ The first launch may ask for two macOS permissions:
 - **Microphone** lets software inside the guest record host audio input. If it
   is denied, speaker playback still works and only guest recording is disabled.
 
-Accessibility is checked before QEMU starts. If macOS no longer recognizes a
-rebuilt ad-hoc-signed app, its permission prompt opens Accessibility settings.
-Enable **Omarchy Quattro** (or toggle it off and on); the waiting launcher
-detects the grant and continues into QEMU automatically.
+Accessibility is optional and never blocks the VM from starting. If macOS does
+not recognize the grant until the app is relaunched, Omarchy continues without
+Command-to-Super mapping for that session. Enable **Omarchy Quattro** in
+Accessibility settings and the mapping becomes available on a later launch.
 
 The launcher starts fullscreen. Press Control-Option-F to toggle into a freely
 resizable window and back. Closing QEMU powers off that session cleanly.
