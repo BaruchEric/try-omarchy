@@ -65,7 +65,7 @@ def main() -> None:
         guest["profile"] = spec["guest"]["profile"]
     payload = {
         "schemaVersion": 1,
-        "kind": "omarchy-web-guest-artifacts",
+        "kind": "try-omarchy-guest-artifacts",
         "upstream": spec["upstream"],
         "normalizedUpstreamTree": source_tree,
         "build": {

@@ -1,7 +1,3 @@
-/dist/
-/dist-aarch64/
-/dist-aarch64-unprovisioned/
 /.work/
-/.work-container/
 __pycache__/
 *.pyc

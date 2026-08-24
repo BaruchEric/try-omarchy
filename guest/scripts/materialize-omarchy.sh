@@ -188,21 +188,21 @@ install_file 0644 "$source_dir/icon.png" "$root/usr/share/pixmaps/omarchy.png"
 install_file 0644 "$source_dir/icon.png" "$root/usr/share/icons/hicolor/256x256/apps/omarchy.png"
 
 # These are package scriptlet sources used by Omarchy's own reset/refresh
-# commands. They stay authentic without overwriting the browser VM's /etc files.
+# commands. They stay authentic without overwriting the factory image's /etc files.
 mkdir -p "$omarchy_root/etc-overrides"
 install_file 0644 "$source_dir/default/bashrc" "$omarchy_root/etc-overrides/dot.bashrc"
 install_file 0644 "$source_dir/etc/nsswitch.conf" "$omarchy_root/etc-overrides/nsswitch.conf"
 install_file 0644 "$source_dir/etc/security/faillock.conf" "$omarchy_root/etc-overrides/security-faillock.conf"
 install_file 0644 "$source_dir/etc/plymouth/plymouthd.conf" "$omarchy_root/etc-overrides/plymouth-plymouthd.conf"
 
-mkdir -p "$root/usr/share/omarchy-web"
-install_file 0644 "$spec" "$root/usr/share/omarchy-web/build-spec.json"
+mkdir -p "$root/usr/share/try-omarchy"
+install_file 0644 "$spec" "$root/usr/share/try-omarchy/build-spec.json"
 if [[ -d $source_dir/.git && $skip_git_check == 0 ]]; then
   python3 "$guest_dir/scripts/source-digest.py" \
     --source "$source_dir" \
-    --output "$root/usr/share/omarchy-web/upstream-tree.json"
+    --output "$root/usr/share/try-omarchy/upstream-tree.json"
   expected_digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["upstream"]["treeSha256"])' "$spec")
-  actual_digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$root/usr/share/omarchy-web/upstream-tree.json")
+  actual_digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$root/usr/share/try-omarchy/upstream-tree.json")
   [[ $actual_digest == "$expected_digest" ]] || fail "normalized source digest mismatch: expected $expected_digest, got $actual_digest"
 fi
 

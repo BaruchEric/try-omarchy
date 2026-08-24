@@ -1,2 +1,0 @@
-SUBSYSTEM=="virtio-ports", ATTR{name}=="omarchy.web.diagnostics", MODE="0620", GROUP="users"
-SUBSYSTEM=="tty", KERNEL=="hvc0", MODE="0620", GROUP="users"

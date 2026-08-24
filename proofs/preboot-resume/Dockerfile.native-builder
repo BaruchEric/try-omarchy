@@ -1,6 +1,0 @@
-ARG BASE_IMAGE=omarchy-qemu-wasm-builder:emsdk-3.1.50
-FROM ${BASE_IMAGE}
-
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libpixman-1-dev \
- && rm -rf /var/lib/apt/lists/*

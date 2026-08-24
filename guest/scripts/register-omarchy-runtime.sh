@@ -87,7 +87,7 @@ source_date_epoch=${metadata[3]}
 [[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
 [[ $(<"$root/usr/share/omarchy/version") == "$version" ]] || fail "staged version differs from spec"
 
-package_name=omarchy-web-runtime
+package_name=try-omarchy-runtime
 package_version="$version-1"
 stage=$(mktemp -d "$work/omarchy-runtime-package.XXXXXX")
 cleanup() {
@@ -127,7 +127,7 @@ pkgver = $package_version
 pkgdesc = Pinned Basecamp Omarchy runtime $commit for the Try Omarchy guest
 url = $repository
 builddate = $source_date_epoch
-packager = Omarchy Web reproducible guest builder
+packager = Try Omarchy reproducible guest builder
 size = $installed_size
 arch = any
 license = MIT
@@ -165,7 +165,7 @@ pacman --config "$pacman_config" --root "$root" --dbpath "$root/var/lib/pacman" 
 # Keep an immutable package copy in the guest's local sync repository. Without
 # a matching sync record, pacman classifies this source-pinned runtime as an AUR
 # package and the upstream updater attempts to hand it to yay.
-repo_dir="$root/usr/share/omarchy-web/repo"
+repo_dir="$root/usr/share/try-omarchy/repo"
 install -d -m 0755 "$repo_dir"
 install -m 0644 "$archive" "$repo_dir/$(basename "$archive")"
 

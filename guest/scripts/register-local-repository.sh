@@ -52,31 +52,28 @@ import sys
 
 spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
 print(spec["image"]["sourceDateEpoch"])
-print(spec.get("guest", {}).get("profile", "demo"))
+print(spec.get("guest", {}).get("profile"))
 PY
 )
 (( ${#metadata[@]} == 2 )) || fail "could not read local repository contract"
 source_date_epoch=${metadata[0]}
 profile=${metadata[1]}
 [[ $source_date_epoch =~ ^[0-9]+$ ]] || fail "invalid source date epoch"
-[[ $profile == demo || $profile == factory ]] || fail "unsupported guest profile: $profile"
+[[ $profile == factory ]] || fail "native guest profile must be factory"
 
-repo_name=omarchy-web
-repo_dir="$root/usr/share/omarchy-web/repo"
+repo_name=try-omarchy
+repo_dir="$root/usr/share/try-omarchy/repo"
 [[ -d $repo_dir && ! -L $repo_dir ]] || fail "local package staging directory is missing"
 shopt -s nullglob
 archives=("$repo_dir"/*.pkg.tar.zst)
 shopt -u nullglob
-expected_archive_count=1
-[[ $profile == factory ]] && expected_archive_count=2
+expected_archive_count=2
 (( ${#archives[@]} == expected_archive_count )) ||
   fail "local repository expected $expected_archive_count package archive(s), found ${#archives[@]}"
-[[ ${archives[*]} == *'/omarchy-web-runtime-'* ]] || fail "local repository is missing the Omarchy runtime"
-if [[ $profile == factory ]]; then
-  [[ ${archives[*]} == *'/omarchy-web-mise-'* ]] || fail "factory repository is missing pinned mise"
-fi
+[[ ${archives[*]} == *'/try-omarchy-runtime-'* ]] || fail "local repository is missing the Omarchy runtime"
+[[ ${archives[*]} == *'/try-omarchy-mise-'* ]] || fail "factory repository is missing pinned mise"
 
-temporary=$(mktemp -d "$root/usr/share/omarchy-web/.repo-db.XXXXXX")
+temporary=$(mktemp -d "$root/usr/share/try-omarchy/.repo-db.XXXXXX")
 cleanup() {
   rm -rf "$temporary"
 }
@@ -116,15 +113,15 @@ ln -sfn "$repo_name.db.tar.gz" "$repo_dir/$repo_name.db"
 install -d -m 0755 "$root/var/lib/pacman/sync"
 install -m 0644 "$repo_dir/$repo_name.db.tar.gz" "$root/var/lib/pacman/sync/$repo_name.db"
 
-if grep -q '^\[omarchy-web\]$' "$root/etc/pacman.conf"; then
+if grep -q '^\[try-omarchy\]$' "$root/etc/pacman.conf"; then
   fail "local repository is already configured"
 fi
 cat >>"$root/etc/pacman.conf" <<'EOF'
 
 # Immutable packages assembled from the checksummed Try Omarchy build spec.
-[omarchy-web]
+[try-omarchy]
 SigLevel = Optional TrustAll
-Server = file:///usr/share/omarchy-web/repo
+Server = file:///usr/share/try-omarchy/repo
 EOF
 
 # This makes pacman -Qm correctly distinguish our pinned native packages from

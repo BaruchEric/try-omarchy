@@ -6,7 +6,7 @@ usage() {
   cat <<'USAGE'
 Usage: guest/build.sh [options]
 
-  --output DIR       Artifact directory (default: guest/dist)
+  --output DIR       Artifact directory (default: dist/guest)
   --work DIR         Persistent build/cache directory (default: guest/.work)
   --spec FILE        Architecture build spec (default: guest/spec.json)
   --source DIR       Use an existing clean pinned Omarchy checkout
@@ -23,7 +23,8 @@ fail() {
 }
 
 guest_dir=$(cd "$(dirname "$0")" && pwd)
-output="$guest_dir/dist"
+repo_dir=$(cd "$guest_dir/.." && pwd)
+output="$repo_dir/dist/guest"
 work="$guest_dir/.work"
 source_dir=""
 spec="$guest_dir/spec.json"
@@ -69,7 +70,7 @@ packages_file=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[
 package_lock_file=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["packageLock"])' "$spec")
 packages_file="$guest_dir/$packages_file"
 package_lock_file="$guest_dir/$package_lock_file"
-[[ $architecture == "x86_64" || $architecture == "aarch64" ]] || fail "unsupported guest architecture: $architecture"
+[[ $architecture == "aarch64" ]] || fail "native guest architecture must be aarch64"
 [[ $(uname -m) == "$architecture" ]] || fail "guest packages for $architecture must be assembled on $architecture"
 [[ -f $packages_file ]] || fail "package list not found: $packages_file"
 [[ -f $package_lock_file ]] || fail "package lock not found: $package_lock_file"
@@ -157,7 +158,7 @@ if ((${#pinned_records[@]})); then
     [[ -f $archive.sig ]] || fail "cached package signature not found: $archive.sig"
     ln "$archive" "$archive.sig" "$pinned_repo/"
   done
-  repo-add "$pinned_repo/omarchy-web-pinned-cache.db.tar.gz" \
+  repo-add "$pinned_repo/try-omarchy-pinned-cache.db.tar.gz" \
     "$pinned_repo/"*.pkg.tar.zst >/dev/null
 fi
 
@@ -168,7 +169,7 @@ options_sections=0
 pinned_repo_inserted=0
 while IFS= read -r line || [[ -n $line ]]; do
   if [[ -n $pinned_repo && $line =~ ^\[[^]]+\]$ && $line != "[options]" && $pinned_repo_inserted == 0 ]]; then
-    printf '[omarchy-web-pinned-cache]\n'
+    printf '[try-omarchy-pinned-cache]\n'
     printf 'SigLevel = Required DatabaseOptional\n'
     printf 'Server = file://%s\n\n' "$pinned_repo"
     pinned_repo_inserted=1
@@ -231,8 +232,8 @@ done
   --spec "$spec" \
   --pacman-config "$pacman_config"
 "$guest_dir/scripts/register-local-repository.sh" --root "$root" --spec "$spec"
-arch-chroot "$root" /usr/local/lib/omarchy-web/finalize-rootfs
-arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/omarchy-web/packages.lock.txt"
+arch-chroot "$root" /usr/local/lib/try-omarchy/finalize-rootfs
+arch-chroot "$root" pacman -Q | LC_ALL=C sort >"$root/usr/share/try-omarchy/packages.lock.txt"
 
 # arch-chroot bind-mounts the host resolver file at this path. Replace it only
 # after every chroot invocation has returned and the temporary mount is gone.

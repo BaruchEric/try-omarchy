@@ -1,6 +1,0 @@
-build/
-dist/
-smoke-dist/
-evidence/*
-!evidence/browser-smoke.json
-!.gitkeep

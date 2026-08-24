@@ -1,18 +1,19 @@
 {
   "schemaVersion": 1,
   "image": {
-    "architecture": "x86_64",
+    "architecture": "aarch64",
     "filesystem": "ext4",
-    "filesystemLabel": "omarchy-web",
-    "filesystemUuid": "63d3677c-30d7-4f6b-a8b4-6ffea9ce2e42",
+    "filesystemLabel": "omarchy-factory",
+    "filesystemUuid": "89054943-1f4e-4f14-b934-d6db3fba4254",
     "sizeMiB": 6144,
     "sourceDateEpoch": 1786873661
   },
   "guest": {
-    "hostname": "omarchy-web",
-    "username": "omarchy",
-    "uid": 1000,
-    "defaultTheme": "tokyo-night",
+    "profile": "factory",
+    "hostname": "omarchy-factory",
+    "username": null,
+    "uid": null,
+    "defaultTheme": null,
     "virtualDisplay": {
       "width": 1600,
       "height": 900,
@@ -29,6 +30,20 @@
     "channel": "quattro",
     "license": "MIT"
   },
+  "supplyChain": {
+    "omarchyPackagesRepository": "https://github.com/omacom-io/omarchy-pkgs",
+    "omarchyPackagesCommit": "7e448b90313fea4fb78da9a78607287691d3b241",
+    "archLinuxArmPackagesRepository": "https://github.com/archlinuxarm/PKGBUILDs",
+    "archLinuxArmPackagesCommit": "0b5418fc3f62860b191cd872cb2f933f9fc77841",
+    "mise": {
+      "version": "2026.8.11",
+      "url": "https://github.com/jdx/mise/releases/download/v2026.8.11/mise-v2026.8.11-linux-arm64.tar.xz",
+      "sha256": "fefd580d2c6a8169762f40ce5019a61de5b2dcf0b38c5d428ef6b97d5ce76fba",
+      "binarySha256": "6b7471271a990cbd6a795b24f9df83338aa220c227bf75fd083442e5a728f5f7",
+      "reportedVersion": "2026.8.11 linux-arm64 (2026-08-23)",
+      "license": "MIT"
+    }
+  },
   "themes": [
     "catppuccin",
     "gruvbox",
@@ -38,17 +53,9 @@
     "white"
   ],
   "inputs": {
-    "packages": "packages.x86_64.txt",
-    "packageLock": "packages.x86_64.lock.json",
-    "packageCachePins": [
-      "qt6-base",
-      "qt6-declarative",
-      "qt6-svg",
-      "qt6-translations",
-      "qt6-wayland"
-    ],
-    "maskedSystemServices": "services.system-mask.txt",
-    "maskedUserServices": "services.user-mask.txt"
+    "packages": "packages.txt",
+    "packageLock": "packages.lock.json",
+    "pacmanConfig": "pacman.aarch64.conf"
   },
   "authenticity": {
     "verbatimRuntimeTrees": [
@@ -65,6 +72,8 @@
       "bin/omarchy",
       "bin/omarchy-launch-shell",
       "bin/omarchy-menu",
+      "bin/omarchy-provision-owner",
+      "bin/omarchy-provision-user",
       "bin/omarchy-theme-set",
       "config/foot/foot.ini",
       "config/hypr/hyprland.lua",
@@ -75,6 +84,9 @@
       "default/themed/shell.toml.tpl",
       "default/uwsm/env.d/10-omarchy",
       "default/wayland-sessions/omarchy.desktop",
+      "install/provisioning/omarchy-provision-owner.service",
+      "install/provisioning/setup-form.sh",
+      "install/user/all.sh",
       "shell/shell.qml",
       "themes/tokyo-night/colors.toml",
       "version"
@@ -82,20 +94,55 @@
   },
   "runtime": {
     "kernel": "vmlinuz-linux",
+    "kernelSource": "/boot/Image",
     "initramfs": "initramfs-linux.img",
+    "initramfsSource": "/boot/initramfs-linux.img",
     "disk": "rootfs.ext4",
     "compressedDisk": "rootfs.ext4.zst",
-    "kernelCommandLine": "root=/dev/vda rw rootwait console=tty0 console=ttyS0,115200n8 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog omarchy.web_demo=1",
-    "minimumMemoryMiB": 1024,
-    "recommendedMemoryMiB": 1536,
+    "kernelCommandLine": "root=/dev/vda rw rootwait console=tty0 console=hvc0 loglevel=4 systemd.show_status=false rd.systemd.show_status=false mitigations=off nowatchdog",
+    "minimumMemoryMiB": 2048,
+    "recommendedMemoryMiB": 4096,
+    "minimumCpuCount": 4,
+    "virtualMachineMonitor": "qemu-system-aarch64",
+    "hypervisor": "hvf",
+    "graphics": {
+      "device": "virtio-gpu-gl-pci",
+      "display": "cocoa",
+      "guestRenderer": "virgl",
+      "hostRenderer": "angle-metal"
+    },
+    "network": {
+      "device": "virtio-net-pci",
+      "backend": "slirp",
+      "mode": "user"
+    },
+    "audio": {
+      "controller": "intel-hda",
+      "codec": "hda-micro",
+      "backend": "sdl",
+      "duplex": true
+    },
+    "storage": {
+      "device": "virtio-blk-pci",
+      "format": "raw",
+      "mode": "ephemeral",
+      "initialization": "apfs-clone",
+      "fallback": "full-copy",
+      "expandedSizeMiB": 24576
+    },
     "devices": [
       "virtio-blk-pci",
-      "virtio-vga",
+      "virtio-gpu-gl-pci",
       "virtio-keyboard-pci",
       "virtio-tablet-pci",
+      "virtio-net-pci",
       "virtio-serial-pci",
-      "virtserialport:omarchy.web.diagnostics",
-      "isa-serial"
+      "virtconsole",
+      "virtserialport",
+      "virtio-rng-pci",
+      "virtio-balloon-pci",
+      "intel-hda",
+      "hda-micro"
     ]
   }
 }

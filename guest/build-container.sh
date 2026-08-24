@@ -2,21 +2,6 @@
 
 set -euo pipefail
 
-usage() {
-  cat <<'USAGE'
-Usage: guest/build-container.sh [options]
-
-  --output DIR         Host artifact directory (default: guest/dist)
-  --work DIR           Linux-only host build directory
-  --work-volume NAME   Persistent Docker build volume
-  --dry-run            Print the selected storage plan without using Docker
-
-Builds the x86_64 image in a privileged Arch container. Linux x86_64 is the
-supported release builder. Docker Desktop uses a Docker-managed volume for the
-Linux rootfs work tree and keeps only final artifacts on the host filesystem.
-USAGE
-}
-
 fail() {
   echo "guest-container-build: $*" >&2
   exit 1
@@ -24,33 +9,26 @@ fail() {
 
 guest_dir=$(cd "$(dirname "$0")" && pwd)
 repo_dir=$(cd "$guest_dir/.." && pwd)
-output="$guest_dir/dist"
-work="$guest_dir/.work-container"
-work_set=0
+spec="$guest_dir/spec.json"
+output="$repo_dir/dist/guest"
+output_set=0
 work_volume=""
-work_volume_set=0
+refresh_package_lock=""
 dry_run=0
 
 while (($#)); do
   case "$1" in
     --output)
-      (($# >= 2)) || fail "--output requires a directory"
       output=${2:-}
-      [[ -n $output ]] || fail "--output requires a directory"
-      shift 2
-      ;;
-    --work)
-      (($# >= 2)) || fail "--work requires a directory"
-      work=${2:-}
-      [[ -n $work ]] || fail "--work requires a directory"
-      work_set=1
+      output_set=1
       shift 2
       ;;
     --work-volume)
-      (($# >= 2)) || fail "--work-volume requires a name"
       work_volume=${2:-}
-      [[ -n $work_volume ]] || fail "--work-volume requires a name"
-      work_volume_set=1
+      shift 2
+      ;;
+    --refresh-package-lock)
+      refresh_package_lock=${2:-}
       shift 2
       ;;
     --dry-run)
@@ -58,7 +36,14 @@ while (($#)); do
       shift
       ;;
     -h|--help)
-      usage
+      cat <<'USAGE'
+Usage: guest/build-container.sh [options]
+
+  --output DIR                   Artifact directory (default: dist/guest)
+  --work-volume NAME             Persistent Docker build/cache volume
+  --refresh-package-lock FILE    Resolve the spec transaction to FILE; do not build
+  --dry-run                      Print the selected immutable build plan
+USAGE
       exit 0
       ;;
     *)
@@ -67,57 +52,78 @@ while (($#)); do
   esac
 done
 
-(( ! (work_set && work_volume_set) )) || fail "--work and --work-volume are mutually exclusive"
+[[ -f $spec ]] || fail "spec not found: $spec"
+container_spec=/workspace/guest/spec.json
+plan_fields=$(python3 - "$spec" <<'PY'
+import json
+import pathlib
+import sys
 
-host_os=${OMARCHY_CONTAINER_HOST_OS:-$(uname -s)}
-if (( work_volume_set )); then
-  work_storage=volume
-elif [[ $host_os == Linux ]]; then
-  work_storage=bind
-else
-  (( ! work_set )) || fail "--work is unsafe for a pacstrap rootfs on $host_os; use --work-volume NAME"
-  work_storage=volume
+spec = json.loads(pathlib.Path(sys.argv[1]).read_text())
+architecture = spec["image"]["architecture"]
+profile = spec["guest"].get("profile")
+if architecture != "aarch64":
+    raise SystemExit(f"ARM builder requires an aarch64 spec, got {architecture}")
+if profile != "factory":
+    raise SystemExit(f"native guest requires the factory profile, got {profile}")
+print(f"{architecture}\t{profile}")
+PY
+) || fail "invalid native guest spec"
+IFS=$'\t' read -r architecture profile <<<"$plan_fields"
+[[ -n $architecture && -n $profile ]] || fail "could not read ARM64 build spec"
+
+if [[ -n $refresh_package_lock && $output_set == 1 ]]; then
+  fail "--output and --refresh-package-lock are mutually exclusive"
+fi
+
+if [[ -z $work_volume ]]; then
   repo_checksum=$(printf '%s' "$repo_dir" | cksum)
   repo_checksum=${repo_checksum%% *}
-  work_volume="omarchy-web-guest-work-$repo_checksum"
+  work_volume="try-omarchy-guest-work-$repo_checksum"
 fi
-
-if [[ $work_storage == volume ]]; then
-  [[ $work_volume =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail "invalid Docker volume name: $work_volume"
-  work_source=$work_volume
-else
-  work_source=$work
-fi
+[[ $work_volume =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || fail "invalid Docker volume name: $work_volume"
 
 if (( dry_run )); then
-  printf 'host-os=%s\n' "$host_os"
-  printf 'output=%s\n' "$output"
-  printf 'work-storage=%s\n' "$work_storage"
-  printf 'work-source=%s\n' "$work_source"
+  printf 'architecture=%s\nplatform=linux/arm64\nprofile=%s\nspec=%s\noutput=%s\nwork-volume=%s\n' \
+    "$architecture" "$profile" "$spec" "$output" "$work_volume"
+  if [[ -n $refresh_package_lock ]]; then
+    printf 'mode=refresh-package-lock\npackage-lock-output=%s\n' "$refresh_package_lock"
+  else
+    printf 'mode=build\n'
+  fi
   exit 0
 fi
 
 command -v docker >/dev/null || fail "docker is required"
-mkdir -p "$output"
-output=$(cd "$output" && pwd)
-if [[ $work_storage == bind ]]; then
-  mkdir -p "$work"
-  work=$(cd "$work" && pwd)
-  work_source=$work
-else
-  docker volume create \
-    --label com.basecamp.omarchy-web.role=guest-work \
-    "$work_volume" >/dev/null
+
+builder_image=try-omarchy-guest-builder
+docker build --platform linux/arm64 -f "$guest_dir/Containerfile" -t "$builder_image" "$repo_dir"
+builder_digest=$(docker image inspect --format '{{.Id}}' "$builder_image")
+
+if [[ -n $refresh_package_lock ]]; then
+  lock_name=$(basename "$refresh_package_lock")
+  [[ -n $lock_name && $lock_name != . && $lock_name != .. ]] || fail "invalid package lock output"
+  lock_parent=$(dirname "$refresh_package_lock")
+  mkdir -p "$lock_parent"
+  lock_parent=$(cd "$lock_parent" && pwd)
+  docker run --rm --platform linux/arm64 \
+    --entrypoint /workspace/guest/scripts/refresh-package-lock.sh \
+    -e OMARCHY_PACMAN_DISABLE_SANDBOX=1 \
+    -v "$repo_dir:/workspace:ro" \
+    -v "$lock_parent:/lock-output" \
+    "$builder_image" \
+    --spec "$container_spec" --output "/lock-output/$lock_name"
+  exit 0
 fi
 
-builder_image=omarchy-web-guest-builder
-docker build --platform linux/amd64 -f "$guest_dir/Containerfile" -t "$builder_image" "$repo_dir"
-builder_digest=$(docker image inspect --format '{{.Id}}' "$builder_image")
-docker run --rm --platform linux/amd64 --privileged \
+mkdir -p "$output"
+output=$(cd "$output" && pwd)
+docker volume create --label dev.tryomarchy.role=guest-work "$work_volume" >/dev/null
+docker run --rm --platform linux/arm64 --privileged \
   -e OMARCHY_BUILDER_IMAGE_DIGEST="$builder_digest" \
   -e OMARCHY_PACMAN_DISABLE_SANDBOX=1 \
   -v "$repo_dir:/workspace:ro" \
   -v "$output:/output" \
-  -v "$work_source:/work" \
+  -v "$work_volume:/work" \
   "$builder_image" \
-  --output /output --work /work
+  --spec "$container_spec" --output /output --work /work

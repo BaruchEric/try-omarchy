@@ -60,7 +60,7 @@ def main() -> None:
         "includedThemes": spec["themes"],
         "sha256Trees": trees,
     }
-    source_digest = args.root / "usr/share/omarchy-web/upstream-tree.json"
+    source_digest = args.root / "usr/share/try-omarchy/upstream-tree.json"
     if source_digest.exists():
         payload["normalizedUpstreamTree"] = json.loads(source_digest.read_text())
     args.output.parent.mkdir(parents=True, exist_ok=True)

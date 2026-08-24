@@ -1,5 +1,0 @@
---- a/ui/display.c
-+++ b/ui/display.c
-@@ -1 +1 @@
--int fixture_display_present(void) { return 1; }
-+int fixture_display_present(void) { return 2; }

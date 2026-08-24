@@ -1,0 +1,13 @@
+# Security policy
+
+Please do not file a public issue for a suspected vulnerability. Use GitHub's
+private vulnerability reporting or security-advisory flow for this repository
+and include reproduction steps, affected versions, and the expected impact.
+
+Only the current `main` branch is supported before the first stable release.
+Security-sensitive areas include downloaded build inputs, artifact and manifest
+validation, code signing, VM disk handling, the QEMU process boundary, and the
+guest-to-host audio bridge.
+
+The project will acknowledge a complete report as soon as practical, assess its
+scope, and coordinate a fix and disclosure with the reporter.
