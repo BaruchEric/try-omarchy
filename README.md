@@ -1,11 +1,12 @@
 # Try Omarchy
 
-Run the authentic [Omarchy](https://github.com/basecamp/omarchy) desktop as a
+Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a
 native, hardware-accelerated app on an Apple Silicon Mac.
 
-Try Omarchy packages an ARM64 Arch Linux factory image, a signed QEMU/HVF runtime,
-and a small Swift/AppKit launcher into one self-contained macOS app. It is not a
-website: there is no `localhost`, browser VM, JavaScript client, or server.
+Try Omarchy packages a project-built ARM64 Arch Linux image, a signed QEMU/HVF
+runtime, and a small Swift/AppKit launcher into one self-contained macOS app.
+The Linux image is built from pinned Arch Linux ARM packages and pinned upstream
+Omarchy source; it is not a prebuilt image published by Basecamp.
 
 ## Requirements
 

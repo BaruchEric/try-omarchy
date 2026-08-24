@@ -1,8 +1,8 @@
 # ARM64 guest image
 
-This directory builds the single guest supported by Try Omarchy: an
-unprovisioned ARM64 Arch Linux factory image containing the pinned upstream
-Omarchy desktop.
+This directory builds the single guest supported by Try Omarchy: our own
+unprovisioned ARM64 Arch Linux factory image containing pinned upstream Omarchy
+source. It is not a prebuilt image published by Basecamp.
 
 From the repository root:
 

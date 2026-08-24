@@ -1,14 +1,14 @@
 # Contributing
 
 Thanks for helping improve Try Omarchy. The project has one product target: a
-native Apple Silicon macOS app that runs the authentic Omarchy desktop in an
-ARM64 virtual machine.
+native Apple Silicon macOS app that runs pinned upstream Omarchy in a
+project-built ARM64 virtual machine image.
 
 ## Before opening a pull request
 
 1. Open an issue for large behavioral or architecture changes.
-2. Keep changes native-only. Browser runtimes, web launchers, x86 guests, and
-   Node-based build tooling are intentionally outside this repository's scope.
+2. Keep changes within the current Apple Silicon, QEMU/HVF, and ARM64 guest
+   architecture unless an architecture change has been discussed first.
 3. Run `make test`.
 4. If build inputs changed, run the relevant component build and explain how
    its pinned versions or checksums were reviewed.

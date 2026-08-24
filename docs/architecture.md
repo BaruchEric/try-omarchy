@@ -1,23 +1,61 @@
 # Architecture
 
-Try Omarchy is a native macOS launcher around an ARM64 Linux virtual machine.
-There is no web server, browser runtime, JavaScript application, or x86 guest.
+Try Omarchy packages three pieces into one macOS app:
+
+1. A small Swift/AppKit launcher for the macOS side.
+2. A patched QEMU runtime that creates and runs the virtual machine.
+3. An ARM64 Arch Linux image containing pinned upstream Omarchy source.
 
 ```text
 Try Omarchy.app
-├── Swift/AppKit launcher
-├── signed QEMU ARM64 runtime
-│   ├── HVF acceleration
-│   ├── Cocoa + VirGL display
-│   ├── SLIRP networking
-│   └── SDL audio
-└── compressed ARM64 factory guest
-    ├── Arch Linux ARM
-    ├── pinned Omarchy source tree
-    └── first-boot owner provisioning
+└── Swift/AppKit launcher
+    └── QEMU + Apple Hypervisor Framework
+        └── project-built ARM64 Linux image
+            └── Omarchy desktop
 ```
 
-## Build boundaries
+## What happens when the app opens
+
+The Swift launcher handles macOS permissions, startup, shutdown, host audio
+devices, and Command-to-Super key mapping. It prepares a writable copy of the
+Linux disk and starts QEMU. Swift does not replace QEMU or run the Omarchy
+desktop itself.
+
+QEMU presents the hardware that Linux expects: CPUs, memory, storage, networking,
+graphics, audio, keyboard, and pointer devices. Because both the Mac and the
+guest are ARM64, Apple Hypervisor Framework runs the guest CPU instructions on
+the Apple Silicon processor. QEMU provides the virtual devices around that CPU.
+
+Linux then boots normally from the bundled kernel and disk, and Omarchy runs
+inside Linux. Graphics travel from Linux through virtio-gpu and VirGL to the
+native Cocoa window. Storage, networking, audio, and input use their matching
+QEMU virtual devices and host backends.
+
+## The ARM64 image
+
+The guest image is built by this project; it is not an official prebuilt image
+from Basecamp. The `guest/` builder starts with pinned Arch Linux ARM packages,
+installs a pinned upstream Omarchy source tree, and adds the small configuration
+and compatibility layer needed for ARM64 and QEMU.
+
+The result is upstream Omarchy running in a project-built ARM64 Linux image. The
+image has no preconfigured user, so Omarchy's upstream owner-provisioning flow
+creates the account on first boot.
+
+## What this project changes
+
+- The Swift code is a separate macOS launcher and helper.
+- A few QEMU C and Objective-C files are patched before QEMU is compiled. These
+  patches cover the Cocoa app identity, display behavior, graphics integration,
+  and host audio-device routing.
+- The pinned Omarchy runtime trees are copied from upstream. Guest overlays add
+  the QEMU and ARM64 integration around them.
+
+Nothing is overwritten while the app runs. The app bundle and packaged factory
+disk remain unchanged. Normal launches use a private writable disk in the
+user's Application Support directory; ephemeral mode uses a disposable disk.
+
+## Build layout
 
 - `guest/` reproducibly assembles the unprovisioned ARM64 image in a privileged
   ARM64 Docker container. Inputs are commit-, version-, and checksum-pinned.
@@ -25,18 +63,6 @@ Try Omarchy.app
   isolated, relocated, and signed before it enters the app bundle.
 - `dist/` is the only public output directory. It is generated and ignored by
   Git.
-
-## Runtime boundaries
-
-The Swift helper owns app lifecycle, permissions, host audio-device discovery,
-and focused Command-key handling. QEMU owns virtualization, networking, graphics,
-and the emulated audio transport. The guest audio bridge mirrors only the host
-audio catalog and selection over a dedicated virtio serial port.
-
-The shipped image has no baked-in user. Omarchy's upstream owner-provisioning
-flow creates the account on first boot. The app clones and expands the source
-disk into the user's Application Support directory; the packaged source remains
-immutable. An explicit ephemeral mode bypasses persistence.
 
 ## Trust model
 
