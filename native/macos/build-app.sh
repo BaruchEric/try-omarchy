@@ -158,11 +158,11 @@ echo "[native] Built $app"
 if (( build_dmg )); then
   dmg="$native_dir/.build/Omarchy Quattro.dmg"
   rm -f "$dmg"
-  package_arguments=()
   if [[ -n $notarize_profile ]]; then
-    package_arguments+=(--notarize-profile "$notarize_profile")
+    "$package_dmg" --notarize-profile "$notarize_profile" "$app" "$dmg"
+  else
+    "$package_dmg" "$app" "$dmg"
   fi
-  "$package_dmg" "${package_arguments[@]}" "$app" "$dmg"
 fi
 if (( open_app )); then
   open "$app"
