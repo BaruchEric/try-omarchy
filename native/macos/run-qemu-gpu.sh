@@ -371,13 +371,12 @@ expected_devices = [
     "virtio-net-pci",
     "virtio-serial-pci",
     "virtconsole",
+    "virtserialport",
     "virtio-rng-pci",
     "virtio-balloon-pci",
     "intel-hda",
     "hda-micro",
 ]
-if spec_profile == "demo":
-    expected_devices.insert(7, "virtserialport")
 graphics = {
     "device": "virtio-gpu-gl-pci",
     "display": "cocoa",
