@@ -16,7 +16,7 @@ on run arguments
       set statusbar visible of installerWindow to false
       set pathbar visible of installerWindow to false
       set sidebar width of installerWindow to 0
-      set bounds of installerWindow to {100, 100, 740, 460}
+      set bounds of installerWindow to {100, 100, 740, 540}
 
       set iconOptions to the icon view options of installerWindow
       set arrangement of iconOptions to not arranged
