@@ -177,6 +177,17 @@ struct PermissionSetupCompletionStoreTests {
         store.markComplete()
         #expect(store.isComplete)
     }
+
+    @Test("an older onboarding revision does not suppress the current setup")
+    func olderRevisionShowsSetupAgain() throws {
+        let suiteName = "PermissionSetupCompletionStoreTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: "permissionSetupCompleted.v1")
+
+        let store = PermissionSetupCompletionStore(defaults: defaults)
+        #expect(!store.isComplete)
+    }
 }
 
 @Suite("Accessibility launch policy")

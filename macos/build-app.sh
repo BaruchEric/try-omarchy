@@ -55,7 +55,11 @@ runtime_source="$macos_dir/.build/qemu-gpu-runtime"
 guest_dir=${guest_dir:-"$repo_dir/dist/guest"}
 dependency_bundler="$macos_dir/bundle-macho-dependencies.sh"
 package_dmg="$macos_dir/package-dmg.sh"
-app_icon="$macos_dir/Omarchy.icns"
+app_icon_source="$macos_dir/OmarchyIcon.svg"
+app_icon_renderer_source="$macos_dir/render-app-icon.swift"
+icon_renderer="$macos_dir/.build/app-icon-renderer"
+iconset="$macos_dir/.build/TryOmarchy.iconset"
+generated_icon="$macos_dir/.build/TryOmarchy.icns"
 zstd_bin=$(command -v zstd || true)
 
 [[ -d $runtime_source && ! -L $runtime_source ]] || {
@@ -71,10 +75,20 @@ guest_dir=$(cd "$guest_dir" && pwd -P)
   echo "build-app: dependency bundler is missing or unsafe" >&2
   exit 1
 }
-[[ -f $app_icon && ! -L $app_icon ]] || {
-  echo "build-app: app icon is missing or unsafe" >&2
+[[ -f $app_icon_source && ! -L $app_icon_source ]] || {
+  echo "build-app: app icon source is missing or unsafe" >&2
   exit 1
 }
+[[ -f $app_icon_renderer_source && ! -L $app_icon_renderer_source ]] || {
+  echo "build-app: app icon renderer is missing or unsafe" >&2
+  exit 1
+}
+for tool in iconutil sips xcrun; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    echo "build-app: $tool is required to render the app icon" >&2
+    exit 1
+  }
+done
 if [[ -n $notarize_profile && $sign_identity == - ]]; then
   echo "build-app: notarization requires --sign-identity with a Developer ID Application identity" >&2
   exit 1
@@ -86,10 +100,37 @@ fi
 
 mkdir -p "$repo_dir/dist"
 cd "$macos_dir"
-mkdir -p "$module_cache/swift" "$module_cache/clang"
+mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"
 export CLANG_MODULE_CACHE_PATH="$module_cache/clang"
 swift build --disable-sandbox -c release -debug-info-format none
+
+rm -rf "$iconset"
+rm -f "$generated_icon"
+mkdir "$iconset"
+xcrun swiftc \
+  -module-cache-path "$module_cache/icon" \
+  -framework AppKit \
+  "$app_icon_renderer_source" \
+  -o "$icon_renderer"
+"$icon_renderer" "$app_icon_source" "$iconset/icon_512x512@2x.png"
+while IFS=$'\t' read -r icon_name icon_pixels; do
+  sips \
+    -z "$icon_pixels" "$icon_pixels" \
+    "$iconset/icon_512x512@2x.png" \
+    --out "$iconset/$icon_name" >/dev/null
+done <<'ICON_SIZES'
+icon_16x16.png	16
+icon_16x16@2x.png	32
+icon_32x32.png	32
+icon_32x32@2x.png	64
+icon_128x128.png	128
+icon_128x128@2x.png	256
+icon_256x256.png	256
+icon_256x256@2x.png	512
+icon_512x512.png	512
+ICON_SIZES
+iconutil -c icns "$iconset" -o "$generated_icon"
 
 rm -rf "$app"
 mkdir -p \
@@ -99,7 +140,7 @@ mkdir -p \
   "$contents/Resources/scripts"
 install -m 0755 "$helper" "$contents/MacOS/omarchy-vm-helper"
 install -m 0644 "$macos_dir/Info.plist" "$contents/Info.plist"
-install -m 0644 "$app_icon" "$contents/Resources/TryOmarchy.icns"
+install -m 0644 "$generated_icon" "$contents/Resources/TryOmarchy.icns"
 ditto "$runtime_source" "$contents/Resources/runtime"
 install -m 0755 "$zstd_bin" "$contents/Resources/runtime/bin/zstd"
 install -m 0755 "$macos_dir/run-qemu-gpu.sh" "$contents/Resources/scripts/run-qemu-gpu.sh"

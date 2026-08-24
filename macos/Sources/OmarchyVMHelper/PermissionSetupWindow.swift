@@ -2,7 +2,7 @@ import AppKit
 import AVFoundation
 
 struct PermissionSetupCompletionStore {
-    static let completionKey = "permissionSetupCompleted.v1"
+    static let completionKey = "permissionSetupCompleted.v2"
 
     private let defaults: UserDefaults
 
