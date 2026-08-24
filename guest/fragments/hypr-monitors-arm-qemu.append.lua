@@ -31,5 +31,6 @@ end
 
 if omarchy_kernel_option_enabled("omarchy.qemu_virgl=1") then
   hl.config({ cursor = { invisible = true } })
+  o.exec_on_start("/usr/local/bin/omarchy-native-display-sync")
 end
 -- END OMARCHY ARM QEMU VIRGL PROFILE

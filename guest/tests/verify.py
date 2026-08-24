@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import py_compile
 import stat
 import subprocess
@@ -83,7 +84,102 @@ def main() -> None:
         py_compile.compile(str(audio_bridge), cfile=str(Path(temporary) / "audio.pyc"), doraise=True)
     check(True, "native audio bridge compiles")
 
-    shell_files = [GUEST / "test", *GUEST.glob("*.sh"), *GUEST.glob("scripts/*.sh")]
+    display_sync = GUEST / "native-overlay/usr/local/bin/omarchy-native-display-sync"
+    check(display_sync.stat().st_mode & stat.S_IXUSR != 0, "native display sync is executable")
+    monitor_fragment = read(GUEST / "fragments/hypr-monitors-arm-qemu.append.lua")
+    check(
+        'o.exec_on_start("/usr/local/bin/omarchy-native-display-sync")'
+        in monitor_fragment,
+        "ARM VirGL profile starts native display sync",
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_path = Path(temporary)
+        fake_bin = temporary_path / "bin"
+        fake_bin.mkdir()
+        reload_log = temporary_path / "reloads"
+        drm_root = temporary_path / "drm"
+        connector = drm_root / "card0-Virtual-1"
+        connector.mkdir(parents=True)
+        (connector / "status").write_text("connected\n", encoding="utf-8")
+        qemu_edid = bytearray(384)
+        qemu_edid[:8] = b"\x00\xff\xff\xff\xff\xff\xff\x00"
+        qemu_edid[126] = 2
+        # QEMU encodes its dynamic 5120x2880@60 mode in a DisplayID 1.3
+        # Type I detailed timing block, not in the base EDID descriptors.
+        displayid = bytearray(128)
+        displayid[:8] = bytes([0x70, 0x13, 0x17, 0x03, 0x00, 0x03, 0x00, 0x14])
+        displayid[8:28] = bytes.fromhex(
+            "c2 e2 01 88 ff 13 ff 06 ff 04 98 00 3f 0b 63 00 0d 00 0d 00"
+        )
+        displayid[28] = (-sum(displayid[1:28])) & 0xFF
+        displayid[127] = (-sum(displayid[:127])) & 0xFF
+        qemu_edid[256:384] = displayid
+        qemu_edid[127] = (-sum(qemu_edid[:127])) & 0xFF
+        (connector / "edid").write_bytes(qemu_edid)
+
+        legacy_connector = drm_root / "card0-Virtual-2"
+        legacy_connector.mkdir()
+        (legacy_connector / "status").write_text("connected\n", encoding="utf-8")
+        legacy_edid = bytearray(128)
+        legacy_edid[:8] = b"\x00\xff\xff\xff\xff\xff\xff\x00"
+        # Legacy 1920x1080@60 DTD: 148.5 MHz, 280 H blanking, 45 V blanking,
+        # with negative horizontal and vertical sync.
+        legacy_edid[54:72] = bytes.fromhex(
+            "02 3a 80 18 71 38 2d 40 58 2c 45 00 00 00 00 00 00 18"
+        )
+        legacy_edid[127] = (-sum(legacy_edid[:127])) & 0xFF
+        (legacy_connector / "edid").write_bytes(legacy_edid)
+        fake_hyprctl = fake_bin / "hyprctl"
+        fake_hyprctl.write_text(
+            '#!/bin/bash\nprintf "%s\\n" "$*" >>"$HYPRCTL_LOG"\nprintf "ok\\n"\n',
+            encoding="utf-8",
+        )
+        fake_hyprctl.chmod(0o755)
+        events = """\
+ACTION=change
+SUBSYSTEM=drm
+HOTPLUG=1
+
+ACTION=add
+SUBSYSTEM=drm
+HOTPLUG=1
+
+ACTION=change
+SUBSYSTEM=drm
+HOTPLUG=0
+
+ACTION=change
+SUBSYSTEM=drm
+HOTPLUG=1
+"""
+        environment = os.environ.copy()
+        environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
+        environment["HYPRCTL_LOG"] = str(reload_log)
+        environment["OMARCHY_DISPLAY_SYNC_DRM_ROOT"] = str(drm_root)
+        subprocess.run(
+            [str(display_sync), "--from-stdin"],
+            input=events,
+            text=True,
+            env=environment,
+            check=True,
+        )
+        check(
+            reload_log.read_text(encoding="utf-8").splitlines()
+            == [
+                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync" })',
+                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync" })',
+                'eval hl.monitor({ output = "", mode = "modeline 1236 5120 6400 6553 6912 2880 2894 2908 2980 -hsync -vsync" })',
+                'eval hl.monitor({ output = "", mode = "modeline 149 1920 2008 2052 2200 1080 1084 1089 1125 -hsync -vsync" })',
+            ],
+            "native display sync handles QEMU DisplayID and legacy EDID hotplug modes",
+        )
+
+    shell_files = [
+        GUEST / "test",
+        display_sync,
+        *GUEST.glob("*.sh"),
+        *GUEST.glob("scripts/*.sh"),
+    ]
     for path in sorted(shell_files):
         subprocess.run(["bash", "-n", str(path)], check=True)
     check(True, f"{len(shell_files)} guest shell scripts pass bash syntax checks")

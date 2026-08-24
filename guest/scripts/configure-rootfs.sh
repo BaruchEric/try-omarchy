@@ -63,10 +63,12 @@ install -m 0755 "$guest_dir/compat/ttfx-arm64" "$root/usr/local/bin/ttfx"
 
 # User customizations are additive. The prefix of each file remains byte-for-
 # byte identical to Basecamp's pinned config and can be audited independently.
-# The native fragment selects Cocoa's host-composited cursor path while keeping
-# Quattro's upstream automatic Retina configuration.
+# The native fragment selects Cocoa's host-composited cursor path and keeps the
+# guest mode synchronized when QEMU changes the virtual display EDID.
 cp -a "$guest_dir/native-overlay/." "$root/"
-chmod 0755 "$root/usr/local/bin/omarchy-native-audio-bridge"
+chmod 0755 \
+  "$root/usr/local/bin/omarchy-native-audio-bridge" \
+  "$root/usr/local/bin/omarchy-native-display-sync"
 mkdir -p "$root/etc/systemd/user/default.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"

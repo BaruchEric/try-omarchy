@@ -22,7 +22,7 @@ final class LaunchStatusWindow {
         title.alignment = .center
 
         let detail = NSTextField(
-            wrappingLabelWithString: "Preparing your virtual Mac. The first launch takes a little longer."
+            wrappingLabelWithString: "Preparing Omarchy. The first launch takes a little longer."
         )
         detail.textColor = .secondaryLabelColor
         detail.alignment = .center

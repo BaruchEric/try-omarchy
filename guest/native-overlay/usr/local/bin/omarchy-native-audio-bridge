@@ -42,6 +42,24 @@ def pulse_property(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def pulse_proplist(*properties: tuple[str, str | bool]) -> str:
+    values: list[str] = []
+    for name, value in properties:
+        if isinstance(value, bool):
+            encoded = "true" if value else "false"
+        else:
+            encoded = f'"{pulse_property(value)}"'
+        values.append(f"{name}={encoded}")
+    return " ".join(values)
+
+
+def pulse_module_proplist(name: str, properties: str) -> str:
+    # pactl joins load-module argv with spaces before PipeWire parses them. The
+    # nested proplist therefore needs its own escaped quotes to remain one
+    # module argument.
+    return f'{name}="{pulse_property(properties)}"'
+
+
 def endpoint_name(direction: str, uid: str | None) -> str:
     identity = uid if uid is not None else "system-default"
     digest = hashlib.sha256(identity.encode()).hexdigest()[:16]
@@ -171,20 +189,6 @@ class PipeWireMirror:
             raise RuntimeError("the QEMU HDA transport is not ready")
         transport_sink = next((name for name in sinks if name.startswith("alsa_output.")), sinks[0])
         transport_source = next((name for name in sources if name.startswith("alsa_input.")), sources[0])
-        run_pactl(
-            "update-sink-proplist",
-            transport_sink,
-            "node.hidden=true",
-            'device.description="Omarchy host audio transport"',
-            check=False,
-        )
-        run_pactl(
-            "update-source-proplist",
-            transport_source,
-            "node.hidden=true",
-            'device.description="Omarchy host audio transport"',
-            check=False,
-        )
 
         output_records = [{"deviceUID": None, "name": "Mac System Default"}, *outputs]
         input_records = [{"deviceUID": None, "name": "Mac System Default"}, *inputs]
@@ -194,39 +198,34 @@ class PipeWireMirror:
         for record in output_records:
             uid = record["deviceUID"]
             name = endpoint_name("output", uid)
-            description = pulse_property(record["name"])
-            self._load(
-                "module-null-sink",
-                f"sink_name={name}",
-                (
-                    'sink_properties=node.virtual=true device.icon_name="audio-card" '
-                    f'device.description="{description}"'
-                ),
-                "source_properties=node.hidden=true",
+            properties = pulse_proplist(
+                ("node.virtual", True),
+                ("node.description", record["name"]),
+                ("device.description", record["name"]),
+                ("device.icon_name", "audio-card"),
             )
             self._load(
-                "module-loopback",
-                f"source={name}.monitor",
-                f"sink={transport_sink}",
-                "latency_msec=20",
-                "source_dont_move=true",
-                "sink_dont_move=true",
-                "sink_input_properties=node.hidden=true media.role=filter",
+                "module-remap-sink",
+                f"master={transport_sink}",
+                f"sink_name={name}",
+                pulse_module_proplist("sink_properties", properties),
             )
             self.output_uids[name] = uid
 
         for record in input_records:
             uid = record["deviceUID"]
             name = endpoint_name("input", uid)
-            description = pulse_property(record["name"])
+            properties = pulse_proplist(
+                ("node.virtual", True),
+                ("node.description", record["name"]),
+                ("device.description", record["name"]),
+                ("device.icon_name", "audio-input-microphone"),
+            )
             self._load(
                 "module-remap-source",
                 f"master={transport_source}",
                 f"source_name={name}",
-                (
-                    'source_properties=node.virtual=true device.icon_name="audio-input-microphone" '
-                    f'device.description="{description}"'
-                ),
+                pulse_module_proplist("source_properties", properties),
             )
             self.input_uids[name] = uid
 
