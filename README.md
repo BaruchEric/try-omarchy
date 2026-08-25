@@ -4,6 +4,8 @@ Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a nat
 
 Try Omarchy packages a project-built ARM64 Arch Linux image configured with Omarchy Quattro, a QEMU runtime using Apple Hypervisor Framework, and a small Swift/AppKit launcher into one macOS app. The image is built from pinned Arch Linux ARM packages and a pinned revision of the upstream Omarchy source.
 
+<img width="800" src="https://github.com/user-attachments/assets/1368a8f5-5099-43e4-8d3b-3d7d7fba0326" />
+
 Try Omarchy is not official or affiliated with Omarchy.
 
 ## Highlights
