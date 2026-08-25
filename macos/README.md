@@ -39,11 +39,13 @@ unset. The disk's guest-build identity is immutable so an older root filesystem
 can never boot with incompatible bundled kernel modules. A changed guest build
 requires the user-facing, confirmed Reset Omarchy flow.
 
-Ad-hoc local builds have a code-hash identity that changes when the helper is
-rebuilt. If macOS keeps showing Accessibility as disabled, remove the stale Try
-Omarchy entry from Privacy & Security > Accessibility, then use the current
-build's **Open Settings** action and enable it again. Developer ID-signed release
-builds keep a stable signing identity and do not have this local rebuild issue.
+Ad-hoc local builds use one stable designated requirement for the app and its
+input-capturing processes, so rebuilding does not invalidate their Accessibility
+grant. Builds made before this requirement was introduced used a changing
+code-hash identity: remove any such stale Try Omarchy entry from Privacy &
+Security > Accessibility once, then use the current build's **Open Settings**
+action and enable it again. Developer ID-signed release builds keep their stable
+identity through the signing certificate.
 
 See the root `README.md`, `docs/architecture.md`, and `docs/releasing.md` for the
 supported platform, runtime boundaries, and distribution checklist.

@@ -187,14 +187,30 @@ sign_options=(--force --sign "$sign_identity")
 if [[ $sign_identity != - ]]; then
   sign_options+=(--options runtime --timestamp)
 fi
+app_sign_options=("${sign_options[@]}")
+qemu_sign_options=("${sign_options[@]}" --identifier dev.tryomarchy.native)
+if [[ $sign_identity == - ]]; then
+  # The default ad-hoc designated requirement is the binary's CDHash, which
+  # changes on every local rebuild and invalidates an existing Accessibility
+  # grant. Use one stable local requirement for every process that participates
+  # in accessibility-backed input capture.
+  local_designated_requirement='=designated => identifier "dev.tryomarchy.native"'
+  app_sign_options+=(
+    --identifier dev.tryomarchy.native
+    --requirements "$local_designated_requirement"
+  )
+  qemu_sign_options+=(
+    --requirements "$local_designated_requirement"
+  )
+fi
 for library in "$contents/Resources/runtime/lib"/*.dylib; do
   codesign "${sign_options[@]}" "$library"
 done
 codesign "${sign_options[@]}" "$contents/Resources/runtime/bin/zstd"
-codesign "${sign_options[@]}" \
+codesign "${qemu_sign_options[@]}" \
   --entitlements "$macos_dir/qemu-hvf.entitlements" \
   "$bundled_qemu"
-codesign "${sign_options[@]}" \
+codesign "${app_sign_options[@]}" \
   --entitlements "$macos_dir/omarchy-vm-helper.entitlements" \
   "$contents/MacOS/omarchy-vm-helper"
 
@@ -211,7 +227,7 @@ launch_configuration="$contents/Resources/guest/launch.plist"
 /usr/bin/plutil -insert workingDiskBytes -integer "$working_disk_bytes" "$launch_configuration"
 /usr/bin/plutil -insert kernelCommandLine -string "$kernel_command_line" "$launch_configuration"
 
-codesign "${sign_options[@]}" \
+codesign "${app_sign_options[@]}" \
   --entitlements "$macos_dir/omarchy-vm-helper.entitlements" \
   "$app"
 codesign --verify --deep --strict --verbose=2 "$app"

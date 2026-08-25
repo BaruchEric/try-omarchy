@@ -38,7 +38,7 @@ contents_dir=$(cd "$resources_dir/.." && pwd -P)
 app_bundle=$(cd "$contents_dir/.." && pwd -P)
 guest_input=${1:-"$resources_dir/guest"}
 qemu_bin="$resources_dir/runtime/bin/Try Omarchy"
-input_bridge="$contents_dir/MacOS/omarchy-vm-helper"
+native_bridge="$contents_dir/MacOS/omarchy-vm-helper"
 storage_library="$script_dir/qemu-persistent-storage.sh"
 
 [[ -f $storage_library && ! -L $storage_library ]] || {
@@ -65,8 +65,8 @@ fi
 [[ -f $qemu_bin && -x $qemu_bin ]] || {
   fail "missing bundled GPU QEMU runtime at $qemu_bin"
 }
-[[ -f $input_bridge && -x $input_bridge ]] || {
-  fail "missing bundled focused Command-key bridge at $input_bridge"
+[[ -f $native_bridge && -x $native_bridge ]] || {
+  fail "missing bundled native bridge at $native_bridge"
 }
 file "$qemu_bin" | grep -q 'arm64' || fail "staged QEMU is not an ARM64 executable"
 LC_ALL=C grep -aFq 'TryOmarchy.icns' "$qemu_bin" || {
@@ -80,9 +80,9 @@ for marker in \
     fail "staged QEMU lacks persistent host audio routing; run make runtime"
   }
 done
-file "$input_bridge" | grep -q 'arm64' || fail "focused Command-key bridge is not an ARM64 executable"
-codesign --verify --strict "$input_bridge" >/dev/null 2>&1 || {
-  fail "focused Command-key bridge is not code-signed"
+file "$native_bridge" | grep -q 'arm64' || fail "native bridge is not an ARM64 executable"
+codesign --verify --strict "$native_bridge" >/dev/null 2>&1 || {
+  fail "native bridge is not code-signed"
 }
 
 qemu_accels=$("$qemu_bin" -accel help 2>&1) || fail "cannot inspect staged QEMU accelerators"
@@ -97,6 +97,9 @@ qemu_devices=$("$qemu_bin" -device help 2>&1) || fail "cannot inspect staged QEM
 qemu_help=$("$qemu_bin" -help 2>&1) || fail "cannot inspect staged QEMU options"
 printf '%s\n' "$qemu_help" | grep -q -- '^-add-fd fd=fd,set=set' || {
   fail "staged QEMU cannot preserve the persistent-disk lock descriptor"
+}
+printf '%s\n' "$qemu_help" | grep -Fq 'full-grab=on|off' || {
+  fail "staged QEMU cannot capture macOS system key combinations"
 }
 qemu_netdevs=$("$qemu_bin" -machine virt -netdev help 2>&1) || {
   fail "cannot inspect staged QEMU network backends"
@@ -597,7 +600,6 @@ work_dir=""
 owner_marker=""
 owner_token=""
 qemu_pid=""
-bridge_pid=""
 audio_bridge_pid=""
 
 terminate_child() {
@@ -625,9 +627,6 @@ cleanup() {
   set +e
   if [[ $qemu_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$qemu_pid" 40
-  fi
-  if [[ $bridge_pid =~ ^[0-9]+$ ]]; then
-    terminate_child "$bridge_pid" 20
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
@@ -719,8 +718,7 @@ chmod 600 "$owner_marker"
 
 # Foundation's standardizedFileURL deliberately spells macOS's private
 # temporary-directory alias as /tmp. Keep the owned directory's physical path
-# for cleanup, but expose QMP through the standardized alias expected by the
-# security-checking input bridge.
+# for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
@@ -788,10 +786,10 @@ qemu_args=(
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
-  # display refresh rate through Virtio GPU EDID. The companion bridge captures
-  # Command only while this QEMU window owns focus and injects guest Super over
-  # the private QMP socket; physical Option remains guest Alt.
-  -display 'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on'
+  # display refresh rate through Virtio GPU EDID. Its accessibility-backed
+  # full grab captures system/global Command chords before Spotlight or a
+  # launcher can consume them; Command remains guest Super and Option guest Alt.
+  -display 'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,swap-opt-cmd=off'
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
@@ -819,10 +817,8 @@ fi
 if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
   printf '[qemu-gpu] dry-run command:' >&2
   printf ' %q' "$qemu_bin" "${qemu_args[@]}" >&2
-  printf '\n[qemu-gpu] bridge command: %q --bridge-command-super QEMU_PID %q' \
-    "$input_bridge" "$qmp_socket" >&2
   printf '\n[qemu-gpu] audio bridge command: %q --bridge-native-audio QEMU_PID %q %q' \
-    "$input_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
+    "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n' >&2
   exit 0
 fi
@@ -850,33 +846,17 @@ done
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
 echo "[qemu-gpu] Ready." >&2
 
-# FD 9 deliberately remains open only in QEMU. Letting the sibling input
+# FD 9 deliberately remains open only in QEMU. Letting the sibling audio
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.
-"$input_bridge" --bridge-command-super "$qemu_pid" "$qmp_socket" 9>&- &
-bridge_pid=$!
-"$input_bridge" --bridge-native-audio \
+"$native_bridge" --bridge-native-audio \
   "$qemu_pid" "$audio_bridge_socket" "$audio_route_dir" 9>&- &
 audio_bridge_pid=$!
 
 # Bash 3.2 has no `wait -n`. The native-audio bridge is required for the guest
-# transport, but Command-to-Super is an optional convenience: a delayed or
-# stale macOS Accessibility grant must never prevent Omarchy from booting.
+# transport, so watch it alongside QEMU and fail if it exits unexpectedly.
 while true; do
   qemu_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
   [[ -n $qemu_state && $qemu_state != *Z* ]] || break
-
-  if [[ -n $bridge_pid ]]; then
-    bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-    if [[ -z $bridge_state || $bridge_state == *Z* ]]; then
-      if wait "$bridge_pid"; then
-        bridge_status=0
-      else
-        bridge_status=$?
-      fi
-      bridge_pid=""
-      echo "[qemu-gpu] Command-to-Super mapping is unavailable (status $bridge_status); continuing without it." >&2
-    fi
-  fi
 
   audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)
   if [[ -z $audio_bridge_state || $audio_bridge_state == *Z* ]]; then
@@ -897,21 +877,6 @@ else
   qemu_status=$?
 fi
 qemu_pid=""
-
-if [[ -n $bridge_pid ]]; then
-  for ((attempt = 0; attempt < 40; attempt++)); do
-    bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-    [[ -n $bridge_state && $bridge_state != *Z* ]] || break
-    sleep 0.05
-  done
-  bridge_state=$(ps -p "$bridge_pid" -o state= 2>/dev/null || true)
-  if [[ -n $bridge_state && $bridge_state != *Z* ]]; then
-    terminate_child "$bridge_pid" 20
-  else
-    wait "$bridge_pid" 2>/dev/null || true
-  fi
-fi
-bridge_pid=""
 
 for ((attempt = 0; attempt < 40; attempt++)); do
   audio_bridge_state=$(ps -p "$audio_bridge_pid" -o state= 2>/dev/null || true)

@@ -42,7 +42,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.launch = launch
 
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 480),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 510),
             styleMask: [.titled, .closable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -253,13 +253,53 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 500),
         ])
 
-        let stack = NSStackView(views: [headingStack, permissionCard, reset, launchButton])
+        let footerText = "by Martiano  •  Not affiliated with Omarchy."
+        let footerTitle = NSMutableAttributedString(
+            string: footerText,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        let footerNSString = footerText as NSString
+        footerTitle.addAttributes(
+            [
+                .link: URL(string: "https://x.com/martiano")!,
+                .foregroundColor: NSColor.linkColor,
+            ],
+            range: footerNSString.range(of: "Martiano")
+        )
+        footerTitle.addAttributes(
+            [
+                .link: URL(string: "https://omarchy.org")!,
+                .foregroundColor: NSColor.linkColor,
+            ],
+            range: footerNSString.range(of: "Omarchy")
+        )
+
+        let footer = NSTextField(labelWithAttributedString: footerTitle)
+        footer.isSelectable = true
+        footer.allowsEditingTextAttributes = true
+        footer.translatesAutoresizingMaskIntoConstraints = false
+
+        let footerContainer = NSView()
+        footerContainer.addSubview(footer)
+        NSLayoutConstraint.activate([
+            footer.centerXAnchor.constraint(equalTo: footerContainer.centerXAnchor),
+            footer.topAnchor.constraint(equalTo: footerContainer.topAnchor),
+            footer.bottomAnchor.constraint(equalTo: footerContainer.bottomAnchor),
+        ])
+
+        let stack = NSStackView(
+            views: [headingStack, permissionCard, reset, launchButton, footerContainer]
+        )
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
         stack.setCustomSpacing(22, after: headingStack)
         stack.setCustomSpacing(12, after: permissionCard)
         stack.setCustomSpacing(20, after: reset)
+        stack.setCustomSpacing(10, after: launchButton)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
 
@@ -270,6 +310,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -30),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            footerContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
     }
 

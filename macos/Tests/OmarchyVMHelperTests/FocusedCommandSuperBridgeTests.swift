@@ -57,12 +57,10 @@ struct FocusedCommandCaptureTests {
         #expect(!state.isCapturing)
     }
 
-    @Test("captures Command-Space before the host can open Spotlight")
-    func capturesCommandSpace() {
+    @Test("translates Command-Space after capture")
+    func translatesCommandSpace() {
         let space: CGKeyCode = 49
         var state = FocusedCommandCaptureState()
-
-        #expect(FocusedCommandSuperBridge.eventTapLocation == .cghidEventTap)
 
         _ = state.process(event(
             .flagsChanged,

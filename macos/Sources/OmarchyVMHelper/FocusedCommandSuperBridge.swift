@@ -498,11 +498,6 @@ final class FocusedCommandSuperBridge {
     typealias ProcessAlive = () -> Bool
     typealias EventPost = (CGEvent, pid_t) -> Void
 
-    // Capture before the session-level macOS hot-key handler. In particular,
-    // Command-Space is otherwise consumed by Spotlight before the bridge can
-    // turn it into guest Super-Space.
-    static let eventTapLocation: CGEventTapLocation = .cghidEventTap
-
     private let targetPID: pid_t
     private let metaClient: QMPMetaKeyClient
     private let focusProbe: FocusProbe
@@ -546,7 +541,7 @@ final class FocusedCommandSuperBridge {
             | (UInt64(1) << CGEventType.keyUp.rawValue)
             | (UInt64(1) << CGEventType.flagsChanged.rawValue)
         guard let eventTap = CGEvent.tapCreate(
-            tap: Self.eventTapLocation,
+            tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
             eventsOfInterest: eventMask,

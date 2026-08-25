@@ -18,9 +18,10 @@ Try Omarchy.app
 
 The Swift launcher presents a start menu on every app open. It reports optional
 macOS Accessibility and Microphone permission state, handles confirmed factory
-resets, startup, shutdown, host audio devices, and Command-to-Super key mapping.
-It prepares a writable copy of the Linux disk and starts QEMU. Swift does not
-replace QEMU or run the Omarchy desktop itself.
+resets, startup, shutdown, and host audio devices. It prepares a writable copy
+of the Linux disk and starts QEMU. QEMU's Cocoa input layer uses the shared
+Accessibility grant to capture system-wide Command chords and deliver Command
+as guest Super. Swift does not replace QEMU or run the Omarchy desktop itself.
 
 QEMU presents the hardware that Linux expects: CPUs, memory, storage, networking,
 graphics, audio, keyboard, and pointer devices. Because both the Mac and the
