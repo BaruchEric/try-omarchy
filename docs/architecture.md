@@ -54,8 +54,8 @@ creates the account on first boot.
   the QEMU and ARM64 integration around them.
 
 Nothing is overwritten while the app runs. The app bundle and packaged factory
-disk remain unchanged. Normal user launches use one private writable disk in the
-user's Application Support directory. Its factory-image identity is immutable:
+disk remain unchanged. Normal user launches use one private writable disk under
+`~/Library/Application Support/Try Omarchy/QEMU/v1`. Its factory-image identity is immutable:
 the launcher never pairs a saved root filesystem with a different bundled kernel
 or initramfs. When a guest build changes, the start menu asks for an explicitly
 confirmed factory reset before creating the replacement disk. A compatible

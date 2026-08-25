@@ -9,6 +9,45 @@ enum QEMUGPUStorageOption: String, Equatable {
 }
 
 enum QEMUGPUStorageSpaceEstimate {
+    static func storageRootURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let configuredRoot = environment["OMARCHY_QEMU_GPU_STATE_ROOT"],
+           configuredRoot.hasPrefix("/"),
+           !configuredRoot.contains("\n"),
+           !configuredRoot.contains("\r") {
+            return URL(fileURLWithPath: configuredRoot, isDirectory: true)
+                .standardizedFileURL
+        }
+        guard let applicationSupport = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else { return nil }
+        return applicationSupport
+            .appendingPathComponent("Try Omarchy/QEMU/v1", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    static func storageRootDisplayPath(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let root = storageRootURL(
+            environment: environment,
+            fileManager: fileManager
+        ) else { return nil }
+        let path = root.path
+        let home = fileManager.homeDirectoryForCurrentUser.standardizedFileURL.path
+        if path == home {
+            return "~"
+        }
+        if path.hasPrefix(home + "/") {
+            return "~" + path.dropFirst(home.count)
+        }
+        return path
+    }
+
     static func formattedReclaimableSpace(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         bundleIdentity: String? = nil,
@@ -101,19 +140,10 @@ enum QEMUGPUStorageSpaceEstimate {
             environment: environment,
             bundleIdentity: bundleIdentity
         ) else { return nil }
-        let root: URL
-        if let configuredRoot = environment["OMARCHY_QEMU_GPU_STATE_ROOT"],
-           configuredRoot.hasPrefix("/"),
-           !configuredRoot.contains("\n"),
-           !configuredRoot.contains("\r") {
-            root = URL(fileURLWithPath: configuredRoot, isDirectory: true)
-        } else {
-            guard let applicationSupport = fileManager.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first else { return nil }
-            root = applicationSupport.appendingPathComponent("Omarchy/QEMU/v1", isDirectory: true)
-        }
+        guard let root = storageRootURL(
+            environment: environment,
+            fileManager: fileManager
+        ) else { return nil }
         let disks = root.appendingPathComponent("disks", isDirectory: true)
         if storageKey != "current" {
             return [disks.appendingPathComponent(storageKey, isDirectory: true)]

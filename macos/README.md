@@ -32,7 +32,8 @@ macos/build-app.sh \
 Local app builds are ad-hoc signed. Runtime caches are private to
 `macos/.build/`; user-facing output always goes to `dist/`.
 
-Normal app launches maintain one stable user VM disk. Storage integration tests
+Normal app launches maintain one stable user VM disk under
+`~/Library/Application Support/Try Omarchy/QEMU/v1`. Storage integration tests
 and specialized development runs can opt into identity-keyed parallel disks by
 setting `OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=1`; release behavior leaves it
 unset. The disk's guest-build identity is immutable so an older root filesystem

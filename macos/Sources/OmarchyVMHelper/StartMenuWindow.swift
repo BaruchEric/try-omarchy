@@ -4,6 +4,40 @@ private final class MouseIgnoringTextField: NSTextField {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+private final class PointingHandButton: NSButton {
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+}
+
+private final class LinkCursorTextField: NSTextField {
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        let textRect = cell?.drawingRect(forBounds: bounds) ?? bounds
+        let fullRange = NSRange(location: 0, length: attributedStringValue.length)
+        attributedStringValue.enumerateAttribute(.link, in: fullRange) { value, range, _ in
+            guard value != nil else { return }
+            let prefixRange = NSRange(location: 0, length: range.location)
+            let prefixWidth = attributedStringValue
+                .attributedSubstring(from: prefixRange)
+                .size().width
+            let linkWidth = attributedStringValue
+                .attributedSubstring(from: range)
+                .size().width
+            addCursorRect(
+                NSRect(
+                    x: textRect.minX + prefixWidth,
+                    y: textRect.minY,
+                    width: linkWidth,
+                    height: textRect.height
+                ),
+                cursor: .pointingHand
+            )
+        }
+    }
+}
+
 @MainActor
 final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
@@ -16,6 +50,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let resetStorage: () -> Void
     private let launch: () -> Void
     private let canResetStorage: Bool
+    private let storageLocation: String?
+    private let storageLocationURL: URL?
 
     private var microphoneRequestInFlight = false
     private var resetInProgress = false
@@ -28,6 +64,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         requestAccessibility: @escaping () -> Void,
         requestMicrophone: @escaping (@escaping (Bool) -> Void) -> Void,
         canResetStorage: Bool,
+        storageLocation: String?,
+        storageLocationURL: URL?,
         storageSpaceEstimate: @escaping () -> String?,
         resetStorage: @escaping () -> Void,
         launch: @escaping () -> Void
@@ -37,6 +75,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.requestAccessibility = requestAccessibility
         self.requestMicrophone = requestMicrophone
         self.canResetStorage = canResetStorage
+        self.storageLocation = storageLocation
+        self.storageLocationURL = storageLocationURL
         self.storageSpaceEstimate = storageSpaceEstimate
         self.resetStorage = resetStorage
         self.launch = launch
@@ -212,6 +252,50 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
 
+        var resetViews: [NSView] = [reset]
+        if let storageLocation {
+            let dataLabel = NSTextField(labelWithString: "Data:")
+            dataLabel.font = .systemFont(ofSize: 10)
+            dataLabel.textColor = .secondaryLabelColor
+
+            let storage: NSView
+            if let storageLocationURL {
+                let pathButton = PointingHandButton(
+                    title: storageLocation,
+                    target: self,
+                    action: #selector(openStorageLocation)
+                )
+                pathButton.isBordered = false
+                pathButton.focusRingType = .none
+                pathButton.attributedTitle = NSAttributedString(
+                    string: storageLocation,
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: 10),
+                        .foregroundColor: NSColor.secondaryLabelColor,
+                    ]
+                )
+                pathButton.alignment = .left
+                pathButton.toolTip = storageLocationURL.path
+                storage = pathButton
+            } else {
+                let pathLabel = NSTextField(labelWithString: storageLocation)
+                pathLabel.font = .systemFont(ofSize: 10)
+                pathLabel.textColor = .secondaryLabelColor
+                storage = pathLabel
+            }
+
+            let storageRow = NSStackView(views: [dataLabel, storage])
+            storageRow.orientation = .horizontal
+            storageRow.alignment = .centerY
+            storageRow.spacing = 3
+            storage.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            resetViews.append(storageRow)
+        }
+        let resetSection = NSStackView(views: resetViews)
+        resetSection.orientation = .vertical
+        resetSection.alignment = .leading
+        resetSection.spacing = 4
+
         let launchButton = NSButton(
             title: "",
             target: self,
@@ -277,7 +361,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             range: footerNSString.range(of: "Omarchy")
         )
 
-        let footer = NSTextField(labelWithAttributedString: footerTitle)
+        let footer = LinkCursorTextField(labelWithAttributedString: footerTitle)
         footer.isSelectable = true
         footer.allowsEditingTextAttributes = true
         footer.translatesAutoresizingMaskIntoConstraints = false
@@ -291,14 +375,14 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let stack = NSStackView(
-            views: [headingStack, permissionCard, reset, launchButton, footerContainer]
+            views: [headingStack, permissionCard, resetSection, launchButton, footerContainer]
         )
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
         stack.setCustomSpacing(22, after: headingStack)
         stack.setCustomSpacing(12, after: permissionCard)
-        stack.setCustomSpacing(20, after: reset)
+        stack.setCustomSpacing(20, after: resetSection)
         stack.setCustomSpacing(10, after: launchButton)
         stack.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(stack)
@@ -309,6 +393,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 48),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -30),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            resetSection.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             footerContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -409,6 +494,33 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
         ) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func openStorageLocation() {
+        guard let storageLocationURL else { return }
+        do {
+            if !FileManager.default.fileExists(atPath: storageLocationURL.path) {
+                try FileManager.default.createDirectory(
+                    at: storageLocationURL,
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700]
+                )
+            }
+            guard NSWorkspace.shared.open(storageLocationURL) else {
+                throw NSError(
+                    domain: "TryOmarchy.StorageLocation",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Finder could not open the data directory."]
+                )
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Couldn’t open the data directory"
+            alert.informativeText = error.localizedDescription
+            alert.addButton(withTitle: "OK")
+            alert.beginSheetModal(for: window)
+        }
     }
 
     @objc private func resetOmarchy() {

@@ -75,6 +75,19 @@ struct QEMUGPULaunchRequestTests {
 
 @Suite("QEMU storage-space estimate")
 struct QEMUGPUStorageSpaceEstimateTests {
+    @Test("shows the configured data root and abbreviates the default home path")
+    func displaysStorageRoot() throws {
+        let configuredRoot = "/private/tmp/try-omarchy-configured/../data"
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
+            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": configuredRoot]
+        ) == "/private/tmp/data")
+
+        let defaultRoot = try #require(QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
+            environment: [:]
+        ))
+        #expect(defaultRoot == "~/Library/Application Support/Try Omarchy/QEMU/v1")
+    }
+
     @Test("formats allocated bytes as a readable decimal gigabyte estimate")
     func formatsGigabytes() {
         #expect(QEMUGPUStorageSpaceEstimate.format(bytes: 0) == nil)

@@ -61,6 +61,16 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
                 MicrophonePreflight.requestAccess(completion: completion)
             },
             canResetStorage: canResetStorage,
+            storageLocation: canResetStorage
+                ? QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
+                    environment: baseEnvironment
+                )
+                : nil,
+            storageLocationURL: canResetStorage
+                ? QEMUGPUStorageSpaceEstimate.storageRootURL(
+                    environment: baseEnvironment
+                )
+                : nil,
             storageSpaceEstimate: { [baseEnvironment] in
                 QEMUGPUStorageSpaceEstimate.formattedReclaimableSpace(
                     environment: baseEnvironment,
