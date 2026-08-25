@@ -75,17 +75,48 @@ struct QEMUGPULaunchRequestTests {
 
 @Suite("QEMU storage-space estimate")
 struct QEMUGPUStorageSpaceEstimateTests {
-    @Test("shows the configured data root and abbreviates the default home path")
+    @Test("shows the app data folder while keeping the VM layout versioned")
     func displaysStorageRoot() throws {
         let configuredRoot = "/private/tmp/try-omarchy-configured/../data"
-        #expect(QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
-            environment: ["OMARCHY_QEMU_GPU_STATE_ROOT": configuredRoot]
+        let configuredEnvironment = ["OMARCHY_QEMU_GPU_STATE_ROOT": configuredRoot]
+        let standardizedConfiguredRoot = URL(
+            fileURLWithPath: configuredRoot,
+            isDirectory: true
+        ).standardizedFileURL
+        #expect(QEMUGPUStorageSpaceEstimate.dataDirectoryDisplayPath(
+            environment: configuredEnvironment
         ) == "/private/tmp/data")
+        #expect(QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+            environment: configuredEnvironment
+        ) == standardizedConfiguredRoot)
+        #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: configuredEnvironment
+        ) == standardizedConfiguredRoot)
 
-        let defaultRoot = try #require(QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
+        let defaultDirectory = try #require(QEMUGPUStorageSpaceEstimate.dataDirectoryDisplayPath(
             environment: [:]
         ))
-        #expect(defaultRoot == "~/Library/Application Support/Try Omarchy/QEMU/v1")
+        #expect(defaultDirectory == "~/Library/Application Support/Try Omarchy")
+
+        let defaultDirectoryURL = try #require(QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+            environment: [:]
+        ))
+        let defaultStorageRoot = try #require(QEMUGPUStorageSpaceEstimate.storageRootURL(
+            environment: [:]
+        ))
+        #expect(defaultStorageRoot == defaultDirectoryURL
+            .appendingPathComponent("VM/v1", isDirectory: true)
+            .standardizedFileURL)
+
+        for invalidRoot in ["relative/path", "/private/tmp/..", "/tmp", "/bad\npath"] {
+            let invalidEnvironment = ["OMARCHY_QEMU_GPU_STATE_ROOT": invalidRoot]
+            #expect(QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
+                environment: invalidEnvironment
+            ) == nil)
+            #expect(QEMUGPUStorageSpaceEstimate.storageRootURL(
+                environment: invalidEnvironment
+            ) == nil)
+        }
     }
 
     @Test("formats allocated bytes as a readable decimal gigabyte estimate")

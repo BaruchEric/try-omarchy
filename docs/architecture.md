@@ -55,7 +55,7 @@ creates the account on first boot.
 
 Nothing is overwritten while the app runs. The app bundle and packaged factory
 disk remain unchanged. Normal user launches use one private writable disk under
-`~/Library/Application Support/Try Omarchy/QEMU/v1`. Its factory-image identity is immutable:
+`~/Library/Application Support/Try Omarchy/VM/v1`. Its factory-image identity is immutable:
 the launcher never pairs a saved root filesystem with a different bundled kernel
 or initramfs. When a guest build changes, the start menu asks for an explicitly
 confirmed factory reset before creating the replacement disk. A compatible

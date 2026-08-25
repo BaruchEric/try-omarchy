@@ -266,7 +266,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                     action: #selector(openStorageLocation)
                 )
                 pathButton.isBordered = false
-                pathButton.focusRingType = .none
+                pathButton.setAccessibilityLabel("Open data folder in Finder")
+                pathButton.setAccessibilityValue(storageLocation)
+                pathButton.setAccessibilityHelp("Opens the Try Omarchy data folder in Finder")
                 pathButton.attributedTitle = NSAttributedString(
                     string: storageLocation,
                     attributes: [
@@ -276,6 +278,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 )
                 pathButton.alignment = .left
                 pathButton.toolTip = storageLocationURL.path
+                pathButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 18).isActive = true
                 storage = pathButton
             } else {
                 let pathLabel = NSTextField(labelWithString: storageLocation)
@@ -296,30 +299,34 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetSection.alignment = .leading
         resetSection.spacing = 4
 
+        let launchButtonTitle = launchInProgress ? "Launching Omarchy…" : "Launch Omarchy"
+        let launchButtonFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
         let launchButton = NSButton(
-            title: "",
+            title: launchButtonTitle,
             target: self,
             action: #selector(launchOmarchy)
         )
         launchButton.keyEquivalent = launchInProgress ? "" : "\r"
         launchButton.bezelStyle = .rounded
         launchButton.controlSize = .large
+        launchButton.font = launchButtonFont
         launchButton.isEnabled = !launchInProgress && !resetInProgress && !microphoneRequestInFlight
+        if !launchButton.isEnabled {
+            launchButton.title = ""
+            let disabledTitle = MouseIgnoringTextField(labelWithString: launchButtonTitle)
+            disabledTitle.font = launchButtonFont
+            disabledTitle.textColor = .controlTextColor
+            disabledTitle.alignment = .center
+            disabledTitle.setAccessibilityElement(false)
+            disabledTitle.translatesAutoresizingMaskIntoConstraints = false
+            launchButton.addSubview(disabledTitle)
+            NSLayoutConstraint.activate([
+                disabledTitle.centerXAnchor.constraint(equalTo: launchButton.centerXAnchor),
+                disabledTitle.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
+            ])
+        }
         launchButton.translatesAutoresizingMaskIntoConstraints = false
         launchButton.setAccessibilityLabel(launchInProgress ? "Launching Omarchy" : "Launch Omarchy")
-
-        let launchTitle = MouseIgnoringTextField(
-            labelWithString: launchInProgress ? "Launching Omarchy…" : "Launch Omarchy"
-        )
-        launchTitle.font = .systemFont(ofSize: 16, weight: .semibold)
-        launchTitle.textColor = .alternateSelectedControlTextColor
-        launchTitle.alignment = .center
-        launchTitle.translatesAutoresizingMaskIntoConstraints = false
-        launchButton.addSubview(launchTitle)
-        NSLayoutConstraint.activate([
-            launchTitle.centerXAnchor.constraint(equalTo: launchButton.centerXAnchor),
-            launchTitle.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
-        ])
         if launchInProgress {
             let spinner = NSProgressIndicator()
             spinner.style = .spinning
@@ -430,9 +437,27 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         labels.alignment = .leading
         labels.spacing = 3
 
-        let status = NSTextField(labelWithString: granted ? "●  Yes" : "○  No")
-        status.font = .systemFont(ofSize: 12, weight: .semibold)
-        status.textColor = granted ? .systemGreen : .secondaryLabelColor
+        let statusText = granted ? "●  Yes" : "○  No"
+        let statusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let status = NSTextField(labelWithString: statusText)
+        status.font = statusFont
+        if granted {
+            let attributedStatus = NSMutableAttributedString(
+                string: statusText,
+                attributes: [
+                    .font: statusFont,
+                    .foregroundColor: NSColor.labelColor,
+                ]
+            )
+            attributedStatus.addAttribute(
+                .foregroundColor,
+                value: NSColor.systemGreen,
+                range: NSRange(location: 0, length: 1)
+            )
+            status.attributedStringValue = attributedStatus
+        } else {
+            status.textColor = .secondaryLabelColor
+        }
         status.alignment = .right
         status.setContentHuggingPriority(.required, for: .horizontal)
 
@@ -440,7 +465,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         if let actionTitle {
             let button = NSButton(title: actionTitle, target: self, action: action)
             button.controlSize = .small
-            button.isEnabled = !microphoneRequestInFlight && !launchInProgress
+            button.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
             trailingViews.append(button)
         }
         let trailing = NSStackView(views: trailingViews)

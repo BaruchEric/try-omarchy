@@ -62,12 +62,12 @@ final class VMApplicationController: NSObject, NSApplicationDelegate {
             },
             canResetStorage: canResetStorage,
             storageLocation: canResetStorage
-                ? QEMUGPUStorageSpaceEstimate.storageRootDisplayPath(
+                ? QEMUGPUStorageSpaceEstimate.dataDirectoryDisplayPath(
                     environment: baseEnvironment
                 )
                 : nil,
             storageLocationURL: canResetStorage
-                ? QEMUGPUStorageSpaceEstimate.storageRootURL(
+                ? QEMUGPUStorageSpaceEstimate.dataDirectoryURL(
                     environment: baseEnvironment
                 )
                 : nil,

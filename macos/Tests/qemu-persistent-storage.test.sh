@@ -588,6 +588,16 @@ saved_multi_disk=$OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK
 default_home="$test_root/default-home"
 mkdir "$default_home"
 chmod 700 "$default_home"
+old_branded_root="$default_home/Library/Application Support/Try Omarchy/QEMU/v1"
+mkdir -p "$old_branded_root"
+chmod 700 \
+  "$default_home/Library" \
+  "$default_home/Library/Application Support" \
+  "$default_home/Library/Application Support/Try Omarchy" \
+  "$default_home/Library/Application Support/Try Omarchy/QEMU" \
+  "$old_branded_root"
+printf 'leave old storage untouched\n' >"$old_branded_root/sentinel"
+chmod 600 "$old_branded_root/sentinel"
 unset OMARCHY_QEMU_GPU_STATE_ROOT
 export HOME=$default_home
 export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
@@ -595,7 +605,8 @@ qemu_persistent_storage_select \
   persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
 assert_eq \
   "$QEMU_SELECTED_DISK" \
-  "$default_home/Library/Application Support/Try Omarchy/QEMU/v1/disks/current/rootfs.ext4"
+  "$default_home/Library/Application Support/Try Omarchy/VM/v1/disks/current/rootfs.ext4"
+assert test -f "$old_branded_root/sentinel"
 assert test ! -e "$default_home/Library/Application Support/Omarchy"
 qemu_persistent_storage_release_lock
 export HOME=$saved_home

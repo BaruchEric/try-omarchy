@@ -9,31 +9,41 @@ enum QEMUGPUStorageOption: String, Equatable {
 }
 
 enum QEMUGPUStorageSpaceEstimate {
-    static func storageRootURL(
+    private static let stateRootEnvironmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
+
+    static func dataDirectoryURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
-        if let configuredRoot = environment["OMARCHY_QEMU_GPU_STATE_ROOT"],
-           configuredRoot.hasPrefix("/"),
-           !configuredRoot.contains("\n"),
-           !configuredRoot.contains("\r") {
-            return URL(fileURLWithPath: configuredRoot, isDirectory: true)
-                .standardizedFileURL
+        if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
+            return validatedConfiguredRoot(configuredRoot)
         }
         guard let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first else { return nil }
         return applicationSupport
-            .appendingPathComponent("Try Omarchy/QEMU/v1", isDirectory: true)
+            .appendingPathComponent("Try Omarchy", isDirectory: true)
             .standardizedFileURL
     }
 
-    static func storageRootDisplayPath(
+    static func storageRootURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let configuredRoot = environment[stateRootEnvironmentKey], !configuredRoot.isEmpty {
+            return validatedConfiguredRoot(configuredRoot)
+        }
+        return dataDirectoryURL(environment: environment, fileManager: fileManager)?
+            .appendingPathComponent("VM/v1", isDirectory: true)
+            .standardizedFileURL
+    }
+
+    static func dataDirectoryDisplayPath(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> String? {
-        guard let root = storageRootURL(
+        guard let root = dataDirectoryURL(
             environment: environment,
             fileManager: fileManager
         ) else { return nil }
@@ -46,6 +56,16 @@ enum QEMUGPUStorageSpaceEstimate {
             return "~" + path.dropFirst(home.count)
         }
         return path
+    }
+
+    private static func validatedConfiguredRoot(_ path: String) -> URL? {
+        guard path.hasPrefix("/"), !path.contains("\n"), !path.contains("\r") else {
+            return nil
+        }
+        let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        let unsafeRoots = ["/", "/Users", "/private", "/private/tmp", "/tmp"]
+        guard !unsafeRoots.contains(root.path) else { return nil }
+        return root
     }
 
     static func formattedReclaimableSpace(
