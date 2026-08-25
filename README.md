@@ -10,7 +10,8 @@ Omarchy source.
 
 ## Quick Start
 
-Head over to Releases and download the latest `.dmg`. Install it as any other app, launch it, and enjoy Omarchy.
+Head over to [Releases](https://github.com/themartiano/try-omarchy/releases) and download the latest `.dmg` file.
+Install it as any other app, launch it, and enjoy Omarchy.
 
 ## Requirements
 
