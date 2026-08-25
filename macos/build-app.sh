@@ -236,11 +236,14 @@ echo "[native] Built $app"
 if (( build_dmg )); then
   dmg="$repo_dir/dist/Try Omarchy.dmg"
   rm -f "$dmg"
-  if [[ -n $notarize_profile ]]; then
-    "$package_dmg" --notarize-profile "$notarize_profile" "$app" "$dmg"
-  else
-    "$package_dmg" "$app" "$dmg"
+  package_options=()
+  if [[ $sign_identity != - ]]; then
+    package_options+=(--sign-identity "$sign_identity")
   fi
+  if [[ -n $notarize_profile ]]; then
+    package_options+=(--notarize-profile "$notarize_profile")
+  fi
+  "$package_dmg" "${package_options[@]}" "$app" "$dmg"
 fi
 if (( open_app )); then
   open "$app"

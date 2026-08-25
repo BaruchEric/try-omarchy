@@ -12,14 +12,17 @@ Use the root Makefile for normal development:
 make runtime   # macos/.build/qemu-gpu-runtime
 make app       # dist/Try Omarchy.app
 make run
-make package   # dist/Try Omarchy.dmg
+make package   # ad-hoc dist/Try Omarchy.dmg for local testing
+make release   # signed and notarized dist/Try Omarchy.dmg
 make test
 ```
 
 `make app` requires an existing `dist/guest/` and staged QEMU runtime. A full
 `make build` creates both first.
 
-The app builder is also directly usable for release signing and notarization:
+`make release` defaults to the maintainer's Developer ID Application identity
+and `try-omarchy` notarytool profile. The app builder is also directly usable
+for release signing and notarization:
 
 ```sh
 macos/build-app.sh \

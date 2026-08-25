@@ -8,7 +8,7 @@ Releases are Apple Silicon-only and require macOS 15 or newer.
 make doctor
 make test
 make build
-make package
+make release
 ```
 
 Outputs are written to:
@@ -17,15 +17,15 @@ Outputs are written to:
 - `dist/Try Omarchy.dmg`
 - `dist/guest/`
 
-Local builds are ad-hoc signed. For distribution, pass a Developer ID identity
-and a configured notarytool keychain profile directly to the app builder:
+`make package` creates an ad-hoc local build. `make release` uses the maintainer's
+Developer ID Application identity and the `try-omarchy` notarytool keychain
+profile to sign, notarize, and staple the app and DMG. Another maintainer can
+override both defaults:
 
 ```sh
-macos/build-app.sh \
-  --dmg \
-  --guest-dir dist/guest \
-  --sign-identity "Developer ID Application: Example (TEAMID)" \
-  --notarize-profile try-omarchy
+make release \
+  RELEASE_SIGN_IDENTITY="Developer ID Application: Example (TEAMID)" \
+  RELEASE_NOTARY_PROFILE=example-profile
 ```
 
 ## Release checklist

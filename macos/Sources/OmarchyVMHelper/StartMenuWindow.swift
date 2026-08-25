@@ -344,7 +344,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 500),
         ])
 
-        let footerText = "by Martiano  •  Not affiliated with Omarchy."
+        let footerText = "by @martiano  •  Not affiliated with Omarchy."
         let footerTitle = NSMutableAttributedString(
             string: footerText,
             attributes: [
@@ -358,7 +358,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 .link: URL(string: "https://x.com/martiano")!,
                 .foregroundColor: NSColor.linkColor,
             ],
-            range: footerNSString.range(of: "Martiano")
+            range: footerNSString.range(of: "@martiano")
         )
         footerTitle.addAttributes(
             [

@@ -5,9 +5,11 @@ DIST := $(ROOT)/dist
 GUEST_DIST := $(DIST)/guest
 APP := $(DIST)/Try Omarchy.app
 DMG := $(DIST)/Try Omarchy.dmg
+RELEASE_SIGN_IDENTITY ?= Developer ID Application: Eduardo Martinez (RZC79MPD34)
+RELEASE_NOTARY_PROFILE ?= try-omarchy
 
 .DEFAULT_GOAL := help
-.PHONY: help doctor test guest runtime app build run run-ephemeral reset package clean clean-guest
+.PHONY: help doctor test guest runtime app build run run-ephemeral reset package release clean clean-guest
 
 help:
 	@printf '%s\n' \
@@ -17,7 +19,8 @@ help:
 	  '  make test           Run native and guest contract tests' \
 	  '  make build          Build guest, runtime, and app' \
 	  '  make run            Build the app from existing artifacts and open it' \
-	  '  make package        Create dist/Try Omarchy.dmg' \
+	  '  make package        Create an ad-hoc DMG for local testing' \
+	  '  make release        Create a signed and notarized distribution DMG' \
 	  '' \
 	  'Component builds:' \
 	  '  make guest          Build dist/guest in Docker' \
@@ -66,6 +69,15 @@ reset: app
 
 package:
 	@$(ROOT)/macos/build-app.sh --dmg --guest-dir $(GUEST_DIST)
+
+release:
+	@[[ "$(RELEASE_SIGN_IDENTITY)" == "Developer ID Application:"* ]] || { echo 'error: RELEASE_SIGN_IDENTITY must be a Developer ID Application identity' >&2; exit 1; }
+	@[[ -n "$(strip $(RELEASE_NOTARY_PROFILE))" ]] || { echo 'error: RELEASE_NOTARY_PROFILE must name a notarytool keychain profile' >&2; exit 1; }
+	@$(ROOT)/macos/build-app.sh \
+	  --dmg \
+	  --guest-dir "$(GUEST_DIST)" \
+	  --sign-identity "$(RELEASE_SIGN_IDENTITY)" \
+	  --notarize-profile "$(RELEASE_NOTARY_PROFILE)"
 
 clean:
 	@rm -rf -- "$(APP)" "$(DMG)" "$(ROOT)/macos/.build"

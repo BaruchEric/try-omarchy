@@ -4,7 +4,9 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: macos/package-dmg.sh [--notarize-profile PROFILE] APP [OUTPUT_DMG]
+Usage: macos/package-dmg.sh [--sign-identity IDENTITY]
+                            [--notarize-profile PROFILE]
+                            APP [OUTPUT_DMG]
 EOF
   exit 64
 }
@@ -14,13 +16,30 @@ fail() {
   exit 1
 }
 
+sign_identity=
 notarize_profile=
-if [[ ${1:-} == --notarize-profile ]]; then
-  (($# >= 3)) || usage
-  notarize_profile=$2
-  shift 2
-fi
+while (($#)); do
+  case "$1" in
+    --sign-identity)
+      (($# >= 2)) || usage
+      sign_identity=$2
+      shift 2
+      ;;
+    --notarize-profile)
+      (($# >= 2)) || usage
+      notarize_profile=$2
+      shift 2
+      ;;
+    --) shift; break ;;
+    -*) usage ;;
+    *) break ;;
+  esac
+done
 (( $# == 1 || $# == 2 )) || usage
+
+if [[ -n $notarize_profile && ( -z $sign_identity || $sign_identity == - ) ]]; then
+  fail "notarization requires --sign-identity with a Developer ID Application identity"
+fi
 
 app=$1
 [[ $app == /* && -d $app && ! -L $app && $app == *.app ]] || \
@@ -56,11 +75,6 @@ trap cleanup EXIT HUP INT TERM
 
 if [[ -n $notarize_profile ]]; then
   command -v xcrun >/dev/null 2>&1 || fail "xcrun is required for notarization"
-  archive="$work_dir/Omarchy.zip"
-  ditto -c -k --keepParent "$app" "$archive"
-  xcrun notarytool submit "$archive" --keychain-profile "$notarize_profile" --wait
-  xcrun stapler staple "$app"
-  xcrun stapler validate "$app"
 fi
 
 staging="$work_dir/dmg"
@@ -96,8 +110,19 @@ hdiutil convert \
   -imagekey zlib-level=9 \
   -o "$output" >/dev/null
 
+if [[ -n $sign_identity ]]; then
+  codesign \
+    --sign "$sign_identity" \
+    --identifier dev.tryomarchy.native.disk-image \
+    --timestamp \
+    "$output"
+  codesign --verify --strict --verbose=2 "$output"
+fi
+
 if [[ -n $notarize_profile ]]; then
   xcrun notarytool submit "$output" --keychain-profile "$notarize_profile" --wait
+  xcrun stapler staple "$app"
+  xcrun stapler validate "$app"
   xcrun stapler staple "$output"
   xcrun stapler validate "$output"
 fi
