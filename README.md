@@ -1,13 +1,10 @@
 # Try Omarchy
 
-Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a
-native, hardware-accelerated app on an Apple Silicon Mac.
+Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a native, hardware-accelerated app on an Apple Silicon Mac.
 
-Try Omarchy packages a project-built ARM64 Arch Linux image configured with
-Omarchy Quattro, a QEMU runtime using Apple Hypervisor Framework, and a small
-Swift/AppKit launcher into one macOS app. The image is built from pinned Arch
-Linux ARM packages and a pinned revision of the upstream Omarchy source.
-Try Omarchy is not official or affiliated with [Omarchy](https://omarchy.org).
+Try Omarchy packages a project-built ARM64 Arch Linux image configured with Omarchy Quattro, a QEMU runtime using Apple Hypervisor Framework, and a small Swift/AppKit launcher into one macOS app. The image is built from pinned Arch Linux ARM packages and a pinned revision of the upstream Omarchy source.
+
+Try Omarchy is not official or affiliated with Omarchy.
 
 ## Highlights
 
@@ -15,20 +12,15 @@ Try Omarchy is not official or affiliated with [Omarchy](https://omarchy.org).
 - Resizable native window with automatic guest resolution and HiDPI scale updates
 - Mac audio input/output selection inside Omarchy, with live routing and system-default fallback
 
-> **Current limitation:** Video decoding is CPU-only, so playback can be slow,
-> especially at high resolutions. An improved video path is in development.
+> **Current limitation:** Video decoding is CPU-only, so playback can be slow, especially at high resolutions. An improved video path is in development.
 
 ## Quick start
 
-1. Open [Releases](https://github.com/themartiano/try-omarchy/releases) and
-   download the latest signed and notarized `.dmg`.
+1. Open [Releases](https://github.com/themartiano/try-omarchy/releases) and download the latest signed and notarized `.dmg`.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. Accessibility enables Mac
-Command-to-guest-Super shortcuts; microphone access is optional. The first
-launch takes longer while the app prepares Linux and starts Omarchy's account
-provisioning.
+Every launch begins at the start menu. Accessibility enables Mac Command-to-guest-Super shortcuts; microphone access is optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 ## Requirements
 
@@ -38,10 +30,7 @@ provisioning.
 
 ## Data and updates
 
-Normal launches keep one persistent VM under
-`~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not
-remove this data. The start menu can reset it, and requires confirmation before
-replacing a disk that is incompatible with a new factory guest build.
+Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
 
 ## Development requirements
 
@@ -59,8 +48,7 @@ Install the Homebrew dependencies with:
 brew install zstd pkg-config glib pixman libslirp sdl2
 ```
 
-`make doctor` performs the basic preflight. `make runtime` checks the exact
-libslirp and SDL2 versions against the pinned runtime contract.
+`make doctor` performs the basic preflight. `make runtime` checks the exact libslirp and SDL2 versions against the pinned runtime contract.
 
 ## Build and run
 
@@ -70,10 +58,7 @@ For a first full build and launch:
 make build run
 ```
 
-The first build downloads pinned sources, assembles a multi-gigabyte guest, and
-compiles QEMU, so it can take a while. `make build` includes the basic toolchain
-check. Later native app rebuilds reuse `dist/guest/` and
-`macos/.build/qemu-gpu-runtime`, so they only need:
+The first build downloads pinned sources, assembles a multi-gigabyte guest, and compiles QEMU, so it can take a while. `make build` includes the basic toolchain check. Later native app rebuilds reuse `dist/guest/` and `macos/.build/qemu-gpu-runtime`, so they only need:
 
 ```sh
 make run
@@ -85,8 +70,7 @@ Run the complete contract and native test suite with:
 make test
 ```
 
-Run `make help` for component builds, persistent-storage reset, ephemeral mode,
-and cleanup commands.
+Run `make help` for component builds, persistent-storage reset, ephemeral mode, and cleanup commands.
 
 ## Packaging and releases
 
@@ -102,13 +86,9 @@ dist/
 The two DMG targets have intentionally different purposes:
 
 - `make package` creates an ad-hoc DMG for local testing. Do not publish it.
-- `make release` rebuilds the app, Developer ID-signs the app and DMG,
-  notarizes the DMG with Apple, and staples the notarization tickets. It assumes
-  the guest and QEMU runtime already exist and does not run tests or rebuild
-  those inputs.
+- `make release` rebuilds the app, Developer ID-signs the app and DMG, notarizes the DMG with Apple, and staples the notarization tickets. It assumes the guest and QEMU runtime already exist and does not run tests or rebuild those inputs.
 
-Maintainers should follow [`docs/releasing.md`](docs/releasing.md) for the full
-build, test, signing, license, corresponding-source, and verification checklist.
+Maintainers should follow [`docs/releasing.md`](docs/releasing.md) for the full build, test, signing, license, corresponding-source, and verification checklist.
 
 ## Repository layout
 
@@ -125,21 +105,13 @@ build, test, signing, license, corresponding-source, and verification checklist.
 └── LICENSE
 ```
 
-The architecture and trust boundaries are documented in
-[`docs/architecture.md`](docs/architecture.md). Contributors should start with
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+The architecture and trust boundaries are documented in [`docs/architecture.md`](docs/architecture.md). Contributors should start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Project status and support
 
-Try Omarchy is pre-1.0 and under active development. It is an independent
-open-source project and is not affiliated with or endorsed by Basecamp. Omarchy
-and bundled dependencies retain their own licenses; see
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Try Omarchy is pre-1.0 and under active development. It is an independent open-source project and is not affiliated with or endorsed by Basecamp. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-Report ordinary bugs through
-[GitHub Issues](https://github.com/themartiano/try-omarchy/issues).
-Report suspected vulnerabilities using the private process in
-[`SECURITY.md`](SECURITY.md), not a public issue.
+Report ordinary bugs through [GitHub Issues](https://github.com/themartiano/try-omarchy/issues). Report suspected vulnerabilities using the private process in [`SECURITY.md`](SECURITY.md), not a public issue.
 
 Try Omarchy's original code is licensed under the [MIT License](LICENSE).
 
