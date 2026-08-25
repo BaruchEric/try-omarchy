@@ -3,10 +3,8 @@
 Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a
 native, hardware-accelerated app on an Apple Silicon Mac.
 
-Try Omarchy packages a project-built ARM64 Arch Linux image, a signed QEMU/HVF
-runtime, and a small Swift/AppKit launcher into one self-contained macOS app.
-The Linux image is built from pinned Arch Linux ARM packages and pinned upstream
-Omarchy source.
+Try Omarchy is a community project that packages a prebuilt ARM64 Arch Linux image configured with Omarchy, a signed QEMU/HVF runtime, and a small Swift/AppKit launcher into one self-contained macOS app.  
+The image is built from pinned Arch Linux ARM packages and a pinned revision of the upstream Omarchy source.
 
 ## Quick Start
 
@@ -17,6 +15,7 @@ Install it as any other app, launch it, and enjoy Omarchy.
 
 - Apple Silicon Mac (`arm64`)
 - macOS 15 or newer
+- 6 GB free storage
 
 ## Dev Requirements
 
