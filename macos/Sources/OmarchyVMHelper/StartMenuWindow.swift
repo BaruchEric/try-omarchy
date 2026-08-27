@@ -44,106 +44,6 @@ private final class LinkCursorTextField: NSTextField {
     }
 }
 
-enum VMStartMenuPrimaryAction: Equatable {
-    case launch
-    case update
-}
-
-enum VMStartMenuOperation: Equatable {
-    case idle
-    case updating
-    case launching
-    case resetting
-}
-
-struct VMStartMenuState: Equatable {
-    private(set) var primaryAction: VMStartMenuPrimaryAction
-    private(set) var operation: VMStartMenuOperation = .idle
-
-    init(primaryAction: VMStartMenuPrimaryAction) {
-        self.primaryAction = primaryAction
-    }
-
-    var isBusy: Bool { operation != .idle }
-
-    var primaryButtonTitle: String {
-        switch operation {
-        case .updating: "Updating Omarchy…"
-        case .launching: "Launching Omarchy…"
-        case .idle, .resetting:
-            switch primaryAction {
-            case .launch: "Launch Omarchy"
-            case .update: "Update Omarchy"
-            }
-        }
-    }
-
-    var primaryButtonAccessibilityLabel: String {
-        switch operation {
-        case .updating: "Updating Omarchy"
-        case .launching: "Launching Omarchy"
-        case .idle, .resetting:
-            switch primaryAction {
-            case .launch: "Launch Omarchy"
-            case .update: "Update Omarchy"
-            }
-        }
-    }
-
-    mutating func beginPrimaryAction() -> VMStartMenuPrimaryAction? {
-        guard operation == .idle else { return nil }
-        switch primaryAction {
-        case .launch:
-            operation = .launching
-        case .update:
-            operation = .updating
-        }
-        return primaryAction
-    }
-
-    mutating func updateDidSucceed() -> Bool {
-        guard operation == .updating else { return false }
-        primaryAction = .launch
-        operation = .launching
-        return true
-    }
-
-    mutating func updateDidFail() -> Bool {
-        guard operation == .updating else { return false }
-        primaryAction = .update
-        operation = .idle
-        return true
-    }
-
-    mutating func launchRequiresUpdate() -> Bool {
-        guard operation == .launching else { return false }
-        primaryAction = .update
-        operation = .idle
-        return true
-    }
-
-    mutating func launchRequiresReset() -> Bool {
-        guard operation == .launching else { return false }
-        operation = .idle
-        return true
-    }
-
-    mutating func beginReset() -> Bool {
-        guard operation == .idle else { return false }
-        operation = .resetting
-        return true
-    }
-
-    mutating func resetDidFinish(succeeded: Bool) -> Bool {
-        guard operation == .resetting else { return false }
-        if succeeded {
-            primaryAction = .launch
-        }
-        operation = .idle
-        return true
-    }
-}
-
 @MainActor
 final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let window: NSWindow
@@ -154,7 +54,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let requestMicrophone: (@escaping (Bool) -> Void) -> Void
     private let storageSpaceEstimate: () -> String?
     private let resetStorage: () -> Void
-    private let update: () -> Void
     private let sharedFolderStatus: () -> SharedFolderMenuState
     private let chooseSharedFolder: (String) -> String?
     private let setSharedFolderEnabled: (Bool) -> Void
@@ -164,7 +63,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private let storageLocationURL: URL?
 
     private var microphoneRequestInFlight = false
-    private var state: VMStartMenuState
+    private var resetInProgress = false
+    private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
 
     init(
@@ -177,11 +77,9 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         storageLocationURL: URL?,
         storageSpaceEstimate: @escaping () -> String?,
         resetStorage: @escaping () -> Void,
-        primaryAction: VMStartMenuPrimaryAction = .launch,
-        update: @escaping () -> Void = {},
-        sharedFolderStatus: @escaping () -> SharedFolderMenuState = { .disabled },
-        chooseSharedFolder: @escaping (String) -> String? = { _ in nil },
-        setSharedFolderEnabled: @escaping (Bool) -> Void = { _ in },
+        sharedFolderStatus: @escaping () -> SharedFolderMenuState,
+        chooseSharedFolder: @escaping (String) -> String?,
+        setSharedFolderEnabled: @escaping (Bool) -> Void,
         launch: @escaping () -> Void
     ) {
         self.accessibilityStatus = accessibilityStatus
@@ -193,12 +91,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         self.storageLocationURL = storageLocationURL
         self.storageSpaceEstimate = storageSpaceEstimate
         self.resetStorage = resetStorage
-        self.update = update
         self.sharedFolderStatus = sharedFolderStatus
         self.chooseSharedFolder = chooseSharedFolder
         self.setSharedFolderEnabled = setSharedFolderEnabled
         self.launch = launch
-        state = VMStartMenuState(primaryAction: primaryAction)
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 590),
@@ -224,7 +120,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func refreshPermissionStatus() {
-        guard window.isVisible, !state.isBusy else { return }
+        guard window.isVisible, !launchInProgress, !resetInProgress else { return }
         render()
     }
 
@@ -239,7 +135,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func resetDidFinish(errorMessage: String?) {
-        guard state.resetDidFinish(succeeded: errorMessage == nil) else { return }
+        guard resetInProgress else { return }
+        resetInProgress = false
         render()
 
         let alert = NSAlert()
@@ -262,7 +159,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     func launchRequiresReset() {
-        guard state.launchRequiresReset() else { return }
+        guard launchInProgress else { return }
+        launchInProgress = false
         render()
 
         let alert = NSAlert()
@@ -271,37 +169,6 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM."
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
-    }
-
-    func launchRequiresUpdate() {
-        guard state.launchRequiresUpdate() else { return }
-        render()
-
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = "Update Omarchy to continue"
-        alert.informativeText = "This saved virtual machine needs a compatible update before it can start. Updating preserves its apps, files, accounts, and settings."
-        alert.addButton(withTitle: "OK")
-        alert.beginSheetModal(for: window)
-    }
-
-    func updateDidFinish(errorMessage: String?) {
-        if let errorMessage {
-            guard state.updateDidFail() else { return }
-            render()
-
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "Omarchy couldn’t be updated"
-            alert.informativeText = "\(errorMessage) Your existing virtual machine was not erased. You can try the update again."
-            alert.addButton(withTitle: "OK")
-            alert.beginSheetModal(for: window)
-            return
-        }
-
-        guard state.updateDidSucceed() else { return }
-        render()
-        launch()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -435,14 +302,14 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let reset = NSButton(
-            title: state.operation == .resetting ? "Resetting Omarchy…" : "Reset Omarchy",
+            title: resetInProgress ? "Resetting Omarchy…" : "Reset Omarchy",
             target: self,
             action: #selector(resetOmarchy)
         )
         reset.bezelStyle = .rounded
         reset.controlSize = .small
         reset.contentTintColor = .systemRed
-        reset.isEnabled = canResetStorage && state.operation == .idle
+        reset.isEnabled = canResetStorage && !launchInProgress && !resetInProgress
         reset.toolTip = canResetStorage
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
@@ -494,18 +361,18 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetSection.alignment = .leading
         resetSection.spacing = 4
 
-        let launchButtonTitle = state.primaryButtonTitle
+        let launchButtonTitle = launchInProgress ? "Launching Omarchy…" : "Launch Omarchy"
         let launchButtonFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
         let launchButton = NSButton(
             title: launchButtonTitle,
             target: self,
-            action: #selector(performPrimaryAction)
+            action: #selector(launchOmarchy)
         )
-        launchButton.keyEquivalent = state.operation == .idle ? "\r" : ""
+        launchButton.keyEquivalent = launchInProgress ? "" : "\r"
         launchButton.bezelStyle = .rounded
         launchButton.controlSize = .large
         launchButton.font = launchButtonFont
-        launchButton.isEnabled = state.operation == .idle && !microphoneRequestInFlight
+        launchButton.isEnabled = !launchInProgress && !resetInProgress && !microphoneRequestInFlight
         launchButton.title = ""
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
         let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
@@ -523,8 +390,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButtonLabel.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
         ])
         launchButton.translatesAutoresizingMaskIntoConstraints = false
-        launchButton.setAccessibilityLabel(state.primaryButtonAccessibilityLabel)
-        if state.operation == .updating || state.operation == .launching {
+        launchButton.setAccessibilityLabel(launchInProgress ? "Launching Omarchy" : "Launch Omarchy")
+        if launchInProgress {
             let spinner = NSProgressIndicator()
             spinner.style = .spinning
             spinner.controlSize = .small
@@ -704,7 +571,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             let (actionTitle, action) = actionDescription
             let button = PermissionActionButton(title: actionTitle, target: self, action: action)
             button.controlSize = .regular
-            button.isEnabled = !microphoneRequestInFlight && !state.isBusy
+            button.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
             let identifier = actions.count == 1
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
@@ -829,7 +696,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func beginSharedFolderSelection() {
-        guard !state.isBusy else { return }
+        guard !launchInProgress, !resetInProgress else { return }
         let panel = NSOpenPanel()
         panel.title = "Choose a folder to share with Omarchy"
         panel.message = "Omarchy will be able to read and change everything inside this folder, linked as ~/<folder name>."
@@ -857,19 +724,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     @objc private func enableSharedFolder() {
-        guard !state.isBusy else { return }
         setSharedFolderEnabled(true)
         render()
     }
 
     @objc private func disableSharedFolder() {
-        guard !state.isBusy else { return }
         setSharedFolderEnabled(false)
         render()
     }
 
     private func confirmReset() {
-        guard canResetStorage, state.operation == .idle else { return }
+        guard canResetStorage, !launchInProgress, !resetInProgress else { return }
         let estimate = storageSpaceEstimate()
         let alert = NSAlert()
         alert.alertStyle = .critical
@@ -884,19 +749,15 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         resetButton.hasDestructiveAction = true
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         pendingResetSpaceEstimate = estimate
-        guard state.beginReset() else { return }
+        resetInProgress = true
         render()
         resetStorage()
     }
 
-    @objc private func performPrimaryAction() {
-        guard let action = state.beginPrimaryAction() else { return }
+    @objc private func launchOmarchy() {
+        guard !launchInProgress, !resetInProgress else { return }
+        launchInProgress = true
         render()
-        switch action {
-        case .launch:
-            launch()
-        case .update:
-            update()
-        }
+        launch()
     }
 }

@@ -29,10 +29,6 @@ package set. Source repositories, commits, downloads, versions, and hashes are
 reviewed inputs rather than floating build dependencies.
 
 The output includes the kernel, initramfs, raw and compressed ext4 image,
-raw and compressed offline update disk, provenance, package inventory, licenses,
-manifest, and SHA-256 sums. Generated output belongs under the repository's
-ignored `dist/` directory and must not be committed.
-
-The versioned update transaction, migration rules, health handshake, and
-failure recovery contract are documented in
-[`docs/guest-updates.md`](../docs/guest-updates.md).
+provenance, package inventory, licenses, manifest, and SHA-256 sums. Generated
+output belongs under the repository's ignored `dist/` directory and must not be
+committed.

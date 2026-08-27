@@ -74,13 +74,7 @@ chmod 0755 \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
-  "$root/usr/local/bin/omarchy-native-mac-share" \
-  "$root/usr/local/lib/try-omarchy/health-report" \
-  "$root/usr/local/lib/try-omarchy/owned-payload" \
-  "$root/usr/local/lib/try-omarchy/user-migrate" \
-  "$root/usr/local/lib/try-omarchy/update-runner" \
-  "$root/usr/lib/initcpio/hooks/try-omarchy-update" \
-  "$root/usr/lib/initcpio/install/try-omarchy-update"
+  "$root/usr/local/bin/omarchy-native-mac-share"
 audio_helper_source_digest=$(sha256sum \
   "$guest_dir/native-overlay/usr/bin/omarchy-audio-input-set-default")
 audio_helper_source_digest=${audio_helper_source_digest%% *}
@@ -93,23 +87,10 @@ mkdir -p "$root/etc/systemd/user/default.target.wants" \
   "$root/etc/systemd/user/graphical-session.target.wants"
 ln -sfn /usr/lib/systemd/user/omarchy-native-audio-bridge.service \
   "$root/etc/systemd/user/default.target.wants/omarchy-native-audio-bridge.service"
-# User homes stay read-only during offline updates. This one-shot applies
-# versioned, content-matched repairs in the user's own context before the
-# graphical session consumes that state.
-ln -sfn /usr/lib/systemd/user/try-omarchy-user-migrate.service \
-  "$root/etc/systemd/user/default.target.wants/try-omarchy-user-migrate.service"
 # The clipboard agent needs the Wayland socket, so it follows the uwsm-managed
 # graphical session rather than the plain user manager.
 ln -sfn /usr/lib/systemd/user/omarchy-native-clipboard-bridge.service \
   "$root/etc/systemd/user/graphical-session.target.wants/omarchy-native-clipboard-bridge.service"
-# This probe runs in the UWSM environment, proves that Hyprland and its
-# Wayland socket are responsive, then gives the root health reporter a
-# per-boot readiness marker. Headless update trials do not start this target.
-ln -sfn /usr/lib/systemd/user/try-omarchy-graphical-health.service \
-  "$root/etc/systemd/user/graphical-session.target.wants/try-omarchy-graphical-health.service"
-mkdir -p "$root/etc/systemd/system/multi-user.target.wants"
-ln -sfn /usr/lib/systemd/system/try-omarchy-health.service \
-  "$root/etc/systemd/system/multi-user.target.wants/try-omarchy-health.service"
 
 # The shared Mac folder mounts system-wide at the spec's mount point; at login
 # each account links ~/<Mac folder name> to it. QEMU maps the Mac user's files
