@@ -26,6 +26,15 @@ struct FullscreenNativeContractTests {
         #expect(patch.contains("[fullScreenMenuItem setTitle:@\"Exit Full Screen\"]"))
         #expect(patch.contains("[fullScreenMenuItem setTitle:@\"Enter Full Screen\"]"))
 
+        #expect(patch.contains(
+            " static bool swap_opt_cmd;\n" +
+            "+static bool full_grab_enabled;\n" +
+            "+static NSMenuItem *fullScreenMenuItem;\n" +
+            " \n" +
+            " static bool zoom_interpolation;"
+        ))
+        #expect(!patch.contains("+    NSMenuItem *fullScreenMenuItem;"))
+
         let configuration = try #require(
             patch.range(of: "full_grab_enabled = opts->u.cocoa.has_full_grab")
         )
