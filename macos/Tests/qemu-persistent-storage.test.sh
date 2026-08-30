@@ -635,4 +635,99 @@ assert_fails qemu_persistent_storage_select \
   persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
 export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
 
+# A volume the workspace cannot live on is refused before anything is written.
+# exFAT ignores chmod, so the exact 0700 assertions could never pass there.
+unsupported_root="$test_root/unsupported-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$unsupported_root
+export OMARCHY_QEMU_GPU_TEST_FS_TYPE=exfat
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+unset OMARCHY_QEMU_GPU_TEST_FS_TYPE
+assert test ! -e "$unsupported_root/disks"
+assert test ! -e "$unsupported_root/images"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# A volume without room fails before the multi-gigabyte decompression and before
+# a workspace is created, rather than part-way through either.
+cramped_root="$test_root/cramped-state"
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+export OMARCHY_QEMU_GPU_TEST_FREE_BYTES=1024
+assert_fails qemu_persistent_storage_materialize_source \
+  "$identity_compressed" "$compressed_disk" "$compressed_bytes" \
+  "$source_sha" "$source_bytes" "$zstd_test"
+assert_fails qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+unset OMARCHY_QEMU_GPU_TEST_FREE_BYTES
+assert test ! -e "$cramped_root/disks/current"
+assert_eq "$(find "$cramped_root/images" -type f | wc -l | tr -d '[:space:]')" 0
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# The same volume succeeds once the room is there, proving the guard is what
+# rejected it rather than anything else about the location. Release behavior
+# keeps the single "current" workspace, so assert that rather than the
+# identity-keyed development layout the surrounding cases use.
+export OMARCHY_QEMU_GPU_STATE_ROOT=$cramped_root
+saved_cramped_multi_disk=$OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=0
+qemu_persistent_storage_select \
+  persistent "$identity_a" "$source_disk" "$source_sha" "$source_bytes" ''
+assert_eq "$QEMU_SELECTED_DISK" "$cramped_root/disks/current/rootfs.ext4"
+qemu_persistent_storage_release_lock
+export OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK=$saved_cramped_multi_disk
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_state_root
+
+# The state-root marker is what tells the launcher a folder is one of ours, and
+# the start menu's picker mirrors these same rules so a bad marker is reported
+# while the user can still choose another folder. Pin the rules here so the two
+# sides cannot drift apart silently.
+marker_root="$test_root/marker-state"
+mkdir -p "$marker_root"
+chmod 700 "$marker_root"
+marker_file="$marker_root/.omarchy-qemu-storage"
+
+# A marker this library wrote itself validates.
+_qps_write_root_marker "$marker_file"
+assert _qps_validate_root_marker "$marker_file"
+assert_eq "$(/usr/bin/stat -f '%Lp' "$marker_file")" 600
+assert_eq "$(<"$marker_file")" "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER"
+
+# Empty, wrong-token, and wrong-mode markers are all refused.
+: >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' 'omarchy-qemu-storage-root-v2' >"$marker_file"
+chmod 600 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_file"
+chmod 644 "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+
+# A symlink pointing at otherwise-valid content is still refused: the check is
+# on the marker itself, not on whatever it happens to resolve to.
+rm -f "$marker_file"
+printf '%s\n' "$QEMU_PERSISTENT_STORAGE_ROOT_MARKER" >"$marker_root/real-marker"
+chmod 600 "$marker_root/real-marker"
+ln -s "$marker_root/real-marker" "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rm -f "$marker_file" "$marker_root/real-marker"
+
+# A directory in the marker's place is refused rather than crashing the read.
+mkdir "$marker_file"
+assert_fails _qps_validate_root_marker "$marker_file"
+rmdir "$marker_file"
+
+# A state root carrying a damaged marker refuses to prepare at all, so a launch
+# never proceeds against a workspace the app cannot vouch for.
+printf 'bogus\n' >"$marker_file"
+chmod 600 "$marker_file"
+saved_marker_state_root=$OMARCHY_QEMU_GPU_STATE_ROOT
+export OMARCHY_QEMU_GPU_STATE_ROOT=$marker_root
+assert_fails _qps_prepare_state_root
+export OMARCHY_QEMU_GPU_STATE_ROOT=$saved_marker_state_root
+
 printf 'qemu-persistent-storage.test: PASS\n'
