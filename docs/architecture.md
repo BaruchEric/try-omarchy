@@ -67,6 +67,20 @@ again at every Swift-to-shell boundary, and translated into QEMU user-network
 launcher never creates wildcard or LAN-facing listeners. TCP and UDP occupy
 separate host-port namespaces, matching QEMU's socket behavior.
 
+**Add SSH** inserts an ordinary `tcp:2222:22` mapping into that same preference;
+there is no second SSH forwarding store or QEMU argument path. After the shell
+parser accepts the complete mapping list, any TCP rule targeting guest port 22
+also adds the fixed `tryomarchy.ssh_access=1` boot token. UDP port 22 and other
+guest ports do not. A guest systemd generator consumes only that exact token and
+adds the vendor `sshd.service` to the current boot's runtime wants directory,
+without modifying persistent systemd or SSH configuration.
+
+SSH host keys belong to the writable guest disk. Persistent compatible VMs keep
+them; Factory Reset and each ephemeral disk generate new keys. Reusing the same
+Mac endpoint after either operation can require removing that endpoint from the
+Mac's `known_hosts`. Loopback prevents LAN access but other local Mac processes
+and users can still attempt authentication.
+
 ## The ARM64 image
 
 The guest image is built by this project; it is not an official prebuilt image

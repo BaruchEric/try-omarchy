@@ -18,6 +18,12 @@ struct PortForwardMapping: Codable, Equatable, Hashable, Sendable {
     let `protocol`: PortForwardProtocol
 }
 
+/// Convenience mappings offered by the editor. Presets are inserted as
+/// ordinary mappings and do not add any persisted service-specific state.
+enum PortForwardPreset {
+    static let ssh = PortForwardMapping(hostPort: 2222, guestPort: 22, protocol: .tcp)
+}
+
 enum PortForwardPolicyError: LocalizedError, Equatable {
     case invalidHostPort(Int)
     case invalidGuestPort(Int)

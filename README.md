@@ -74,6 +74,53 @@ not only on the guest's own localhost.
 The reverse direction does not need a mapping. From Omarchy, connect to
 `10.0.2.2:<Mac port>` to reach a service running on the Mac.
 
+### SSH access
+
+After completing Omarchy's first-boot account setup, open **Port forwarding**,
+choose **Add SSH**, and save the prefilled TCP mapping from Mac port `2222` to
+Omarchy port `22`. Try Omarchy then requests `sshd` for boots that contain a TCP
+mapping to guest port 22. It does not change guest accounts, `sshd_config`,
+password policy, or authorized keys.
+
+Connect with the username and password created inside Omarchy (the Mac username
+is not assumed):
+
+```sh
+ssh -p 2222 <guest-user>@127.0.0.1
+```
+
+Once the initial password login works, install a key if desired:
+
+```sh
+ssh-copy-id -p 2222 <guest-user>@127.0.0.1
+```
+
+For a shorter command, add this to `~/.ssh/config` on the Mac:
+
+```sshconfig
+Host omarchy
+  HostName 127.0.0.1
+  Port 2222
+  User <guest-user>
+```
+
+You can then use `ssh omarchy`, and the same alias works with `scp`, `rsync`,
+Git, and VS Code Remote SSH. If you edit the preset's Mac port, substitute that
+port in every command.
+
+Factory Reset creates a new guest host key, and every ephemeral VM has its own
+disposable host key. If OpenSSH reports that the key for the reused endpoint
+changed, remove only that endpoint's old entry and reconnect to verify the new
+fingerprint:
+
+```sh
+ssh-keygen -R '[127.0.0.1]:2222'
+```
+
+Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
+connecting. It does not isolate the listener from other users or processes on
+the same Mac; guest SSH authentication is still required.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)

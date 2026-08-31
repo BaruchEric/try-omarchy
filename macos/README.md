@@ -67,6 +67,13 @@ variable still wins, so the development and test override keeps working
 unchanged. Reset composes its environment exactly as a launch does, so it
 always erases the workspace the user is actually running.
 
+Port forwarding is one versioned generic mapping list. The editor's **Add SSH**
+action only inserts the ordinary TCP `2222 → 22` preset; users may edit it like
+any other mapping. The signed shell parser remains the sole QEMU `hostfwd`
+builder and derives boot-scoped sshd intent only from a fully valid TCP mapping
+to guest port 22. No SSH-specific preference, port probe, status code, or
+parallel forwarding path exists.
+
 Ad-hoc signing identifies one exact build, so macOS intentionally invalidates
 its privacy grants when that build is replaced. The app's **Open Settings**
 action repairs a stale Accessibility entry and registers the installed build,

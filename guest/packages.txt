@@ -43,6 +43,7 @@ networkmanager
 noto-fonts
 noto-fonts-emoji
 omarchy-keyring
+openssh
 pacman-contrib
 pipewire
 pipewire-alsa

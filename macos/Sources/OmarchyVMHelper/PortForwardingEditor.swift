@@ -45,6 +45,7 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
     private let rowsStack = NSStackView()
     private let scrollView = NSScrollView()
     private let addButton = NSButton()
+    private let addSSHButton = NSButton()
     private let saveButton = NSButton()
     private let validationLabel = NSTextField(wrappingLabelWithString: "")
     private var announcedValidationError: String?
@@ -148,12 +149,27 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         addButton.identifier = NSUserInterfaceItemIdentifier("port-forward-add")
         addButton.setAccessibilityHelp("Adds another localhost-to-Omarchy port mapping")
 
+        addSSHButton.title = "Add SSH"
+        addSSHButton.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: nil)
+        addSSHButton.imagePosition = .imageLeading
+        addSSHButton.bezelStyle = .rounded
+        addSSHButton.controlSize = .regular
+        addSSHButton.target = self
+        addSSHButton.action = #selector(addSSH)
+        addSSHButton.identifier = NSUserInterfaceItemIdentifier("port-forward-add-ssh")
+        addSSHButton.setAccessibilityHelp("Adds localhost:2222 to Omarchy:22 over TCP")
+
         validationLabel.font = .systemFont(ofSize: 11.5)
         validationLabel.maximumNumberOfLines = 2
         validationLabel.identifier = NSUserInterfaceItemIdentifier("port-forward-validation")
         validationLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        let listFooter = NSStackView(views: [addButton, validationLabel])
+        let addActions = NSStackView(views: [addButton, addSSHButton])
+        addActions.orientation = .horizontal
+        addActions.alignment = .centerY
+        addActions.spacing = 8
+
+        let listFooter = NSStackView(views: [addActions, validationLabel])
         listFooter.orientation = .vertical
         listFooter.alignment = .leading
         listFooter.spacing = 6
@@ -402,6 +418,15 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         )
     }
 
+    @objc private func addSSH() {
+        guard drafts.count < PortForwardPolicy.maximumMappings else { return }
+        drafts.append(Draft(mapping: PortForwardPreset.ssh))
+        rebuildRows(
+            focusRow: drafts.index(before: drafts.endIndex),
+            scrollToBottom: true
+        )
+    }
+
     @objc private func removePort(_ sender: NSButton) {
         guard drafts.indices.contains(sender.tag) else { return }
         let removedIndex = sender.tag
@@ -452,10 +477,14 @@ final class PortForwardingEditor: NSObject, NSWindowDelegate, NSTextFieldDelegat
         }
         let hasChanges = validation.mappings.map { $0 != initialMappings } ?? false
         saveButton.isEnabled = validation.mappings != nil && hasChanges
-        addButton.isEnabled = drafts.count < PortForwardPolicy.maximumMappings
-        addButton.toolTip = addButton.isEnabled
-            ? "Add a port mapping"
+        let canAddMapping = drafts.count < PortForwardPolicy.maximumMappings
+        addButton.isEnabled = canAddMapping
+        addSSHButton.isEnabled = canAddMapping
+        let addLimitToolTip = canAddMapping
+            ? nil
             : "Up to \(PortForwardPolicy.maximumMappings) mappings are supported"
+        addButton.toolTip = addLimitToolTip ?? "Add a port mapping"
+        addSSHButton.toolTip = addLimitToolTip ?? "Add an SSH port mapping"
     }
 
     private func validation() -> Validation {

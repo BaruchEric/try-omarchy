@@ -409,6 +409,21 @@ network = {
     "device": "virtio-net-pci",
     "backend": "slirp",
     "mode": "user",
+    "sshAccess": {
+        "activation": {
+            "guestPort": 22,
+            "kernelToken": "tryomarchy.ssh_access=1",
+            "protocol": "tcp",
+            "scope": "boot",
+            "service": "sshd.service",
+        },
+        "preset": {
+            "guestPort": 22,
+            "hostAddress": "127.0.0.1",
+            "hostPort": 2222,
+            "protocol": "tcp",
+        },
+    },
 }
 audio = {
     "controller": "intel-hda",
@@ -640,6 +655,8 @@ if any(argument.startswith("omarchy.qemu_virgl=") for argument in arguments):
     fail("kernel command line already contains a QEMU VirGL role")
 if any(argument.startswith("omarchy.shared_folder_name=") for argument in arguments):
     fail("kernel command line already contains a shared folder name")
+if any(argument.startswith("tryomarchy.ssh_access=") for argument in arguments):
+    fail("kernel command line contains a launcher-owned SSH activation argument")
 
 records = manifest.get("artifacts")
 if not isinstance(records, list) or len(records) != len(expected_artifacts):
@@ -742,6 +759,11 @@ IFS=$'\t' read -r bundle_identity source_disk_sha source_disk_bytes compressed_d
 [[ $expanded_disk_bytes =~ ^[1-9][0-9]*$ ]] || fail "validated working-disk size is invalid"
 (( expanded_disk_bytes >= source_disk_bytes )) || fail "working disk cannot be smaller than its source"
 [[ -n $kernel_command_line ]] || fail "validated kernel command line is empty"
+case " $kernel_command_line " in
+  *' tryomarchy.ssh_access='*)
+    fail "validated kernel command line contains a launcher-owned SSH activation argument"
+    ;;
+esac
 if [[ ${OMARCHY_QEMU_GPU_INSPECT_ONLY:-0} == 1 ]]; then
   printf '%s\n' "$bundle_validation"
   exit 0
@@ -767,6 +789,10 @@ if ! qemu_port_forwarding_configure "${OMARCHY_QEMU_GPU_PORT_FORWARDS:-}"; then
 fi
 qemu_netdev=$QEMU_PORT_FORWARDING_NETDEV
 port_forwarding_summary=$QEMU_PORT_FORWARDING_SUMMARY
+ssh_kernel_argument=''
+if ((QEMU_PORT_FORWARDING_ENABLES_SSH)); then
+  ssh_kernel_argument=' tryomarchy.ssh_access=1'
+fi
 
 host_cpu_count=$(
   sysctl -n hw.logicalcpu 2>/dev/null ||
@@ -1037,7 +1063,7 @@ qemu_args=(
   -qmp "unix:$qmp_socket,server=on,wait=off"
   -kernel "$guest_dir/vmlinuz-linux"
   -initrd "$guest_dir/initramfs-linux.img"
-  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument"
+  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"

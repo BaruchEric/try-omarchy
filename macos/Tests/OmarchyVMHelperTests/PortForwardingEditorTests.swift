@@ -5,6 +5,73 @@ import Testing
 @Suite("Port forwarding editor interactions", .serialized)
 @MainActor
 struct PortForwardingEditorTests {
+    @Test("adds and saves the SSH preset as an ordinary editable mapping")
+    func addsSSHPreset() throws {
+        _ = NSApplication.shared
+        var saved: [PortForwardMapping]?
+        let editor = PortForwardingEditor(mappings: [], save: {
+            saved = $0
+            return nil
+        })
+        editor.show()
+        defer { editor.dismiss() }
+
+        let content = try #require(editor.window.contentView)
+        let addSSH = try button("port-forward-add-ssh", in: content)
+        #expect(addSSH.accessibilityHelp() == "Adds localhost:2222 to Omarchy:22 over TCP")
+        addSSH.performClick(nil)
+
+        let host = try #require(
+            descendant(withIdentifier: "port-forward-host-0", in: content) as? NSTextField
+        )
+        let guest = try #require(
+            descendant(withIdentifier: "port-forward-guest-0", in: content) as? NSTextField
+        )
+        let transport = try #require(
+            descendant(withIdentifier: "port-forward-protocol-0", in: content) as? NSPopUpButton
+        )
+        #expect(host.stringValue == "2222")
+        #expect(guest.stringValue == "22")
+        #expect(transport.titleOfSelectedItem == "TCP")
+
+        host.stringValue = "2223"
+        editor.controlTextDidChange(Notification(
+            name: NSControl.textDidChangeNotification,
+            object: host
+        ))
+        let save = try button("port-forward-save", in: content)
+        #expect(save.isEnabled)
+        save.performClick(nil)
+        #expect(saved == [PortForwardMapping(hostPort: 2223, guestPort: 22, protocol: .tcp)])
+    }
+
+    @Test("SSH preset reuses generic duplicate and protocol-scoped validation")
+    func sshPresetValidation() throws {
+        _ = NSApplication.shared
+        let editor = PortForwardingEditor(
+            mappings: [PortForwardMapping(hostPort: 2222, guestPort: 5353, protocol: .tcp)],
+            save: { _ in nil }
+        )
+        editor.show()
+        defer { editor.dismiss() }
+
+        let content = try #require(editor.window.contentView)
+        try button("port-forward-add-ssh", in: content).performClick(nil)
+        let validation = try #require(
+            descendant(withIdentifier: "port-forward-validation", in: content) as? NSTextField
+        )
+        #expect(validation.stringValue == "Mac TCP port 2222 is already mapped.")
+        #expect(!(try button("port-forward-save", in: content)).isEnabled)
+
+        let transport = try #require(
+            descendant(withIdentifier: "port-forward-protocol-0", in: content) as? NSPopUpButton
+        )
+        transport.selectItem(withTitle: "UDP")
+        _ = transport.sendAction(transport.action, to: transport.target)
+        #expect(validation.stringValue.isEmpty)
+        #expect((try button("port-forward-save", in: content)).isEnabled)
+    }
+
     @Test("adds and saves an ordered TCP and UDP mapping list")
     func addsAndSavesMappings() throws {
         _ = NSApplication.shared
@@ -158,7 +225,10 @@ struct PortForwardingEditorTests {
         #expect(lastHost.currentEditor() === editor.window.firstResponder)
         #expect(lastHost.accessibilityLabel() == "Mac port for mapping 32")
         #expect(!add.isEnabled)
+        let addSSH = try button("port-forward-add-ssh", in: content)
+        #expect(!addSSH.isEnabled)
         add.performClick(nil)
+        addSSH.performClick(nil)
         #expect(descendant(withIdentifier: "port-forward-row-32", in: content) == nil)
         #expect(scroll.contentView.bounds.minY > 0)
     }
@@ -184,7 +254,13 @@ struct PortForwardingEditorTests {
         #expect(validation.isHidden)
         let footer = try #require(validation.superview as? NSStackView)
         #expect(footer.orientation == .vertical)
-        #expect(footer.arrangedSubviews == [try button("port-forward-add", in: content), validation])
+        let addActions = try #require(footer.arrangedSubviews.first as? NSStackView)
+        #expect(addActions.orientation == .horizontal)
+        #expect(addActions.arrangedSubviews == [
+            try button("port-forward-add", in: content),
+            try button("port-forward-add-ssh", in: content),
+        ])
+        #expect(footer.arrangedSubviews == [addActions, validation])
         #expect(editor.window.frame.width == 540)
         #expect(editor.window.frame.height <= 470)
     }

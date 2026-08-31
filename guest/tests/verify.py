@@ -59,6 +59,25 @@ def main() -> None:
     )
     check(spec["runtime"]["virtualMachineMonitor"] == "qemu-system-aarch64", "runtime uses native ARM QEMU")
     check(spec["runtime"]["hypervisor"] == "hvf", "runtime uses Apple Hypervisor.framework")
+    check(
+        spec["runtime"]["network"].get("sshAccess")
+        == {
+            "activation": {
+                "guestPort": 22,
+                "kernelToken": "tryomarchy.ssh_access=1",
+                "protocol": "tcp",
+                "scope": "boot",
+                "service": "sshd.service",
+            },
+            "preset": {
+                "guestPort": 22,
+                "hostAddress": "127.0.0.1",
+                "hostPort": 2222,
+                "protocol": "tcp",
+            },
+        },
+        "SSH preset and boot activation are an exact loopback-only runtime contract",
+    )
     check(spec["runtime"]["storage"]["expandedSizeMiB"] == 24576, "working disk expands to 24 GiB")
     check(set(spec["inputs"]) == {"packages", "packageLock", "pacmanConfig"}, "spec has a minimal input set")
     for path in spec["inputs"].values():
@@ -141,6 +160,10 @@ def main() -> None:
         for line in package_text.decode().splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
+    check(
+        "openssh" in requested_packages and "openssh" in packages,
+        "SSH access explicitly requests and locks OpenSSH",
+    )
     check(
         "fakeroot" in requested_packages and "fakeroot" in packages,
         "factory transaction includes fakeroot for AUR package builds",
@@ -548,6 +571,22 @@ def main() -> None:
         and "Rounded-border Hyprland backport is missing" in finalizer
         and "Rounded-border Hyprland binary digest mismatch" in finalizer,
         "finalizer requires the exact rounded-border Hyprland package",
+    )
+
+    ssh_generator_path = (
+        GUEST
+        / "native-overlay/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
+    )
+    ssh_generator = read(ssh_generator_path)
+    check(
+        ssh_generator_path.is_file()
+        and ssh_generator_path.stat().st_mode & stat.S_IXUSR != 0
+        and "tryomarchy.ssh_access=1" in ssh_generator
+        and "/proc/cmdline" in ssh_generator
+        and "multi-user.target.wants" in ssh_generator
+        and '"$wants/sshd.service"' in ssh_generator
+        and "/etc" not in ssh_generator,
+        "SSH generator requests only the boot-scoped vendor sshd unit",
     )
 
     manifest_writer = read(GUEST / "scripts/write-guest-manifest.py")

@@ -221,7 +221,22 @@
     "network": {
       "device": "virtio-net-pci",
       "backend": "slirp",
-      "mode": "user"
+      "mode": "user",
+      "sshAccess": {
+        "activation": {
+          "guestPort": 22,
+          "kernelToken": "tryomarchy.ssh_access=1",
+          "protocol": "tcp",
+          "scope": "boot",
+          "service": "sshd.service"
+        },
+        "preset": {
+          "guestPort": 22,
+          "hostAddress": "127.0.0.1",
+          "hostPort": 2222,
+          "protocol": "tcp"
+        }
+      }
     },
     "audio": {
       "controller": "intel-hda",
