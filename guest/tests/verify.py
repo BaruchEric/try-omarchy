@@ -87,16 +87,20 @@ def main() -> None:
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
     backported_trees = authenticity["backportedRuntimeTrees"]
     check(
-        "shell" not in verbatim_trees
-        and backported_trees == ["shell"]
+        not {"bin", "shell"} & set(verbatim_trees)
+        and backported_trees == ["bin", "shell"]
         and not set(verbatim_trees) & set(backported_trees),
-        "patched shell tree is separated from verbatim upstream runtime trees",
+        "patched bin and shell trees are separated from verbatim upstream runtime trees",
     )
     backports = authenticity["backports"]
     check(
         [backport.get("id") for backport in backports]
-        == ["notification-hover-close", "notification-screen-privacy"],
-        "notification backports are explicitly ordered and identified",
+        == [
+            "1password-arm64-installer",
+            "notification-hover-close",
+            "notification-screen-privacy",
+        ],
+        "Omarchy backports are explicitly ordered and identified",
     )
     for backport in backports:
         patch_path = GUEST / backport["patch"]
@@ -115,6 +119,25 @@ def main() -> None:
                 and re.fullmatch(r"[0-9a-f]{64}", target.get("afterSha256", "")) is not None,
                 f"backport target digests are pinned: {backport['id']} {target['path']}",
             )
+
+    post_build_installers = authenticity["postBuildUserInstallers"]
+    check(
+        post_build_installers
+        == [
+            {
+                "id": "1password-arm64",
+                "userInitiated": True,
+                "delivery": "mutable-vendor-release",
+                "applicationUrl": "https://downloads.1password.com/linux/tar/stable/aarch64/1password-latest.tar.gz",
+                "signingKeyUrl": "https://downloads.1password.com/linux/keys/1password.asc",
+                "signingFingerprint": "3FEF9748469ADBE15DA7CA80AC2D62742012EA22",
+                "cliSource": "https://aur.archlinux.org/packages/1password-cli",
+                "runtimePackages": ["which"],
+                "factoryProvenance": "excluded",
+            }
+        ],
+        "mutable post-build 1Password installation is an explicit trust boundary",
+    )
 
     pacman_conf = read(GUEST / spec["inputs"]["pacmanConfig"])
     check(
@@ -554,6 +577,21 @@ def main() -> None:
         "**Glaze**" in third_party_notices and "MIT" in third_party_notices,
         "third-party notices cover the Hyprland build's bundled Glaze headers",
     )
+    check(
+        "**1Password**" in third_party_notices
+        and "not redistributed" in third_party_notices
+        and "mutable post-build inputs" in third_party_notices
+        and "excluded from factory provenance" in third_party_notices,
+        "third-party notices distinguish mutable 1Password installation from redistribution",
+    )
+    architecture = read(REPO / "docs/architecture.md")
+    check(
+        "Optional, user-initiated installers" in architecture
+        and "separate trust boundary" in architecture
+        and "not redistributed in the app" in architecture
+        and post_build_installers[0]["factoryProvenance"] == "excluded",
+        "architecture documents mutable post-build user installation boundaries",
+    )
 
     finalizer = read(GUEST / "scripts/finalize-rootfs.sh")
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
@@ -982,6 +1020,65 @@ HOTPLUG=1
                         == target["afterSha256"],
                         f"backport produces reviewed postimage: {backport['id']} {target['path']}",
                     )
+
+            onepassword_installer_path = (
+                staged_omarchy / "bin/omarchy-install-service-1password"
+            )
+            subprocess.run(["bash", "-n", str(onepassword_installer_path)], check=True)
+            onepassword_installer = read(onepassword_installer_path)
+            onepassword_boundary = post_build_installers[0]
+            check(
+                "[[ $(uname -m) == aarch64 ]]" in onepassword_installer
+                and onepassword_boundary["applicationUrl"] in onepassword_installer
+                and onepassword_boundary["signingKeyUrl"] in onepassword_installer
+                and onepassword_boundary["signingFingerprint"] in onepassword_installer
+                and "curl --fail --location --proto '=https' --tlsv1.2" in onepassword_installer
+                and 'GNUPGHOME="$gpg_home" yay -S --noconfirm --needed \\\n'
+                "    --answerclean None --answerdiff None 1password-cli"
+                in onepassword_installer
+                and "omarchy-pkg-add which" in onepassword_installer
+                and "omarchy-pkg-add 1password 1password-cli" in onepassword_installer,
+                "1Password uses its declared mutable ARM64 boundary and preserves the package path",
+            )
+            check(
+                "install -dm700 \"$gpg_home\"" in onepassword_installer
+                and "gpg --homedir \"$gpg_home\"" in onepassword_installer
+                and "gpg --batch" not in onepassword_installer
+                and "--status-fd 1 --verify" in onepassword_installer
+                and '$2 == "VALIDSIG" { print $3 }' in onepassword_installer
+                and '[[ $valid_signer != "$ONEPASSWORD_SIGNING_FINGERPRINT" ]]'
+                in onepassword_installer,
+                "1Password signature verification is isolated and bound to the expected signer",
+            )
+            check(
+                'sudo chown -R root:root /opt/1Password' in onepassword_installer
+                and onepassword_installer.index("sudo chown -R root:root /opt/1Password")
+                < onepassword_installer.index("sudo /opt/1Password/after-install.sh"),
+                "1Password is root-owned before its vendor post-install script runs",
+            )
+            check(
+                "sudo tee /usr/local/bin/1password" in onepassword_installer
+                and "export LIBGL_ALWAYS_SOFTWARE=1" in onepassword_installer
+                and 'exec /opt/1Password/1password --disable-gpu "$@"'
+                in onepassword_installer
+                and "Exec=/usr/local/bin/1password %U" in onepassword_installer
+                and 'echo "Quick Access: Ctrl + Shift + Space"'
+                in onepassword_installer
+                and 'echo "Full 1Password app: Super + Shift + /"'
+                in onepassword_installer
+                and onepassword_installer.index("sudo /opt/1Password/after-install.sh")
+                < onepassword_installer.index("sudo tee /usr/local/bin/1password"),
+                "1Password launchers use software rendering after vendor setup",
+            )
+            applications_bindings = read(
+                staged_omarchy / "default/hypr/bindings/applications.lua"
+            )
+            check(
+                'o.bind("CTRL + SHIFT + SPACE", "1Password Quick Access", '
+                '{ launch = "1password --quick-access" })'
+                in applications_bindings,
+                "1Password Quick Access has a Wayland compositor shortcut",
+            )
 
             notification_card = read(
                 staged_omarchy / "shell/plugins/notifications/components/NotificationCard.qml"

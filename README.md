@@ -31,6 +31,19 @@ Every launch begins at the start menu. **Immersive** is on by default and its ca
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
 
+## 1Password
+
+Install 1Password from the Omarchy menu. On ARM64 guests, Try Omarchy downloads
+the current official 1Password application, verifies its signature against the
+pinned 1Password signing key, and installs the ARM64 CLI package. Its launcher
+uses software rendering to avoid the virtual GPU incompatibility affecting the
+Electron interface.
+
+After signing in, use these global shortcuts:
+
+- `Ctrl + Shift + Space` — open 1Password Quick Access
+- `Super + Shift + /` — open the full 1Password app
+- 
 ## Camera sharing
 
 Choose **Allow…** next to **Camera access** on the start menu to make the Mac's
