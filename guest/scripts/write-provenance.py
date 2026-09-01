@@ -40,6 +40,18 @@ def digest_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def installed_file(root: Path, omarchy: Path, relative: str) -> Path:
+    # bin/ commands are promoted to /usr/bin inside the staged root, leaving
+    # absolute symlinks that only resolve in the booted guest; rebase them.
+    installed = omarchy / relative
+    if installed.is_symlink():
+        link = os.readlink(installed)
+        if link.startswith("/"):
+            return root / link.lstrip("/")
+        return installed.parent / link
+    return installed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", required=True, type=Path)
@@ -70,7 +82,7 @@ def main() -> None:
         if patch_digest != backport["patchSha256"]:
             raise SystemExit(f"backport patch digest mismatch: {backport['id']}")
         for target in backport["targets"]:
-            installed = omarchy / target["path"]
+            installed = installed_file(args.root, omarchy, target["path"])
             if digest_file(installed) != target["afterSha256"]:
                 raise SystemExit(f"backport target digest mismatch: {backport['id']} {target['path']}")
 

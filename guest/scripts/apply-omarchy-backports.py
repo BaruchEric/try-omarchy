@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -54,7 +56,43 @@ def verify_target(omarchy_root: Path, target: dict, digest_key: str, backport_id
         )
 
 
-def apply_backport(spec_dir: Path, omarchy_root: Path, backport: dict) -> None:
+def stage_promoted_targets(root: Path, omarchy_root: Path, targets: list) -> list:
+    # materialize-omarchy.sh installs bin/ commands at /usr/bin inside the
+    # staged root and leaves package-path symlinks in usr/share/omarchy/bin.
+    # git apply cannot patch through a symlink, so put the real file back for
+    # the patch and record the pair so the promotion can be redone afterwards.
+    promoted = []
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        relative = str(target.get("path", ""))
+        logical = PurePosixPath(relative)
+        if logical.is_absolute() or ".." in logical.parts or logical.as_posix() != relative:
+            continue
+        candidate = omarchy_root.joinpath(*logical.parts)
+        if not candidate.is_symlink():
+            continue
+        real = root / "usr/bin" / logical.name
+        if (
+            os.readlink(candidate) != f"/usr/bin/{logical.name}"
+            or real.is_symlink()
+            or not real.is_file()
+        ):
+            fail(f"target is not a regular file: {relative}")
+        candidate.unlink()
+        shutil.copy2(real, candidate)
+        promoted.append((candidate, real))
+    return promoted
+
+
+def restore_promoted_targets(promoted: list) -> None:
+    for candidate, real in promoted:
+        shutil.copy2(candidate, real)
+        candidate.unlink()
+        candidate.symlink_to(f"/usr/bin/{real.name}")
+
+
+def apply_backport(spec_dir: Path, root: Path, omarchy_root: Path, backport: dict) -> None:
     if not isinstance(backport, dict):
         fail("backport metadata must contain JSON objects")
     backport_id = str(backport.get("id", ""))
@@ -76,6 +114,7 @@ def apply_backport(spec_dir: Path, omarchy_root: Path, backport: dict) -> None:
     targets = backport.get("targets")
     if not isinstance(targets, list) or not targets:
         fail(f"backport {backport_id} must declare at least one target")
+    promoted = stage_promoted_targets(root, omarchy_root, targets)
     for target in targets:
         verify_target(omarchy_root, target, "beforeSha256", backport_id)
 
@@ -93,6 +132,7 @@ def apply_backport(spec_dir: Path, omarchy_root: Path, backport: dict) -> None:
 
     for target in targets:
         verify_target(omarchy_root, target, "afterSha256", backport_id)
+    restore_promoted_targets(promoted)
     print(f"Applied Omarchy backport {backport_id}")
 
 
@@ -120,7 +160,7 @@ def main() -> None:
         fail("authenticity.backports must be an array")
 
     for backport in backports:
-        apply_backport(spec.parent, omarchy_root, backport)
+        apply_backport(spec.parent, args.root.resolve(), omarchy_root, backport)
 
 
 if __name__ == "__main__":
