@@ -86,6 +86,7 @@ def regular_files(
             if (
                 path.relative_to(root).parts[0] not in excluded_directories
                 and path.suffix not in {".pyc", ".pyo"}
+                and name != ".DS_Store"
             ):
                 result.append(path)
     return sorted(result)
