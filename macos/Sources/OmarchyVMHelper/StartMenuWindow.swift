@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 enum StartMenuWindowChrome {
     static func apply(to window: NSWindow) {
-        window.title = "Try Omarchy"
+        window.title = "Omarchy"
         // The start menu draws its own heading inside a full-size content view.
         // Keep the native title as the window identity, but do not composite a
         // second copy over that custom heading in the transparent title bar.
@@ -372,7 +372,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             icon.heightAnchor.constraint(equalToConstant: 62),
         ])
 
-        let title = NSTextField(labelWithString: "Try Omarchy")
+        let title = NSTextField(labelWithString: "Omarchy")
         title.font = .systemFont(ofSize: 27, weight: .bold)
 
         let headingStack = NSStackView(views: [icon, title])

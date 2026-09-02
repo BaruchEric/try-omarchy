@@ -550,12 +550,15 @@ struct QEMUGPULaunchRequest: Equatable {
 
 enum QEMUGPULauncherPath {
     static let appName = "Try Omarchy.app"
+    // The installed copy of this fork is renamed to Omarchy.app; both names
+    // are trusted so make run still works on the dist bundle.
+    static let installedAppName = "Omarchy.app"
     static let launcherName = "run-qemu-gpu.sh"
 
     static func resolve(bundleURL: URL) throws -> URL {
         let standardizedBundle = bundleURL.standardizedFileURL
         var bundleInformation = stat()
-        guard standardizedBundle.lastPathComponent == appName,
+        guard [appName, installedAppName].contains(standardizedBundle.lastPathComponent),
               Darwin.lstat(standardizedBundle.path, &bundleInformation) == 0,
               bundleInformation.st_mode & S_IFMT == S_IFDIR else {
             throw HelperError.io("QEMU launch is available only from the built Omarchy app")
