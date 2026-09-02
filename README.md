@@ -27,7 +27,7 @@ Try Omarchy is not official or affiliated with Omarchy.
 ## Changes in this fork
 
 This fork moves the runtime to QEMU 11.1.1 to pick up Apple's in-hypervisor
-GIC, and fixes two audio problems found along the way.
+GIC, and fixes the audio, rendering, and keyboard problems found along the way.
 
 ### Component versions
 
@@ -39,6 +39,7 @@ GIC, and fixes two audio problems found along the way.
 | Python build deps | Host interpreter | Pinned `setuptools`, `wheel`, `pip` wheels | QEMU 11.1 builds `qemu.qmp`, and Python 3.12+ dropped `setuptools` |
 | Render patch source | Downloaded from the startergo tarball | Vendored in `macos/patches/` | That tree is unmaintained since 2026-01-14; the archive is no longer fetched at all |
 | Cocoa keyboard capture | Capture follows the mouse grab | Capture follows the key window | An absolute-pointing guest drops the grab as soon as virtio-tablet binds, leaking host Command chords mid-session |
+| Cocoa Caps Lock | Synthesized from QEMU's record of what it last sent | Forwarded as a key press and release | Omarchy maps Caps Lock to Compose, so a synthesized press opens a compose sequence and emits a symbol the user never typed |
 
 ### What it fixes
 
@@ -87,6 +88,23 @@ gives the emulated counter fewer and larger checks to satisfy. A deeper SDL
 buffer made this worse, and raising the QEMU main loop to
 `QOS_CLASS_USER_INTERACTIVE` changed nothing, which rules out both buffer
 depth and priority inversion.
+
+**Caps Lock guessed rather than forwarded.** Upstream Cocoa compares the host
+Caps Lock flag against `QKBD_MOD_CAPSLOCK` on every event and taps
+`KEY_CAPSLOCK` when the two differ. That bit is not the guest's state. It
+records what QEMU last sent and is never read back, so any path that changes
+Caps Lock without going through `qkbd_state` leaves the two disagreeing for the
+rest of the session. Two such paths matter here: `virtio_input_send` drops
+events while the guest driver is unbound, so a sync sent during boot is lost
+while QEMU records it as delivered, and Omarchy's keymap binds both Shift keys
+to Caps Lock. The result is worse than inverted capitals, because Omarchy maps
+Caps Lock to Compose. A synthesized press is not a lock toggle at all: it opens
+a compose sequence that swallows the next keystrokes and emits some other
+symbol. The key is now forwarded from `NSEventTypeFlagsChanged` like the other
+modifiers, one press and release per change of the lock flag, so nothing is
+synthesized and nothing can diverge. A change made while the app is inactive is
+no longer replayed on return, which matches how the other modifiers already
+behave.
 
 ### Graphics chain
 

@@ -102,7 +102,8 @@ creates the account on first boot.
 - The Swift code is a separate macOS launcher and helper.
 - A few QEMU C and Objective-C files are patched before QEMU is compiled. These
   patches cover the Cocoa app identity, display behavior, graphics integration,
-  host audio-device routing, and shared-folder ownership mapping.
+  keyboard capture and Caps Lock forwarding, host audio-device routing, and
+  shared-folder ownership mapping.
 - The pinned Omarchy runtime trees are copied from upstream. Reviewed temporary
   backports are applied strictly against declared file hashes and recorded in
   artifact provenance. Guest overlays add the QEMU and ARM64 integration around
