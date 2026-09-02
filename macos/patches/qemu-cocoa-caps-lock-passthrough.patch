@@ -1,0 +1,110 @@
+From: Try Omarchy contributors
+Subject: [PATCH] cocoa: forward Caps Lock as a key instead of syncing state
+
+Applies after the Try Omarchy product-identity, dynamic-display,
+immersive-mode and full-grab patches.
+
+Upstream treats Caps Lock as state to reconcile rather than a key to
+forward. Every event, mouse motion included, compares the host
+NSEventModifierFlagCapsLock against QKBD_MOD_CAPSLOCK and taps
+KEY_CAPSLOCK when they differ.
+
+QKBD_MOD_CAPSLOCK is not the guest's state. ui/kbd-state.c flips that bit
+only when a KEY_CAPSLOCK down passes through qkbd_state_key_event, never
+reads it back from the guest, and never resets it. It records what QEMU
+last sent. Any path that changes the guest's Caps Lock without going
+through qkbd_state leaves the two permanently disagreeing, and the
+comparison then reads as in sync, so QEMU never corrects it. Two such
+paths matter here. virtio_input_send drops events while the guest driver
+is unbound, so a sync sent during boot is lost while QEMU records it as
+delivered. And the guest's own keymap can toggle Caps Lock on its own;
+Omarchy binds both Shift keys together to Caps Lock.
+
+The result is inverted capitals for the rest of the session, and it is
+worse than inverted under Omarchy, which maps Caps Lock to Compose. There
+a synthesized KEY_CAPSLOCK is not a lock toggle at all, it opens a compose
+sequence that swallows the next keystrokes and emits some other symbol.
+Guessed state then produces guest input the user never typed.
+
+Forward the key instead. NSEventTypeFlagsChanged already carries
+kVK_CapsLock, and the other modifiers are handled from that switch, so
+handle Caps Lock the same way: one press and release per change of the lock
+flag on an event the focused window actually received. The flag stays set
+across the press and the release of the physical key, so testing it is what
+keeps a single press from sending two taps and leaving the key inert.
+Nothing is synthesized from guest state, so nothing can diverge, and a guest
+that remaps the key gets exactly the presses the user made.
+
+Caps Lock changed while the application is inactive is no longer replayed
+on return. That matches the surrounding modifier handling, which the
+upstream comment already describes as unreliable in that case, and it is
+the honest outcome: the keystroke went to another application.
+
+diff --git a/ui/cocoa.m b/ui/cocoa.m
+--- a/ui/cocoa.m
++++ b/ui/cocoa.m
+@@ -931,14 +931,8 @@
+      * the application is inactive (i.e. no events fire) and we don't want to
+      * wait for another modifier state change to detect such a change.
+      *
+-     * NSEventModifierFlagCapsLock requires a special treatment. The other flags
+-     * are handled in similar manners.
+-     *
+-     * NSEventModifierFlagCapsLock
+-     * ---------------------------
+-     *
+-     * If CapsLock state is changed, "up" and "down" events will be fired in
+-     * sequence, effectively updates CapsLock state on the guest.
++     * NSEventModifierFlagCapsLock is deliberately not reconciled here. The
++     * key is forwarded from NSEventTypeFlagsChanged; see kVK_CapsLock below.
+      *
+      * The other flags
+      * ---------------
+@@ -957,12 +951,6 @@
+      *   completely leaving your hands from the keyboard, which hopefully makes
+      *   this implementation usable enough.
+      */
+-    if (!!(modifiers & NSEventModifierFlagCapsLock) !=
+-        qkbd_state_modifier_get(kbd, QKBD_MOD_CAPSLOCK)) {
+-        qkbd_state_key_event(kbd, KEY_CAPSLOCK, true);
+-        qkbd_state_key_event(kbd, KEY_CAPSLOCK, false);
+-    }
+-
+     if (!(modifiers & NSEventModifierFlagShift)) {
+         qkbd_state_key_event(kbd, KEY_LEFTSHIFT, false);
+         qkbd_state_key_event(kbd, KEY_RIGHTSHIFT, false);
+@@ -981,6 +969,34 @@
+     switch ([event type]) {
+         case NSEventTypeFlagsChanged:
+             switch ([event keyCode]) {
++                /*
++                 * Caps Lock is a key, not a state to reconcile. QEMU cannot
++                 * read the guest's lock state back, so comparing against its
++                 * own record of what it last sent drives the guest wrong once
++                 * anything else changes it, and under a keymap that rebinds
++                 * Caps Lock a synthesized press is not a lock toggle at all.
++                 *
++                 * The lock flag stays set across the press and the release of
++                 * the physical key, so tap once per change of the flag rather
++                 * than once per event. The other cases in this switch test the
++                 * flag for the same reason. Comparing against the last flag
++                 * seen on a Caps Lock event, rather than against guest state,
++                 * keeps this reachable only from a real key the focused window
++                 * received. There is one view, so file scope would add nothing.
++                 */
++                case kVK_CapsLock: {
++                    static bool last_caps_lock_flag;
++                    bool caps_lock_flag =
++                        !!(modifiers & NSEventModifierFlagCapsLock);
++
++                    if (caps_lock_flag != last_caps_lock_flag) {
++                        last_caps_lock_flag = caps_lock_flag;
++                        qkbd_state_key_event(kbd, KEY_CAPSLOCK, true);
++                        qkbd_state_key_event(kbd, KEY_CAPSLOCK, false);
++                    }
++                    break;
++                }
++
+                 case kVK_Shift:
+                     if (!!(modifiers & NSEventModifierFlagShift)) {
+                         [self toggleKey:KEY_LEFTSHIFT];
