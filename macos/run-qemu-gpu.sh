@@ -492,8 +492,15 @@ upstream = exact_keys(
     {"channel", "commit", "license", "release", "repository", "tree", "treeSha256", "version"},
     "build spec upstream",
 )
+# Accept the official Omarchy repository at either of its GitHub homes, plus
+# the BaruchEric fork this build pins its guest source from.
+pinned_repositories = {
+    "https://github.com/basecamp/omarchy",
+    "https://github.com/omacom/omarchy",
+    "https://github.com/BaruchEric/omarchy",
+}
 if (
-    upstream.get("repository") != "https://github.com/basecamp/omarchy"
+    upstream.get("repository") not in pinned_repositories
     or upstream.get("channel") != "quattro"
     or upstream.get("license") != "MIT"
     or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-.][A-Za-z0-9.]+)?", str(upstream.get("release", "")))

@@ -22,7 +22,7 @@
     }
   },
   "upstream": {
-    "repository": "https://github.com/basecamp/omarchy",
+    "repository": "https://github.com/BaruchEric/omarchy",
     "commit": "346e69e1cec6c4e8924531874af6ba010a1bc99e",
     "tree": "24ff1b25bf85aeffa234c95c3474b7703a062c08",
     "treeSha256": "677f90b302dc1c622a3342ca2929084475caafb12db62790f13a9f4aea8f49ae",
