@@ -63,6 +63,10 @@ class AuthorizationError(Exception):
     pass
 
 
+class StaleResponseError(AuthorizationError):
+    pass
+
+
 def make_request(
     operation: str,
     *,
@@ -142,6 +146,8 @@ def decode_response(line: bytes, request: dict[str, object]) -> dict[str, object
         or not isinstance(response.get("approved"), bool)
     ):
         raise AuthorizationError("host sent an invalid authentication response")
+    if response.get("requestId") != request["requestId"]:
+        raise StaleResponseError("host response belongs to an earlier authentication request")
     for field in (
         "operation",
         "guestId",
@@ -325,7 +331,7 @@ def read_line(descriptor: int, timeout: float) -> bytes:
         readable, _, _ = select.select([descriptor], [], [], remaining)
         if not readable:
             raise TimeoutError("Touch ID request timed out")
-        chunk = os.read(descriptor, 1024)
+        chunk = os.read(descriptor, 1)
         if not chunk:
             raise ConnectionError("macOS authentication bridge disconnected")
         newline = chunk.find(b"\n")
@@ -344,8 +350,14 @@ def read_line(descriptor: int, timeout: float) -> bytes:
 def exchange_on_descriptor(
     descriptor: int, request: dict[str, object], timeout: float = 65
 ) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
     write_all(descriptor, encode_request(request))
-    return decode_response(read_line(descriptor, timeout), request)
+    while True:
+        line = read_line(descriptor, deadline - time.monotonic())
+        try:
+            return decode_response(line, request)
+        except StaleResponseError:
+            continue
 
 
 def authentication_device_path(

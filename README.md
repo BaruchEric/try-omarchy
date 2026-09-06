@@ -278,6 +278,12 @@ images enable `systemd-timesyncd` at boot. On an existing guest with clock drift
 run `sudo systemctl enable --now systemd-timesyncd.service`, then check
 `timedatectl` for `System clock synchronized: yes` before retrying.
 
+The Touch ID test refuses guest-password fallback and returns failure if sudo
+cannot authenticate. A passwordless sudo policy can also satisfy this check;
+the result only demonstrates Touch ID when its prompt appeared. Unanswered Mac
+prompts are canceled after 55 seconds, before the guest's 65-second timeout.
+Late responses are discarded without extending the current request's deadline.
+
 Enrollment persists across guest and Mac restarts for the same persistent VM,
 Mac, and macOS account. Factory Reset, moving the VM to another Mac or account,
 or changing the enrolled Touch ID fingerprint set requires re-pairing. Disabling

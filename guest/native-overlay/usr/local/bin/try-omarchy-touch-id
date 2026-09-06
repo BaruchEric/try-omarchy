@@ -32,9 +32,8 @@ enable_touch_id() {
   sudo -k
   sudo "$CONTROL" enable
   refresh_menu
-  sudo -k
-  sudo true
-  echo "Touch ID for sudo is enabled and verified."
+  try-omarchy-touch-id-test
+  echo "Touch ID for sudo is enabled; the password-free sudo check passed."
 }
 
 disable_touch_id() {
@@ -55,9 +54,8 @@ repair_touch_id() {
   sudo -k
   sudo "$CONTROL" repair
   refresh_menu
-  sudo -k
-  sudo true
-  echo "Touch ID for sudo was re-paired and verified."
+  try-omarchy-touch-id-test
+  echo "Touch ID for sudo was re-paired; the password-free sudo check passed."
 }
 
 manage_touch_id() {

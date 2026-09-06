@@ -51,10 +51,9 @@ def install(path: Path) -> None:
     opening = text.find("{")
     if opening < 0 or text[:opening].strip():
         fail("menu extension does not start with a JSONC object")
-    line_end = text.find("\n", opening)
-    if line_end < 0 or text.rstrip()[-1:] != "}":
-        fail("menu extension is not a multiline JSONC object")
-    updated = text[: line_end + 1] + ENTRY + text[line_end + 1 :]
+    if text.rstrip()[-1:] != "}":
+        fail("menu extension is not a JSONC object")
+    updated = text[: opening + 1] + "\n" + ENTRY + text[opening + 1 :]
 
     directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     temporary = f".{path.name}.{secrets.token_hex(8)}"

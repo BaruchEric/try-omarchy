@@ -3,6 +3,9 @@
 set -eu
 
 sudo -k
-if sudo true; then
-  echo "sudo authenticated. Touch ID was used if no guest password was entered."
+if SUDO_ASKPASS=/bin/false sudo -A true; then
+  echo "sudo authenticated without a guest password. Touch ID was used if its prompt appeared."
+else
+  echo "Touch ID sudo check failed; password fallback was not accepted." >&2
+  exit 1
 fi

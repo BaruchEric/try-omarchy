@@ -8,6 +8,25 @@ struct NativeAuthenticationBridgeTests {
     private let challenge = String(repeating: "ab", count: 32)
     private let guestID = String(repeating: "ef", count: 32)
 
+    @Test("an abandoned prompt is canceled and late approval cannot approve the next prompt")
+    func promptTimeout() {
+        var lateCompletion: ((Bool) -> Void)?
+        var canceled = false
+        #expect(!NativeAuthenticationPrompt.approve(
+            timeout: 0.01,
+            evaluate: { lateCompletion = $0 },
+            cancel: { canceled = true }
+        ))
+        #expect(canceled)
+        lateCompletion?(true)
+        #expect(!NativeAuthenticationPrompt.approve(
+            evaluate: { $0(false) }, cancel: {}
+        ))
+        #expect(NativeAuthenticationPrompt.approve(
+            evaluate: { $0(true) }, cancel: {}
+        ))
+    }
+
     @Test("sudo requests use a strict versioned context")
     func sudoRequestSchema() throws {
         let line = Data(

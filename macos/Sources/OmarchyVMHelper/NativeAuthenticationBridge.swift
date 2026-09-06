@@ -187,6 +187,31 @@ protocol HostAuthorizationSigning: AnyObject {
     func cancel()
 }
 
+enum NativeAuthenticationPrompt {
+    static func approve(
+        timeout: TimeInterval = 55,
+        evaluate: (@escaping (Bool) -> Void) -> Void,
+        cancel: () -> Void
+    ) -> Bool {
+        let completion = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var approved = false
+        evaluate { success in
+            lock.lock()
+            approved = success
+            lock.unlock()
+            completion.signal()
+        }
+        guard completion.wait(timeout: .now() + timeout) == .success else {
+            cancel()
+            return false
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        return approved
+    }
+}
+
 final class SecureEnclaveAuthorizationSigner: HostAuthorizationSigning, @unchecked Sendable {
     static let approvalLifetimeSeconds: Int64 = 15
 
@@ -296,22 +321,15 @@ final class SecureEnclaveAuthorizationSigner: HostAuthorizationSigning, @uncheck
         activeContext = context
         lock.unlock()
 
-        let completion = DispatchSemaphore(value: 0)
-        let resultLock = NSLock()
-        var approved = false
-        context.evaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
-            localizedReason: reason
-        ) { success, _ in
-            resultLock.lock()
-            approved = success
-            resultLock.unlock()
-            completion.signal()
-        }
-        completion.wait()
-        resultLock.lock()
-        let result = approved
-        resultLock.unlock()
+        let result = NativeAuthenticationPrompt.approve(
+            evaluate: { completion in
+                context.evaluatePolicy(
+                    .deviceOwnerAuthenticationWithBiometrics,
+                    localizedReason: reason
+                ) { success, _ in completion(success) }
+            },
+            cancel: { context.invalidate() }
+        )
         if !result {
             clear(context)
             return nil

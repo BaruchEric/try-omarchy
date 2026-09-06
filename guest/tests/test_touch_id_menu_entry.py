@@ -15,6 +15,18 @@ SPEC.loader.exec_module(menu_installer)
 
 
 class TouchIDMenuEntryTests(unittest.TestCase):
+    def test_compact_objects_keep_the_entry_inside_the_object(self) -> None:
+        for original in ('{}\n', '{"personal": true}\n', '{"personal": true\n}\n'):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "menu.jsonc"
+                path.write_text(original)
+                menu_installer.install(path)
+                updated = path.read_text()
+                self.assertEqual(updated, '{\n' + menu_installer.ENTRY + original[1:])
+                self.assertTrue(updated.rstrip().endswith('}'))
+                menu_installer.install(path)
+                self.assertEqual(path.read_text(), updated)
+
     def test_preserves_existing_jsonc_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / ".config/omarchy/extensions/omarchy-menu.jsonc"

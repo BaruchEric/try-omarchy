@@ -287,6 +287,31 @@ class NativeAuthenticationProtocolTests(unittest.TestCase):
             host.close()
         self.assertFalse(worker.is_alive())
 
+    def test_late_response_does_not_poison_the_next_request(self) -> None:
+        request = self.request()
+        response = self.approved_response(request)
+        stale = {**response, "requestId": "33333333-3333-4333-8333-333333333333"}
+        client, host = socket.socketpair()
+        try:
+            host.sendall(json.dumps(stale).encode() + b"\n" + json.dumps(response).encode() + b"\n")
+            decoded = broker.exchange_on_descriptor(client.fileno(), request, timeout=0.2)
+            broker.verify_approval(request, decoded, pinned_public_key=self.public_key, now=response["issuedAt"])
+        finally:
+            client.close()
+            host.close()
+
+    def test_stale_responses_do_not_reset_the_request_deadline(self) -> None:
+        request = self.request()
+        stale = {**self.approved_response(request), "requestId": "33333333-3333-4333-8333-333333333333"}
+        client, host = socket.socketpair()
+        try:
+            host.sendall(json.dumps(stale).encode() + b"\n")
+            with self.assertRaises(TimeoutError):
+                broker.exchange_on_descriptor(client.fileno(), request, timeout=0.01)
+        finally:
+            client.close()
+            host.close()
+
     def test_named_virtio_port_accepts_only_the_kernel_device_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dev = Path(directory) / "dev"
