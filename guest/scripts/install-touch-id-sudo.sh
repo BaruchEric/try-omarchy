@@ -83,6 +83,7 @@ if [[ -z $root ]]; then
     /usr/local/sbin/try-omarchy-touch-id-control disable || true
     fail "existing Touch ID state could not be migrated; sudo authentication was disabled"
   fi
+  /usr/local/sbin/try-omarchy-touch-id-control migrate
   /usr/bin/udevadm control --reload-rules
   /usr/bin/udevadm trigger --subsystem-match=virtio-ports --action=change
   if [[ ${SUDO_USER:-root} != root ]]; then

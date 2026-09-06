@@ -288,7 +288,10 @@ def verify_approval(
         or issued_at > current_time + CLOCK_SKEW_SECONDS
         or expires_at < current_time
     ):
-        raise AuthorizationError("host approval is outside its validity window")
+        raise AuthorizationError(
+            "approval expired or the guest and Mac clocks are out of sync; "
+            "check guest time synchronization and retry"
+        )
     public_key = decode_base64(response["publicKey"], "public key")
     if pinned_public_key is not None and public_key != pinned_public_key:
         raise AuthorizationError("host signing key does not match enrollment")
@@ -594,7 +597,14 @@ def authenticate_pam() -> bool:
         response = exchange(request)
         verify_approval(request, response, pinned_public_key=pinned_public_key)
         return True
-    except (AuthorizationError, OSError, subprocess.SubprocessError, TimeoutError):
+    except AuthorizationError as error:
+        print(f"Touch ID: {error}. Falling back to your guest password.")
+        return False
+    except TimeoutError:
+        print("Touch ID: approval timed out. Falling back to your guest password.")
+        return False
+    except (OSError, subprocess.SubprocessError):
+        print("Touch ID: authentication bridge unavailable. Falling back to your guest password.")
         return False
 
 

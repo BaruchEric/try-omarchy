@@ -11,7 +11,7 @@ import unittest
 
 GUEST = Path(__file__).resolve().parents[1]
 INSTALLER = GUEST / "scripts/install-touch-id-sudo.sh"
-PAM_LINE = "auth\t\tsufficient\tpam_exec.so quiet seteuid /usr/local/lib/try-omarchy/native-authentication-broker pam"
+PAM_LINE = "auth\t\tsufficient\tpam_exec.so quiet seteuid stdout /usr/local/lib/try-omarchy/native-authentication-broker pam"
 
 
 class TouchIDInstallerTests(unittest.TestCase):

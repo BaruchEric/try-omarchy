@@ -272,6 +272,12 @@ The QEMU window must be frontmost. Cancellation, invalid responses, missing
 enrollment, and unavailable Touch ID all fall back to the normal guest password;
 no login or screen-unlock PAM policy is changed.
 
+If Touch ID falls back, sudo displays the reason before asking for the guest
+password. Signed approvals require synchronized Mac and guest clocks; factory
+images enable `systemd-timesyncd` at boot. On an existing guest with clock drift,
+run `sudo systemctl enable --now systemd-timesyncd.service`, then check
+`timedatectl` for `System clock synchronized: yes` before retrying.
+
 Enrollment persists across guest and Mac restarts for the same persistent VM,
 Mac, and macOS account. Factory Reset, moving the VM to another Mac or account,
 or changing the enrolled Touch ID fingerprint set requires re-pairing. Disabling

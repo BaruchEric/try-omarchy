@@ -837,6 +837,7 @@ def main() -> None:
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
     check("systemd-growfs-root.service" in finalizer, "factory disk grows on first boot")
     check("systemctl enable omarchy-native-mac-share.service" in finalizer, "shared Mac folder mounts at boot")
+    check("systemctl enable systemd-timesyncd.service" in finalizer, "guest time synchronization starts at boot")
     check(
         'expected_ttfx=$(read_spec' in finalizer
         and "/usr/bin/ttfx --version" in finalizer
@@ -954,7 +955,7 @@ def main() -> None:
     check(
         authentication_broker.stat().st_mode & stat.S_IXUSR != 0
         and "/etc/pam.d/sudo" not in installer
-        and "pam_exec.so quiet seteuid" in control
+        and "pam_exec.so quiet seteuid stdout" in control
         and control.index('"$broker" enroll') < control.index("rewrite_policy enable")
         and control.index("rewrite_policy disable") < control.index('"$broker" disable')
         and "native-authentication-broker migrate" in installer

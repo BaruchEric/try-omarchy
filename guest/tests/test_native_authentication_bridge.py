@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
+from contextlib import redirect_stdout
 from importlib.machinery import SourceFileLoader
 import json
 from pathlib import Path
@@ -318,6 +320,31 @@ class NativeAuthenticationProtocolTests(unittest.TestCase):
                 self.assertFalse(broker.authenticate_pam())
             with mock.patch.dict(broker.os.environ, {**base, "PAM_TTY": ""}, clear=True):
                 self.assertFalse(broker.authenticate_pam())
+
+    def test_pam_explains_clock_rejection_and_keeps_success_quiet(self) -> None:
+        request = self.request()
+        response = self.approved_response(request)
+        env = {
+            "PAM_TYPE": "auth", "PAM_SERVICE": "sudo", "PAM_USER": "test",
+            "PAM_RUSER": "test", "PAM_TTY": "/dev/pts/4",
+        }
+        with mock.patch.object(broker.os, "getuid", return_value=0), \
+             mock.patch.object(broker.os, "geteuid", return_value=0), \
+             mock.patch.dict(broker.os.environ, env, clear=True), \
+             mock.patch.object(broker, "load_state", return_value=(self.public_key, self.guest_id)), \
+             mock.patch.object(broker, "make_request", return_value=request), \
+             mock.patch.object(broker, "exchange", return_value=response):
+            for offset in (-16, 0, 16):
+                with self.subTest(offset=offset), \
+                     mock.patch.object(broker.time, "time", return_value=response["issuedAt"] + offset), \
+                     redirect_stdout(io.StringIO()) as output:
+                    self.assertEqual(broker.authenticate_pam(), offset == 0)
+                    if offset == 0:
+                        self.assertEqual(output.getvalue(), "")
+                    else:
+                        self.assertIn("clocks are out of sync", output.getvalue())
+                        self.assertIn("Falling back to your guest password", output.getvalue())
+                        self.assertNotIn(response["signature"], output.getvalue())
 
 
 if __name__ == "__main__":

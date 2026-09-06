@@ -3,10 +3,11 @@
 set -euo pipefail
 
 PAM_LINE=$'auth\t\tsufficient\tpam_exec.so quiet seteuid /usr/local/lib/try-omarchy/native-authentication-broker pam'
+CURRENT_PAM_LINE=$'auth\t\tsufficient\tpam_exec.so quiet seteuid stdout /usr/local/lib/try-omarchy/native-authentication-broker pam'
 CONTROL=/usr/local/sbin/try-omarchy-touch-id-control
 
 enabled() {
-  grep -Fxq "$PAM_LINE" /etc/pam.d/sudo 2>/dev/null
+  grep -Fxq -e "$PAM_LINE" -e "$CURRENT_PAM_LINE" /etc/pam.d/sudo 2>/dev/null
 }
 
 confirm() {
