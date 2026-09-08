@@ -222,6 +222,9 @@ done
 python3 "$guest_dir/scripts/verify-screensaver-override.py" \
   --source "$source_dir/bin/omarchy-screensaver" \
   --override "$guest_dir/native-overlay/usr/bin/omarchy-screensaver"
+python3 "$guest_dir/scripts/verify-background-switcher-override.py" \
+  --source "$source_dir/bin/omarchy-theme-bg-switcher" \
+  --override "$guest_dir/native-overlay/usr/bin/omarchy-theme-bg-switcher"
 "$guest_dir/scripts/materialize-omarchy.sh" --root "$root" --source "$source_dir" --spec "$spec"
 python3 "$guest_dir/scripts/apply-omarchy-backports.py" --root "$root" --spec "$spec"
 "$guest_dir/scripts/configure-rootfs.sh" --root "$root" --spec "$spec"
@@ -246,6 +249,11 @@ python3 "$guest_dir/scripts/apply-omarchy-backports.py" --root "$root" --spec "$
   --spec "$spec" \
   --pacman-config "$pacman_config"
 "$guest_dir/scripts/register-patched-hyprland.sh" \
+  --root "$root" \
+  --work "$work" \
+  --spec "$spec" \
+  --pacman-config "$pacman_config"
+"$guest_dir/scripts/register-pinned-voxtype.sh" \
   --root "$root" \
   --work "$work" \
   --spec "$spec" \

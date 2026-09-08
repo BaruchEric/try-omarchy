@@ -61,24 +61,46 @@ cp -a "$guest_dir/factory-overlay/." "$root/"
 
 # Session-config customizations are additive, so each fragment remains
 # independently auditable against Basecamp's pinned config. The native overlay
-# also carries two deliberate command replacements: safe PipeWire input
-# switching and VM-aware cursor restoration after the screensaver exits. The
-# display fragment selects Cocoa's host-composited cursor path and keeps the
-# guest mode synchronized when QEMU changes the virtual EDID.
+# also carries three deliberate command replacements: safe PipeWire input
+# switching, VM-aware cursor restoration after the screensaver exits, and
+# user-first ordering in the background picker. The display fragment selects
+# Cocoa's host-composited cursor path and keeps the guest mode synchronized when
+# QEMU changes the virtual EDID.
 # The clipboard bridge mirrors the Mac pasteboard into the Wayland session,
 # and the Mac folder mount completes the host integration.
 cp -a "$guest_dir/native-overlay/." "$root/"
+"$guest_dir/scripts/install-touch-id-sudo.sh" \
+  --root "$root" \
+  --guest-dir "$guest_dir"
 chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/bin/omarchy-screensaver" \
+  "$root/usr/bin/omarchy-theme-bg-switcher" \
+  "$root/usr/local/bin/alacritty" \
   "$root/usr/local/bin/omarchy-native-audio-bridge" \
   "$root/usr/local/bin/omarchy-native-camera-bridge" \
   "$root/usr/local/bin/omarchy-native-clipboard-bridge" \
   "$root/usr/local/bin/omarchy-native-cursor-restore" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
   "$root/usr/local/bin/omarchy-native-mac-share" \
+  "$root/usr/local/bin/try-omarchy-touch-id" \
+  "$root/usr/local/bin/try-omarchy-touch-id-test" \
+  "$root/usr/local/lib/try-omarchy/native-authentication-broker" \
+  "$root/usr/local/sbin/try-omarchy-touch-id-control" \
+  "$root/usr/local/sbin/try-omarchy-touch-id-enroll" \
+  "$root/usr/local/lib/try-omarchy/install-vivaldi-arm64" \
   "$root/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
-for native_command in omarchy-audio-input-set-default omarchy-screensaver; do
+
+vivaldi_key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["supplyChain"]["vivaldi"]["signingKey"])' "$spec")
+[[ $vivaldi_key == keys/vivaldi-package-composer-key11.asc ]] || fail "unexpected Vivaldi key path"
+[[ -f $guest_dir/$vivaldi_key && ! -L $guest_dir/$vivaldi_key ]] || fail "Vivaldi package key is missing or unsafe"
+install -d -m 0755 "$root/usr/local/share/try-omarchy/vivaldi"
+install -m 0644 "$guest_dir/$vivaldi_key" \
+  "$root/usr/local/share/try-omarchy/vivaldi/linux_signing_key.pub"
+for native_command in \
+  omarchy-audio-input-set-default \
+  omarchy-screensaver \
+  omarchy-theme-bg-switcher; do
   source_digest=$(sha256sum "$guest_dir/native-overlay/usr/bin/$native_command")
   source_digest=${source_digest%% *}
   installed_digest=$(sha256sum "$root/usr/bin/$native_command")

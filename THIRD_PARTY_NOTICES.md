@@ -26,12 +26,23 @@ code.
 - **yay** — GPL-3.0-or-later; the official ARM64 release and its versioned
   license are pinned in `guest/spec.json` and packaged into the guest's local
   repository.
+- **Voxtype** — MIT; the signed v1.0.1 ARM64 CPU, ONNX, and OSD release assets,
+  release key, source archive, and checksums are pinned in `guest/spec.json`.
+  They are packaged in the guest's local repository but remain uninstalled
+  until the user invokes Omarchy's optional dictation installer.
 - **1Password** — proprietary software not redistributed by Try Omarchy. When a
   user explicitly invokes its optional ARM64 installer, the guest resolves the
   current vendor release and AUR CLI recipe after the factory build. These
   mutable post-build inputs are excluded from factory provenance and are
   declared separately in `guest/spec.json`; the application archive is accepted
   only when its signature validates to 1Password's pinned signing fingerprint.
+- **Vivaldi** — proprietary software not redistributed by Try Omarchy. When a
+  user explicitly selects Vivaldi, the guest downloads the exact official ARM64
+  RPM pinned in `guest/spec.json`, verifies its checksum and signature against
+  Vivaldi's pinned package-composer key, and repackages the verified payload as
+  a Pacman-owned local package. This installer-only input remains outside the
+  factory image and factory provenance. Vivaldi permits open-source Linux
+  distributions to integrate its browser; see <https://vivaldi.com/partners/linux/>.
 
 See `guest/spec.json`, `guest/packages.lock.json`, and
 `macos/build-qemu-gpu-runtime.sh` for exact source identities and checksums.

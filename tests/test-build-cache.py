@@ -103,7 +103,9 @@ class BuildCacheTests(unittest.TestCase):
         self.assertLess(guest, runtime)
         self.assertLess(runtime, app)
         self.assertIn("Build output:", dry_run)
-        self.assertIn(str(REPOSITORY / "dist/Try Omarchy.app"), dry_run)
+        self.assertIn(
+            str(REPOSITORY / "dist/app.noindex/Try Omarchy.app"), dry_run
+        )
 
         forced = subprocess.run(
             ["make", "-n", "build", "FORCE=1"],
@@ -125,6 +127,24 @@ class BuildCacheTests(unittest.TestCase):
         )
         self.assertNotEqual(0, invalid_release.returncode)
         self.assertNotIn("build-cache.py", invalid_release.stdout)
+
+    def test_development_app_is_excluded_from_spotlight(self) -> None:
+        build_script = (REPOSITORY / "macos/build-app.sh").read_text()
+        open_script = (REPOSITORY / "macos/open-qemu-gpu.sh").read_text()
+        self.assertIn(
+            'app="$repo_dir/dist/app.noindex/Try Omarchy.app"',
+            build_script,
+        )
+        self.assertIn(
+            'legacy_app="$repo_dir/dist/Try Omarchy.app"',
+            build_script,
+        )
+        self.assertIn('rm -rf -- "$legacy_app"', build_script)
+        self.assertNotIn(".metadata_never_index", build_script)
+        self.assertIn(
+            'app="$repo_dir/dist/app.noindex/Try Omarchy.app"',
+            open_script,
+        )
 
     def test_runtime_file_manifest_is_the_single_validated_closure(self) -> None:
         manifest = REPOSITORY / "macos/runtime-files.txt"
@@ -222,6 +242,25 @@ class BuildCacheTests(unittest.TestCase):
             os.utime(artifact, ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1))
             with self.assertRaisesRegex(build_cache.CacheError, "metadata changed"):
                 build_cache.validate_guest(root, {"outputs": snapshot})
+
+    def test_app_validation_requires_packaged_icon(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            app = root / "dist/app.noindex/Try Omarchy.app"
+            for relative in (
+                "Contents/MacOS/omarchy-vm-helper",
+                "Contents/Resources/runtime/bin/Try Omarchy",
+                "Contents/Resources/guest/rootfs.ext4.zst",
+                "Contents/Resources/guest/launch.plist",
+            ):
+                path = app / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"fixture\n")
+
+            with self.assertRaisesRegex(
+                build_cache.CacheError, "app bundle is missing or unsafe"
+            ):
+                build_cache.validate_app(root, None)
 
     def test_state_write_is_readable_and_replaces_old_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,4 +1,8 @@
-# Try Omarchy
+<p align="center">
+  <img src="macos/OmarchyIcon.svg" width="128" height="128" alt="Try Omarchy logo">
+</p>
+
+<h1 align="center">Try Omarchy</h1>
 
 Run the upstream [Omarchy](https://github.com/basecamp/omarchy) desktop as a native, hardware-accelerated app on an Apple Silicon Mac.
 
@@ -6,7 +10,9 @@ Try Omarchy packages a project-built ARM64 Arch Linux image configured with Omar
 
 <img width="800" src="https://github.com/user-attachments/assets/1368a8f5-5099-43e4-8d3b-3d7d7fba0326" />
 
-Try Omarchy is not official or affiliated with Omarchy.
+The Omarchy mark in the app icon is sourced from the
+[official Omarchy brand kit](https://omarchy.org/brand/) and remains subject to
+Omarchy's trademark rights.
 
 ## Highlights
 
@@ -136,7 +142,7 @@ port. The `dtc` mirror should be reverted once kernel.org returns.
 2. Open the DMG and drag **Try Omarchy** to **Applications**.
 3. Launch **Try Omarchy** from Applications.
 
-Every launch begins at the start menu. **Immersive** is on by default and controls only the Full Screen presentation. Turn it off to keep Omarchy full screen while letting the Mac menu bar and Dock appear at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
+Every launch begins at the start menu. While that menu is open, Try Omarchy behaves like a regular Mac app with standard Quit, Close Window, and Minimize commands; after the VM starts, that native app chrome steps aside for Omarchy. **Immersive** is on by default, so Omarchy opens Full Screen with the Mac menu bar and Dock hidden. Turn it off to open a resizable window; if you later enter Full Screen, the Mac menu bar and Dock remain available at the screen edges. Whenever the Omarchy window is focused, Command belongs to the guest as Super in either mode; Accessibility permission lets system shortcuts such as Command-Space reach it before macOS. Microphone and camera access are optional. The first launch takes longer while the app prepares Linux and starts Omarchy's account provisioning.
 
 Restarting from inside Omarchy reboots the guest in the same Try Omarchy app.
 Shutting down Omarchy closes the app and leaves it closed.
@@ -244,6 +250,47 @@ Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
 connecting. It does not isolate the listener from other users or processes on
 the same Mac; guest SSH authentication is still required.
 
+### Touch ID for sudo
+
+The native authentication bridge can enroll this Mac and use
+Touch ID as a sufficient authentication method for guest `sudo`. Open
+**Omarchy Menu → Setup → Security → Touch ID for sudo**, or run:
+
+```sh
+try-omarchy-touch-id
+```
+
+The integration ships disabled. Enabling first requires the normal guest sudo
+password, then Touch ID creates and proves possession of a Secure Enclave
+signing key. Only after that succeeds is the narrowly scoped sudo PAM rule
+installed. The menu then offers Test, Re-pair, and Disable actions.
+
+The Mac stores only the Secure Enclave's device-bound encrypted key
+representation. Every later approval is signed over a root-private guest ID,
+fresh challenge, the sudo user and requesting user, the interactive TTY, and a
+15-second validity window. Each enrolled guest has a distinct host signing key.
+The QEMU window must be frontmost. Cancellation, invalid responses, missing
+enrollment, and unavailable Touch ID all fall back to the normal guest password;
+no login or screen-unlock PAM policy is changed.
+
+If Touch ID falls back, sudo displays the reason before asking for the guest
+password. Signed approvals require synchronized Mac and guest clocks; factory
+images enable `systemd-timesyncd` at boot. On an existing guest with clock drift,
+run `sudo systemctl enable --now systemd-timesyncd.service`, then check
+`timedatectl` for `System clock synchronized: yes` before retrying.
+
+The Touch ID test refuses guest-password fallback and returns failure if sudo
+cannot authenticate. A passwordless sudo policy can also satisfy this check;
+the result only demonstrates Touch ID when its prompt appeared. Unanswered Mac
+prompts are canceled after 55 seconds, before the guest's 65-second timeout.
+Late responses are discarded without extending the current request's deadline.
+
+Enrollment persists across guest and Mac restarts for the same persistent VM,
+Mac, and macOS account. Factory Reset, moving the VM to another Mac or account,
+or changing the enrolled Touch ID fingerprint set requires re-pairing. Disabling
+removes the guest enrollment and, while the host bridge is available, its wrapped
+Secure Enclave key representation.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)
@@ -256,7 +303,74 @@ Silicon Macs automatically keep the normal non-nested launch path.
 
 ## Data and updates
 
-Normal launches keep one persistent VM under `~/Library/Application Support/Try Omarchy/VM/v1`. Removing the app does not remove this data. The start menu can reset it, and requires confirmation before replacing a disk that is incompatible with a new factory guest build.
+Normal launches keep one persistent VM under
+`~/Library/Application Support/Try Omarchy/VM/v1`. Removing or updating the app
+does not remove or replace this data. An existing VM keeps both its writable
+disk and the exact kernel, initramfs, and base command line that were paired
+with that disk. A newer app's bundled factory image is used only to create a
+new VM, after a confirmed **Reset Omarchy**, or for an ephemeral launch.
+Before Reset is enabled, the confirmation sheet requires typing `Try Omarchy`
+exactly; cancelling the sheet returns to the start menu without changing the VM.
+
+VMs created before paired boot files were introduced are preserved too. On the
+first launch that needs them, Try Omarchy explains the transition in a
+**Continue** / **Cancel** dialog before starting recovery. Continue performs a
+one-time recovery boot: it mounts the saved disk read-only, copies the installed
+kernel and initramfs from `/boot` into private VM storage, validates them, and
+then shuts the recovery boot down. It does not start the saved userspace with
+the newer app's kernel, reset the VM, or upgrade Omarchy. Cancel returns to the
+start menu. Reset is still required when the saved storage or boot format
+itself cannot be safely read.
+
+Use Omarchy's built-in updater for the updates it supports inside this ARM
+guest. Ordinary guest packages can advance without replacing the VM, but Try
+Omarchy currently pins its direct-boot kernel and headers, packaged
+`try-omarchy-runtime`, and reviewed compatibility backports in a prioritized
+local repository. Installing a newer Try Omarchy app therefore does not apply
+all of that app's factory-image changes to an existing VM, and an in-guest
+update should not be assumed to reproduce them. A confirmed reset is the
+deliberate, destructive way to start again from the newest bundled factory.
+
+### Growing an existing VM disk
+
+To add capacity without resetting the VM, shut down Omarchy and run the
+maintenance command from a source checkout on the Mac:
+
+```sh
+# Preview a new total capacity of 32 GiB.
+macos/resize-vm-disk.sh --size-gib 32
+
+# Retain a verified backup, then enlarge the stopped disk.
+macos/resize-vm-disk.sh --size-gib 32 --apply
+```
+
+Run as the macOS user who owns the VM, without `sudo`. The command requires
+Python 3 and an APFS volume, but does not require building the app. It uses the
+same workspace lock as the launcher and refuses an active VM, shrinking,
+unrecognized metadata, or a missing/invalid paired boot kit. An equal size is
+a no-op. Whole-number targets up to 8192 GiB are accepted.
+
+The default state directory is
+`~/Library/Application Support/Try Omarchy/VM/v1`. For a custom VM location,
+pass `--state-root "/path/to/selected-folder/VM/v1"`, using the directory that
+contains `.omarchy-qemu-storage` and `disks/current`. The command does not read
+the app's saved location preference or select legacy development workspaces.
+
+The backup is an APFS clone in a private sibling directory named
+`v1.resize-backup.XXXXXX`; the command prints its exact path. It retains the
+original disk, disk metadata, and paired boot files and verifies the disk's
+checksum before resizing; reading both full disk images can take several
+minutes. Keep it until the resized VM is working. To roll back, shut down the
+VM and restore its original disk from this backup; any
+writes made after the backup would be lost, so preserve the newer disk first.
+Never shrink the enlarged disk to undo the operation.
+
+The host must have free space for the requested increase plus 1 GiB of
+headroom. Growth is sparse, not a reservation of host capacity, and retained
+clones consume additional space as their contents diverge. On the next normal
+boot, the guest's enabled `systemd-growfs-root.service` grows ext4 to fill the
+disk. Verify inside Omarchy with `lsblk` and `df -h /`. No app rebuild, guest
+reinstall, or change to the factory image is needed.
 
 ### Choosing where the VM lives
 
@@ -325,6 +439,11 @@ individual component command).
 Artifacts created before their `.build/state/` record exists are rebuilt once;
 the cache never adopts an output whose successful inputs it did not observe.
 
+The generated app lives under `dist/app.noindex/`. macOS can run and package
+the bundle normally, but Spotlight will not present it beside an installed
+copy as a second, indistinguishable Command-Space result. The first app rebuild
+after this layout change removes the old generated bundle from `dist/`.
+
 Launching also ensures that the guest, runtime, and native app are current, so
 the normal follow-up command is:
 
@@ -370,7 +489,8 @@ All generated output has one predictable home:
 
 ```text
 dist/
-├── Try Omarchy.app
+├── app.noindex/
+│   └── Try Omarchy.app
 ├── TryOmarchy.dmg        # after make package or make release
 └── guest/                # verified guest build artifacts
 ```
@@ -406,7 +526,7 @@ The architecture and trust boundaries are documented in [`docs/architecture.md`]
 
 ## Project status and support
 
-Try Omarchy is pre-1.0 and under active development. It is an independent open-source project and is not affiliated with or endorsed by Basecamp. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Try Omarchy is pre-1.0 and under active development. Omarchy and bundled dependencies retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 Report ordinary bugs through [GitHub Issues](https://github.com/themartiano/try-omarchy/issues). Report suspected vulnerabilities using the private process in [`SECURITY.md`](SECURITY.md), not a public issue.
 

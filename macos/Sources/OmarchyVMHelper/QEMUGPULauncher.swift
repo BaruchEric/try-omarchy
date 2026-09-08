@@ -13,11 +13,19 @@ enum QEMUGPUStorageOption: String, Equatable {
 enum QEMUGPURuntimeEnvironment {
     static let inspectOnlyKey = "OMARCHY_QEMU_GPU_INSPECT_ONLY"
     static let dryRunKey = "OMARCHY_QEMU_GPU_DRY_RUN"
+    static let bootRecoveryConsentKey = "OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY"
 
     static func sanitizedForLaunch(_ base: [String: String]) -> [String: String] {
         var environment = base
         environment.removeValue(forKey: inspectOnlyKey)
         environment.removeValue(forKey: dryRunKey)
+        environment.removeValue(forKey: bootRecoveryConsentKey)
+        return environment
+    }
+
+    static func withBootRecoveryConsent(_ base: [String: String]) -> [String: String] {
+        var environment = sanitizedForLaunch(base)
+        environment[bootRecoveryConsentKey] = "1"
         return environment
     }
 
@@ -38,6 +46,12 @@ enum QEMUGPURuntimeEnvironment {
 
 enum QEMUGPUStorageSpaceEstimate {
     private static let stateRootEnvironmentKey = "OMARCHY_QEMU_GPU_STATE_ROOT"
+
+    private struct RecordedPersistentDisk {
+        let disk: URL
+        let identity: String
+        let schemaVersion: Int
+    }
 
     /// Resolution order is the environment override, then the stored
     /// preference, then Application Support. The override stays first because
@@ -147,11 +161,11 @@ enum QEMUGPUStorageSpaceEstimate {
 
         var total: Int64 = 0
         for directory in directories {
-            guard let diskURL = recordedDiskURL(
+            guard let recordedDisk = recordedPersistentDisk(
                 in: directory,
                 fileManager: fileManager
             ),
-                  let values = try? diskURL.resourceValues(forKeys: [
+                  let values = try? recordedDisk.disk.resourceValues(forKeys: [
                     .totalFileAllocatedSizeKey,
                     .fileAllocatedSizeKey,
                   ]),
@@ -162,6 +176,90 @@ enum QEMUGPUStorageSpaceEstimate {
             total = sum
         }
         return total > 0 ? total : nil
+    }
+
+    /// Whether this state root already contains a schema-2 persistent disk the
+    /// shell can launch. A launchable existing VM is selected before the
+    /// bundled factory image is materialized, including when its recorded
+    /// bundle identity belongs to an older app release. Unsupported schema-1
+    /// disks still require Reset and do not bypass new-VM space validation.
+    static func hasRecordedPersistentDisk(
+        stateRoot: String,
+        bundleIdentity: String? = nil,
+        fileManager: FileManager = .default
+    ) -> Bool {
+        let disks = URL(fileURLWithPath: stateRoot, isDirectory: true)
+            .appendingPathComponent("disks", isDirectory: true)
+        guard hasAttributes(
+            disks,
+            type: .typeDirectory,
+            permissions: 0o700,
+            fileManager: fileManager
+        ),
+              let contents = try? fileManager.contentsOfDirectory(
+                at: disks,
+                includingPropertiesForKeys: nil,
+                options: []
+              )
+        else { return false }
+
+        return selectedSinglePersistentDisk(
+            from: contents,
+            bundleIdentity: bundleIdentity,
+            fileManager: fileManager
+        )?.schemaVersion == 2
+    }
+
+    /// Read-only best-effort preflight for the one-time legacy boot-file
+    /// pairing. The shell repeats every check under its workspace lock and
+    /// requires an explicit one-shot consent variable, so a filesystem race or
+    /// a conservative false negative cannot perform recovery without consent.
+    static func bootRecoveryPreflight(
+        environment: [String: String],
+        bundleIdentity: String?,
+        preference: StorageLocationPreference = .default,
+        fileManager: FileManager = .default
+    ) -> BootRecoveryLaunchPreflight {
+        guard environment["OMARCHY_QEMU_GPU_DEVELOPMENT_MULTI_DISK"] ?? "0" == "0",
+              let bundleIdentity,
+              isIdentity(bundleIdentity),
+              let root = storageRootURL(
+                environment: environment,
+                preference: preference,
+                fileManager: fileManager
+              ),
+              StorageLocationPolicy.hasValidRootMarker(in: root)
+        else { return .notRequired }
+
+        let disks = root.appendingPathComponent("disks", isDirectory: true)
+        guard hasAttributes(
+            disks,
+            type: .typeDirectory,
+            permissions: 0o700,
+            fileManager: fileManager
+        ),
+              let entries = try? fileManager.contentsOfDirectory(
+                at: disks,
+                includingPropertiesForKeys: nil,
+                options: []
+              )
+        else { return .notRequired }
+
+        guard let selected = selectedSinglePersistentDisk(
+            from: entries,
+            bundleIdentity: bundleIdentity,
+            fileManager: fileManager
+        ) else { return .notRequired }
+
+        guard selected.schemaVersion == 2,
+              selected.identity != bundleIdentity,
+              bootKitEntryIsMissing(
+                stateRoot: root,
+                identity: selected.identity,
+                fileManager: fileManager
+              )
+        else { return .notRequired }
+        return .requiresConfirmation
     }
 
     static func format(bytes: Int64) -> String? {
@@ -248,10 +346,10 @@ enum QEMUGPUStorageSpaceEstimate {
         }
     }
 
-    private static func recordedDiskURL(
+    private static func recordedPersistentDisk(
         in directory: URL,
         fileManager: FileManager
-    ) -> URL? {
+    ) -> RecordedPersistentDisk? {
         guard hasAttributes(
             directory,
             type: .typeDirectory,
@@ -308,7 +406,67 @@ enum QEMUGPUStorageSpaceEstimate {
               let diskSize = try? diskURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               Int64(diskSize) >= sourceBytesNumber.int64Value
         else { return nil }
-        return diskURL
+        return RecordedPersistentDisk(
+            disk: diskURL,
+            identity: identity,
+            schemaVersion: schemaNumber.intValue
+        )
+    }
+
+    /// Mirrors the launcher's normal single-disk selection closely enough for
+    /// read-only UI preflight: `current` wins only when no second recognized
+    /// legacy VM exists; otherwise exactly one recognized identity directory
+    /// can be migrated. The shell repeats this under its lock.
+    private static func selectedSinglePersistentDisk(
+        from entries: [URL],
+        bundleIdentity: String? = nil,
+        fileManager: FileManager
+    ) -> RecordedPersistentDisk? {
+        let currentEntry = entries.first { $0.lastPathComponent == "current" }
+        let validLegacyDisks = entries
+            .filter { isIdentity($0.lastPathComponent) }
+            .compactMap { recordedPersistentDisk(in: $0, fileManager: fileManager) }
+
+        if let currentEntry {
+            guard validLegacyDisks.isEmpty else { return nil }
+            return recordedPersistentDisk(in: currentEntry, fileManager: fileManager)
+        }
+        if let bundleIdentity,
+           let exactEntry = entries.first(where: { $0.lastPathComponent == bundleIdentity }),
+           recordedPersistentDisk(in: exactEntry, fileManager: fileManager) == nil {
+            // The shell refuses to select around an invalid legacy directory
+            // bearing the current bundle's exact identity.
+            return nil
+        }
+        guard validLegacyDisks.count == 1 else { return nil }
+        return validLegacyDisks.first
+    }
+
+    /// Missing is the only state in which recovery is meaningful. Any direct
+    /// entry, valid or not, suppresses the prompt: the shell owns full boot-kit
+    /// validation and must report an unsafe collision rather than overwrite it.
+    private static func bootKitEntryIsMissing(
+        stateRoot: URL,
+        identity: String,
+        fileManager: FileManager
+    ) -> Bool {
+        let bootRoot = stateRoot.appendingPathComponent("boot", isDirectory: true)
+        var information = stat()
+        if Darwin.lstat(bootRoot.path, &information) != 0 {
+            return errno == ENOENT
+        }
+        guard hasAttributes(
+            bootRoot,
+            type: .typeDirectory,
+            permissions: 0o700,
+            fileManager: fileManager
+        ) else { return false }
+
+        let bootKit = bootRoot.appendingPathComponent(identity, isDirectory: true)
+        if Darwin.lstat(bootKit.path, &information) == 0 {
+            return false
+        }
+        return errno == ENOENT
     }
 
     private static func hasAttributes(
@@ -563,7 +721,7 @@ enum CameraPreflight {
 
 final class QEMUGPUProcessSupervisor: @unchecked Sendable {
     enum LaunchEvent: Equatable {
-        case virtualMachineReady
+        case virtualMachineReady(qmpSocketPath: String?)
     }
 
     struct StandardErrorDrain {
@@ -573,7 +731,7 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
 
     private struct StandardErrorConsumption {
         let reachedEnd: Bool
-        let reportsVirtualMachineStart: Bool
+        let launchEvents: [LaunchEvent]
     }
 
     private static let standardErrorReadBudget = 64 * 1_024
@@ -609,9 +767,11 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             if consumption.reachedEnd {
                 handle.readabilityHandler = nil
             }
-            if consumption.reportsVirtualMachineStart {
+            if !consumption.launchEvents.isEmpty {
                 DispatchQueue.main.async {
-                    launchEvent(.virtualMachineReady)
+                    for event in consumption.launchEvents {
+                        launchEvent(event)
+                    }
                 }
             }
         }
@@ -620,11 +780,14 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
             // QEMU inherits this pipe from the shell launcher and can outlive
             // it after a crash. Drain only bytes available now; waiting for
             // EOF here could strand process completion for the QEMU lifetime.
-            if self?.consumeAvailableStandardError(
+            let finalEvents = self?.consumeAvailableStandardError(
                 from: pipe.fileHandleForReading
-            ).reportsVirtualMachineStart == true {
+            ).launchEvents ?? []
+            if !finalEvents.isEmpty {
                 DispatchQueue.main.async {
-                    launchEvent(.virtualMachineReady)
+                    for event in finalEvents {
+                        launchEvent(event)
+                    }
                 }
             }
             self?.clear(process)
@@ -698,13 +861,13 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         guard !drain.data.isEmpty else {
             return StandardErrorConsumption(
                 reachedEnd: drain.reachedEnd,
-                reportsVirtualMachineStart: false
+                launchEvents: []
             )
         }
         try? FileHandle.standardError.write(contentsOf: drain.data)
         return StandardErrorConsumption(
             reachedEnd: drain.reachedEnd,
-            reportsVirtualMachineStart: recordStandardError(drain.data)
+            launchEvents: recordStandardError(drain.data)
         )
     }
 
@@ -781,17 +944,57 @@ final class QEMUGPUProcessSupervisor: @unchecked Sendable {
         }
     }
 
-    private func recordStandardError(_ data: Data) -> Bool {
+    private func recordStandardError(_ data: Data) -> [LaunchEvent] {
         lock.lock()
         defer { lock.unlock() }
         errorBuffer += String(decoding: data, as: UTF8.self)
+        var launchEvents: [LaunchEvent] = []
+        if !didReportVirtualMachineStart,
+           let event = Self.virtualMachineReadyEvent(in: errorBuffer) {
+            didReportVirtualMachineStart = true
+            launchEvents.append(event)
+        }
         if errorBuffer.count > 4_096 {
             errorBuffer = String(errorBuffer.suffix(4_096))
         }
-        guard !didReportVirtualMachineStart,
-              errorBuffer.contains("[qemu-gpu] Ready") else { return false }
-        didReportVirtualMachineStart = true
-        return true
+        return launchEvents
+    }
+
+    /// Extracts only a complete launcher-owned readiness line. Waiting for its
+    /// newline matters because FileHandle can split the socket pathname across
+    /// arbitrary readability callbacks.
+    static func virtualMachineReadyEvent(in standardError: String) -> LaunchEvent? {
+        let marker = "[qemu-gpu] Ready. QMP: "
+        var lineStart = standardError.startIndex
+        while let newline = standardError[lineStart...].firstIndex(of: "\n") {
+            var line = String(standardError[lineStart..<newline])
+            if line.last == "\r" {
+                line.removeLast()
+            }
+            if line.hasPrefix(marker) {
+                return .virtualMachineReady(
+                    qmpSocketPath: qmpSocketPath(inReadyLine: line)
+                )
+            }
+            lineStart = standardError.index(after: newline)
+        }
+        return nil
+    }
+
+    static func qmpSocketPath(inReadyLine line: String) -> String? {
+        let linePrefix = "[qemu-gpu] Ready. QMP: "
+        guard line.hasPrefix(linePrefix) else { return nil }
+        let path = String(line.dropFirst(linePrefix.count))
+        let pathPrefix = "/tmp/omarchy-qemu-gpu."
+        let pathSuffix = "/qmp.sock"
+        guard path.hasPrefix(pathPrefix), path.hasSuffix(pathSuffix) else { return nil }
+        let token = path
+            .dropFirst(pathPrefix.count)
+            .dropLast(pathSuffix.count)
+        guard token.count == 6,
+              token.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else { return nil }
+        return path
     }
 
     private static func status(for process: Process) -> Int32 {

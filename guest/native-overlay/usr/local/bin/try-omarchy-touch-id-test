@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -eu
+
+sudo -k
+if SUDO_ASKPASS=/bin/false sudo -A true; then
+  echo "sudo authenticated without a guest password. Touch ID was used if its prompt appeared."
+else
+  echo "Touch ID sudo check failed; password fallback was not accepted." >&2
+  exit 1
+fi

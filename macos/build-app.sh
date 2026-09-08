@@ -47,7 +47,8 @@ done
 macos_dir=$(cd "$(dirname "$0")" && pwd)
 repo_dir=$(cd "$macos_dir/.." && pwd -P)
 helper="$macos_dir/.build/release/omarchy-vm-helper"
-app="$repo_dir/dist/Try Omarchy.app"
+legacy_app="$repo_dir/dist/Try Omarchy.app"
+app="$repo_dir/dist/app.noindex/Try Omarchy.app"
 contents="$app/Contents"
 bundled_qemu="$contents/Resources/runtime/bin/Try Omarchy"
 module_cache="$macos_dir/.build/module-cache"
@@ -57,8 +58,8 @@ dependency_bundler="$macos_dir/bundle-macho-dependencies.sh"
 compatibility_verifier="$macos_dir/verify-macos-compatibility.sh"
 package_dmg="$macos_dir/package-dmg.sh"
 app_icon_source="$macos_dir/OmarchyIcon.svg"
-app_icon_fallback="$macos_dir/Omarchy.icns"
 app_icon_renderer_source="$macos_dir/render-app-icon.swift"
+app_icon_packer="$macos_dir/pack-app-icon.py"
 icon_renderer="$macos_dir/.build/app-icon-renderer"
 iconset="$macos_dir/.build/TryOmarchy.iconset"
 generated_icon="$macos_dir/.build/TryOmarchy.icns"
@@ -84,15 +85,15 @@ guest_dir=$(cd "$guest_dir" && pwd -P)
   echo "build-app: app icon source is missing or unsafe" >&2
   exit 1
 }
-[[ -f $app_icon_fallback && ! -L $app_icon_fallback ]] || {
-  echo "build-app: fallback app icon is missing or unsafe" >&2
-  exit 1
-}
 [[ -f $app_icon_renderer_source && ! -L $app_icon_renderer_source ]] || {
   echo "build-app: app icon renderer is missing or unsafe" >&2
   exit 1
 }
-for tool in iconutil sips xcrun; do
+[[ -f $app_icon_packer && ! -L $app_icon_packer ]] || {
+  echo "build-app: app icon packer is missing or unsafe" >&2
+  exit 1
+}
+for tool in python3 sips xcrun; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "build-app: $tool is required to render the app icon" >&2
     exit 1
@@ -107,7 +108,17 @@ fi
   exit 1
 }
 
-mkdir -p "$repo_dir/dist"
+if [[ -e $legacy_app || -L $legacy_app ]]; then
+  lsregister=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  if [[ -x $lsregister ]]; then
+    "$lsregister" -u "$legacy_app" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$legacy_app"
+fi
+mkdir -p "$repo_dir/dist/app.noindex"
+# A .noindex container is the supported per-directory Spotlight exclusion.
+# Removing and unregistering the legacy bundle above also prevents a previously
+# indexed build at the old path from surviving this migration.
 cd "$macos_dir"
 mkdir -p "$module_cache/swift" "$module_cache/clang" "$module_cache/icon"
 export SWIFT_MODULECACHE_PATH="$module_cache/swift"
@@ -140,10 +151,7 @@ icon_256x256.png	256
 icon_256x256@2x.png	512
 icon_512x512.png	512
 ICON_SIZES
-if ! iconutil -c icns "$iconset" -o "$generated_icon"; then
-  echo "build-app: iconutil rejected the generated iconset; using the tracked verified icon" >&2
-  cp "$app_icon_fallback" "$generated_icon"
-fi
+python3 "$app_icon_packer" "$iconset" "$generated_icon"
 [[ -f $generated_icon && ! -L $generated_icon ]] || {
   echo "build-app: generated app icon is missing or unsafe" >&2
   exit 1

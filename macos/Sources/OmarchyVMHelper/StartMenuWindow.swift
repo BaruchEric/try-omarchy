@@ -1,5 +1,126 @@
 import AppKit
 
+enum OmarchyStartMenuTheme {
+    // The launcher uses the same terminal-first palette as the Omarchy site.
+    static let background = color(0x1A1B26)
+    static let darkBackground = color(0x24283B)
+    static let lighterBackground = color(0x414868)
+    static let foreground = color(0xC0CAF5)
+    static let accent = color(0x7AA2F7)
+    static let muted = accent.withAlphaComponent(0.78)
+    static let cyan = color(0x7DCFFF)
+    static let hover = color(0xB4F9F8)
+    static let success = color(0x9ECE6A)
+    static let danger = color(0xF7768E)
+    static let border = lighterBackground.withAlphaComponent(0.88)
+    static let separator = lighterBackground.withAlphaComponent(0.7)
+
+    private static func color(_ value: UInt32) -> NSColor {
+        NSColor(
+            srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+            green: CGFloat((value >> 8) & 0xFF) / 255,
+            blue: CGFloat(value & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
+enum ResetConfirmationPolicy {
+    static let requiredText = "Try Omarchy"
+
+    static func allowsReset(_ text: String) -> Bool {
+        text == requiredText
+    }
+}
+
+@MainActor
+final class ResetConfirmationPrompt {
+    let alert: NSAlert
+    let confirmationField: NSTextField
+    let resetButton: NSButton
+
+    private var textChangeObserver: NSObjectProtocol?
+
+    init(detail: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Reset Omarchy to factory settings?"
+        alert.informativeText = detail
+        alert.addButton(withTitle: "Cancel")
+        let resetButton = alert.addButton(withTitle: "Reset")
+        resetButton.hasDestructiveAction = true
+        resetButton.isEnabled = false
+
+        let instruction = NSTextField(
+            labelWithString: "Type \(ResetConfirmationPolicy.requiredText) to confirm"
+        )
+        instruction.font = .systemFont(ofSize: 12, weight: .medium)
+        instruction.translatesAutoresizingMaskIntoConstraints = false
+
+        let confirmationField = NSTextField(string: "")
+        confirmationField.placeholderString = ResetConfirmationPolicy.requiredText
+        confirmationField.identifier = NSUserInterfaceItemIdentifier("reset-confirmation-field")
+        confirmationField.setAccessibilityLabel(
+            "Type \(ResetConfirmationPolicy.requiredText) to confirm reset"
+        )
+        confirmationField.translatesAutoresizingMaskIntoConstraints = false
+
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 52))
+        accessory.addSubview(instruction)
+        accessory.addSubview(confirmationField)
+        NSLayoutConstraint.activate([
+            instruction.leadingAnchor.constraint(equalTo: accessory.leadingAnchor),
+            instruction.trailingAnchor.constraint(lessThanOrEqualTo: accessory.trailingAnchor),
+            instruction.topAnchor.constraint(equalTo: accessory.topAnchor),
+            confirmationField.leadingAnchor.constraint(equalTo: accessory.leadingAnchor),
+            confirmationField.trailingAnchor.constraint(equalTo: accessory.trailingAnchor),
+            confirmationField.topAnchor.constraint(equalTo: instruction.bottomAnchor, constant: 7),
+            confirmationField.bottomAnchor.constraint(equalTo: accessory.bottomAnchor),
+        ])
+        alert.accessoryView = accessory
+
+        self.alert = alert
+        self.confirmationField = confirmationField
+        self.resetButton = resetButton
+        textChangeObserver = NotificationCenter.default.addObserver(
+            forName: NSControl.textDidChangeNotification,
+            object: confirmationField,
+            queue: .main
+        ) { [weak confirmationField, weak resetButton] _ in
+            resetButton?.isEnabled = ResetConfirmationPolicy.allowsReset(
+                confirmationField?.stringValue ?? ""
+            )
+        }
+    }
+
+    deinit {
+        if let textChangeObserver {
+            NotificationCenter.default.removeObserver(textChangeObserver)
+        }
+    }
+
+    func present(for window: NSWindow, completion: @escaping (Bool) -> Void) {
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else {
+                completion(false)
+                return
+            }
+            let confirmed = response == .alertSecondButtonReturn
+                && ResetConfirmationPolicy.allowsReset(confirmationField.stringValue)
+            completion(confirmed)
+        }
+        DispatchQueue.main.async { [weak window, weak confirmationField] in
+            guard let window, let confirmationField else { return }
+            window.makeFirstResponder(confirmationField)
+        }
+    }
+
+    func cancel(in window: NSWindow) {
+        guard window.attachedSheet === alert.window else { return }
+        window.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
+    }
+}
+
 @MainActor
 enum StartMenuWindowChrome {
     static func apply(to window: NSWindow) {
@@ -11,23 +132,16 @@ enum StartMenuWindowChrome {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.backgroundColor = OmarchyStartMenuTheme.background
+        window.isOpaque = true
     }
-}
-
-private final class MouseIgnoringTextField: NSTextField {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 private final class PointingHandButton: NSButton {
     override func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .pointingHand)
-    }
-}
-
-private final class PermissionActionButton: NSButton {
-    override var alignmentRectInsets: NSEdgeInsets {
-        NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0)
     }
 }
 
@@ -91,6 +205,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     private var resetInProgress = false
     private var launchInProgress = false
     private var pendingResetSpaceEstimate: String?
+    private var resetConfirmationPrompt: ResetConfirmationPrompt?
     private weak var startMenuScrollView: NSScrollView?
     private(set) var portForwardingEditor: PortForwardingEditor?
     private weak var immersiveCaption: NSTextField?
@@ -192,6 +307,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
         StartMenuWindowChrome.apply(to: window)
         window.delegate = self
+        content.wantsLayer = true
+        content.layer?.backgroundColor = OmarchyStartMenuTheme.background.cgColor
         window.contentView = content
     }
 
@@ -236,6 +353,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
 
     func dismiss() {
         permissionWindowRestorer.cancel()
+        resetConfirmationPrompt?.cancel(in: window)
+        resetConfirmationPrompt = nil
         portForwardingEditor?.dismiss()
         portForwardingEditor = nil
         window.orderOut(nil)
@@ -291,9 +410,23 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Reset Omarchy to continue"
-        alert.informativeText = "This VM was created by a different Try Omarchy build. Reset Omarchy to use this version. Resetting permanently erases everything in the VM."
+        alert.informativeText = StartMenuPresentation.incompatibleWorkspaceDetail
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window)
+    }
+
+    /// Requests one-shot consent for legacy boot-file pairing. This remains a
+    /// synchronous application-modal decision so the launcher cannot start in
+    /// the gap between presenting the explanation and receiving the answer.
+    func confirmBootRecovery() -> Bool {
+        guard launchInProgress else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = StartMenuPresentation.bootRecoveryConfirmationTitle
+        alert.informativeText = StartMenuPresentation.bootRecoveryConfirmationDetail
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Continue")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     func launchDidFail(errorMessage: String) {
@@ -329,9 +462,20 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let title = NSTextField(labelWithString: "Try Omarchy")
-        title.font = .systemFont(ofSize: 27, weight: .bold)
+        title.font = .monospacedSystemFont(ofSize: 27, weight: .bold)
+        title.textColor = OmarchyStartMenuTheme.foreground
+        title.identifier = NSUserInterfaceItemIdentifier("app-title")
 
-        let headingStack = NSStackView(views: [icon, title])
+        let subtitle = NSTextField(labelWithString: "OMARCHY  ·  APPLE SILICON")
+        subtitle.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        subtitle.textColor = OmarchyStartMenuTheme.accent
+
+        let titleStack = NSStackView(views: [title, subtitle])
+        titleStack.orientation = .vertical
+        titleStack.alignment = .leading
+        titleStack.spacing = 3
+
+        let headingStack = NSStackView(views: [icon, titleStack])
         headingStack.orientation = .horizontal
         headingStack.alignment = .centerY
         headingStack.spacing = 14
@@ -467,11 +611,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             )
         }
 
-        var permissionRowViews = [accessibilityRow, microphoneRow, cameraRow, sharedFolderRow]
+        let permissionRowViews = [accessibilityRow, microphoneRow, cameraRow]
+        var integrationRowViews = [sharedFolderRow]
         if let storageRow {
-            permissionRowViews.append(storageRow)
+            integrationRowViews.append(storageRow)
         }
-        permissionRowViews.append(contentsOf: [portForwardingRow, immersiveRow])
+        integrationRowViews.append(contentsOf: [portForwardingRow, immersiveRow])
 
         var permissionRowsAndSeparators: [NSView] = []
         for (index, row) in permissionRowViews.enumerated() {
@@ -489,28 +634,48 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         for row in permissionRowViews {
             row.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
         }
+        for divider in permissionRowsAndSeparators where divider.identifier?.rawValue == "themed-separator" {
+            divider.widthAnchor.constraint(equalTo: permissionRows.widthAnchor).isActive = true
+        }
 
-        let permissionCard = NSView()
-        permissionCard.wantsLayer = true
-        permissionCard.layer?.cornerRadius = 12
-        permissionCard.layer?.borderWidth = 1
-        permissionCard.layer?.borderColor = NSColor.separatorColor.cgColor
-        permissionCard.addSubview(permissionRows)
-        NSLayoutConstraint.activate([
-            permissionRows.leadingAnchor.constraint(equalTo: permissionCard.leadingAnchor, constant: 20),
-            permissionRows.trailingAnchor.constraint(equalTo: permissionCard.trailingAnchor, constant: -20),
-            permissionRows.topAnchor.constraint(equalTo: permissionCard.topAnchor, constant: 5),
-            permissionRows.bottomAnchor.constraint(equalTo: permissionCard.bottomAnchor, constant: -5),
-        ])
+        let permissionCard = themedCard(
+            containing: permissionRows,
+            identifier: "permission-card"
+        )
 
-        let reset = NSButton(
+        var integrationRowsAndSeparators: [NSView] = []
+        for (index, row) in integrationRowViews.enumerated() {
+            if index > 0 {
+                integrationRowsAndSeparators.append(separator())
+            }
+            integrationRowsAndSeparators.append(row)
+        }
+        let integrationRows = NSStackView(views: integrationRowsAndSeparators)
+        integrationRows.orientation = .vertical
+        integrationRows.alignment = .leading
+        integrationRows.spacing = 0
+        integrationRows.translatesAutoresizingMaskIntoConstraints = false
+        for row in integrationRowViews {
+            row.widthAnchor.constraint(equalTo: integrationRows.widthAnchor).isActive = true
+        }
+        for divider in integrationRowsAndSeparators where divider.identifier?.rawValue == "themed-separator" {
+            divider.widthAnchor.constraint(equalTo: integrationRows.widthAnchor).isActive = true
+        }
+        let integrationCard = themedCard(
+            containing: integrationRows,
+            identifier: "integration-card"
+        )
+
+        let permissionHeading = sectionHeading("PERMISSIONS")
+        let integrationHeading = sectionHeading("INTEGRATIONS")
+
+        let reset = OmarchyActionButton(
             title: resetInProgress ? "Resetting Omarchy…" : "Reset Omarchy",
+            style: .danger,
             target: self,
             action: #selector(resetOmarchy)
         )
-        reset.bezelStyle = .rounded
-        reset.controlSize = .small
-        reset.contentTintColor = .systemRed
+        reset.identifier = NSUserInterfaceItemIdentifier("reset-button")
         reset.isEnabled = canResetStorage
             && !launchInProgress
             && !resetInProgress
@@ -519,45 +684,28 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         reset.toolTip = canResetStorage
             ? "Erase this VM and return it to factory settings"
             : "Reset is unavailable for a disposable VM"
+        reset.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        reset.widthAnchor.constraint(greaterThanOrEqualToConstant: 154).isActive = true
 
         let resetViews: [NSView] = [reset]
         let resetSection = NSStackView(views: resetViews)
         resetSection.orientation = .vertical
-        resetSection.alignment = .leading
+        resetSection.alignment = .centerX
         resetSection.spacing = 4
 
         let launchButtonTitle = launchInProgress ? "Launching Omarchy…" : "Launch Omarchy"
-        let launchButtonFont = NSFont.systemFont(ofSize: 16, weight: .semibold)
-        let launchButton = NSButton(
+        let launchButton = OmarchyActionButton(
             title: launchButtonTitle,
+            style: .primary,
             target: self,
             action: #selector(launchOmarchy)
         )
         launchButton.keyEquivalent = launchInProgress ? "" : "\r"
-        launchButton.bezelStyle = .rounded
-        launchButton.controlSize = .large
-        launchButton.font = launchButtonFont
         launchButton.isEnabled = !launchInProgress
             && !resetInProgress
             && !microphoneRequestInFlight
             && !cameraRequestInFlight
-        launchButton.title = ""
         launchButton.identifier = NSUserInterfaceItemIdentifier("launch-button")
-        let launchButtonLabel = MouseIgnoringTextField(labelWithString: launchButtonTitle)
-        launchButtonLabel.font = launchButtonFont
-        launchButtonLabel.textColor = launchButton.isEnabled
-            ? .alternateSelectedControlTextColor
-            : .controlTextColor
-        launchButtonLabel.alignment = .center
-        launchButtonLabel.setAccessibilityElement(false)
-        launchButtonLabel.identifier = NSUserInterfaceItemIdentifier("launch-button-label")
-        launchButtonLabel.translatesAutoresizingMaskIntoConstraints = false
-        launchButton.addSubview(launchButtonLabel)
-        NSLayoutConstraint.activate([
-            launchButtonLabel.centerXAnchor.constraint(equalTo: launchButton.centerXAnchor),
-            launchButtonLabel.centerYAnchor.constraint(equalTo: launchButton.centerYAnchor),
-        ])
-        launchButton.translatesAutoresizingMaskIntoConstraints = false
         launchButton.setAccessibilityLabel(launchInProgress ? "Launching Omarchy" : "Launch Omarchy")
         if launchInProgress {
             let spinner = NSProgressIndicator()
@@ -576,30 +724,22 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             launchButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 500),
         ])
 
-        let footerText = "by @martiano  •  Not affiliated with Omarchy."
+        let footerText = "by @martiano"
         let footerTitle = NSMutableAttributedString(
             string: footerText,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 11),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+                .foregroundColor: OmarchyStartMenuTheme.muted,
             ]
         )
         let footerNSString = footerText as NSString
         footerTitle.addAttributes(
             [
                 .link: URL(string: "https://x.com/martiano")!,
-                .foregroundColor: NSColor.linkColor,
+                .foregroundColor: OmarchyStartMenuTheme.accent,
             ],
             range: footerNSString.range(of: "@martiano")
         )
-        footerTitle.addAttributes(
-            [
-                .link: URL(string: "https://omarchy.org")!,
-                .foregroundColor: NSColor.linkColor,
-            ],
-            range: footerNSString.range(of: "Omarchy")
-        )
-
         let footer = LinkCursorTextField(labelWithAttributedString: footerTitle)
         footer.isSelectable = true
         footer.allowsEditingTextAttributes = true
@@ -613,14 +753,24 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             footer.bottomAnchor.constraint(equalTo: footerContainer.bottomAnchor),
         ])
 
-        let stack = NSStackView(
-            views: [headingStack, permissionCard, resetSection, launchButton, footerContainer]
-        )
+        let stack = NSStackView(views: [
+            headingStack,
+            permissionHeading,
+            permissionCard,
+            integrationHeading,
+            integrationCard,
+            resetSection,
+            launchButton,
+            footerContainer,
+        ])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 18
-        stack.setCustomSpacing(14, after: headingStack)
-        stack.setCustomSpacing(12, after: permissionCard)
+        stack.setCustomSpacing(20, after: headingStack)
+        stack.setCustomSpacing(6, after: permissionHeading)
+        stack.setCustomSpacing(16, after: permissionCard)
+        stack.setCustomSpacing(6, after: integrationHeading)
+        stack.setCustomSpacing(12, after: integrationCard)
         stack.setCustomSpacing(12, after: resetSection)
         stack.setCustomSpacing(8, after: launchButton)
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -653,7 +803,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 26),
             stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -20),
             permissionCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            resetSection.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
+            integrationCard.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            resetSection.widthAnchor.constraint(equalTo: stack.widthAnchor),
             launchButton.widthAnchor.constraint(equalTo: stack.widthAnchor),
             footerContainer.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
@@ -671,6 +822,34 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             )
         )
         scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
+    private func sectionHeading(_ text: String) -> NSTextField {
+        let heading = NSTextField(labelWithString: text)
+        heading.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        heading.textColor = OmarchyStartMenuTheme.muted
+        heading.identifier = NSUserInterfaceItemIdentifier(
+            "section-heading-\(text.lowercased())"
+        )
+        return heading
+    }
+
+    private func themedCard(containing body: NSView, identifier: String) -> NSView {
+        let card = NSView()
+        card.identifier = NSUserInterfaceItemIdentifier(identifier)
+        card.wantsLayer = true
+        card.layer?.backgroundColor = OmarchyStartMenuTheme.darkBackground.cgColor
+        card.layer?.cornerRadius = 6
+        card.layer?.borderWidth = 1
+        card.layer?.borderColor = OmarchyStartMenuTheme.border.cgColor
+        card.addSubview(body)
+        NSLayoutConstraint.activate([
+            body.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            body.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            body.topAnchor.constraint(equalTo: card.topAnchor, constant: 5),
+            body.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -5),
+        ])
+        return card
     }
 
     private func permissionRow(
@@ -706,7 +885,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         let symbol = NSImageView()
         symbol.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)
         symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        symbol.contentTintColor = .controlAccentColor
+        symbol.contentTintColor = OmarchyStartMenuTheme.accent
         symbol.identifier = NSUserInterfaceItemIdentifier("permission-symbol-\(symbolName)")
         symbol.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -715,7 +894,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let name = NSTextField(labelWithString: title)
-        name.font = .systemFont(ofSize: 14, weight: .semibold)
+        name.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
+        name.textColor = OmarchyStartMenuTheme.foreground
         name.identifier = NSUserInterfaceItemIdentifier("permission-title-\(symbolName)")
 
         var explanations: [NSView] = []
@@ -728,8 +908,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                     )
                 } else {
                     let explanation = NSTextField(labelWithString: line)
-                    explanation.font = .systemFont(ofSize: 12)
-                    explanation.textColor = .secondaryLabelColor
+                    explanation.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+                    explanation.textColor = OmarchyStartMenuTheme.muted
                     explanation.maximumNumberOfLines = 1
                     explanation.lineBreakMode = .byTruncatingMiddle
                     explanation.toolTip = line
@@ -747,8 +927,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             ]
         } else {
             let explanation = NSTextField(wrappingLabelWithString: detail)
-            explanation.font = .systemFont(ofSize: 12)
-            explanation.textColor = .secondaryLabelColor
+            explanation.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+            explanation.textColor = OmarchyStartMenuTheme.muted
             explanation.maximumNumberOfLines = 2
             explanation.identifier = NSUserInterfaceItemIdentifier(
                 "permission-detail-\(symbolName)"
@@ -768,7 +948,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         }
 
         let statusText = granted ? statusLabels.granted : statusLabels.denied
-        let statusFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let statusFont = NSFont.monospacedSystemFont(ofSize: 10, weight: .bold)
         let status = NSTextField(labelWithString: statusText)
         status.font = statusFont
         if granted {
@@ -776,17 +956,17 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 string: statusText,
                 attributes: [
                     .font: statusFont,
-                    .foregroundColor: NSColor.labelColor,
+                    .foregroundColor: OmarchyStartMenuTheme.foreground,
                 ]
             )
             attributedStatus.addAttribute(
                 .foregroundColor,
-                value: NSColor.systemGreen,
+                value: OmarchyStartMenuTheme.success,
                 range: NSRange(location: 0, length: 1)
             )
             status.attributedStringValue = attributedStatus
         } else {
-            status.textColor = .secondaryLabelColor
+            status.textColor = OmarchyStartMenuTheme.muted
         }
         status.alignment = .right
         status.identifier = NSUserInterfaceItemIdentifier("permission-status-\(symbolName)")
@@ -796,8 +976,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         var trailingViews: [NSView] = [status]
         for (index, actionDescription) in actions.enumerated() {
             let (actionTitle, action) = actionDescription
-            let button = PermissionActionButton(title: actionTitle, target: self, action: action)
-            button.controlSize = .regular
+            let button = OmarchyActionButton(
+                title: actionTitle,
+                style: .secondary,
+                target: self,
+                action: action
+            )
             button.isEnabled = actionsEnabled
                 && !microphoneRequestInFlight
                 && !cameraRequestInFlight
@@ -807,8 +991,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
                 ? "permission-action-\(symbolName)"
                 : "permission-action-\(symbolName)-\(index)"
             button.identifier = NSUserInterfaceItemIdentifier(identifier)
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.heightAnchor.constraint(greaterThanOrEqualToConstant: 28).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 30).isActive = true
             trailingViews.append(button)
         }
 
@@ -876,8 +1059,8 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         button.attributedTitle = NSAttributedString(
             string: text,
             attributes: [
-                .font: NSFont.systemFont(ofSize: 12),
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+                .foregroundColor: OmarchyStartMenuTheme.muted,
             ]
         )
         button.toolTip = text
@@ -889,8 +1072,12 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
     }
 
     private func separator() -> NSView {
-        let view = NSBox()
-        view.boxType = .separator
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier("themed-separator")
+        view.wantsLayer = true
+        view.layer?.backgroundColor = OmarchyStartMenuTheme.separator.cgColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return view
     }
 
@@ -901,7 +1088,7 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
             accessibilityDescription: nil
         )
         symbol.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 19, weight: .medium)
-        symbol.contentTintColor = .controlAccentColor
+        symbol.contentTintColor = OmarchyStartMenuTheme.accent
         symbol.identifier = NSUserInterfaceItemIdentifier("immersive-symbol")
         symbol.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -910,13 +1097,14 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         ])
 
         let title = NSTextField(labelWithString: "Immersive")
-        title.font = .systemFont(ofSize: 14, weight: .semibold)
+        title.font = .monospacedSystemFont(ofSize: 13, weight: .bold)
+        title.textColor = OmarchyStartMenuTheme.foreground
         title.identifier = NSUserInterfaceItemIdentifier("immersive-title")
 
         let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
         let detail = NSTextField(wrappingLabelWithString: detailText)
-        detail.font = .systemFont(ofSize: 12)
-        detail.textColor = .secondaryLabelColor
+        detail.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        detail.textColor = OmarchyStartMenuTheme.muted
         detail.maximumNumberOfLines = 2
         detail.identifier = NSUserInterfaceItemIdentifier("immersive-caption")
         immersiveCaption = detail
@@ -927,10 +1115,11 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         labels.spacing = 3
         labels.translatesAutoresizingMaskIntoConstraints = false
 
-        let toggle = NSSwitch()
-        toggle.state = isEnabled ? .on : .off
-        toggle.target = self
-        toggle.action = #selector(changeImmersiveMode(_:))
+        let toggle = OmarchyToggleButton(
+            isOn: isEnabled,
+            target: self,
+            action: #selector(changeImmersiveMode(_:))
+        )
         toggle.isEnabled = !microphoneRequestInFlight && !launchInProgress && !resetInProgress
         toggle.identifier = NSUserInterfaceItemIdentifier("immersive-toggle")
         toggle.setAccessibilityLabel("Immersive mode")
@@ -1187,12 +1376,13 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         editor.beginSheet(for: window)
     }
 
-    @objc private func changeImmersiveMode(_ sender: NSSwitch) {
+    @objc private func changeImmersiveMode(_ sender: NSButton) {
         guard !launchInProgress, !resetInProgress else { return }
         let isEnabled = sender.state == .on
         setImmersiveMode(isEnabled)
         let detailText = StartMenuPresentation.immersiveDetail(isEnabled: isEnabled)
         immersiveCaption?.stringValue = detailText
+        (sender as? OmarchyToggleButton)?.refreshAppearance()
         sender.setAccessibilityHelp(detailText)
         NSAccessibility.post(
             element: NSApplication.shared,
@@ -1209,12 +1399,10 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
               !launchInProgress,
               !resetInProgress,
               !microphoneRequestInFlight,
-              !cameraRequestInFlight else { return }
+              !cameraRequestInFlight,
+              resetConfirmationPrompt == nil else { return }
         permissionWindowRestorer.cancel()
         let estimate = storageSpaceEstimate()
-        let alert = NSAlert()
-        alert.alertStyle = .critical
-        alert.messageText = "Reset Omarchy to factory settings?"
         var detail = "This permanently erases everything in this Omarchy virtual machine, including apps, files, accounts, and settings. This cannot be undone or recovered."
         // With a chosen data folder there can be more than one workspace on the
         // Mac, so say which one is about to be erased.
@@ -1237,15 +1425,19 @@ final class StartMenuWindow: NSObject, NSWindowDelegate {
         if let estimate {
             detail += " Resetting may free up to \(estimate) of disk space."
         }
-        alert.informativeText = detail
-        alert.addButton(withTitle: "Cancel")
-        let resetButton = alert.addButton(withTitle: "Reset")
-        resetButton.hasDestructiveAction = true
-        guard alert.runModal() == .alertSecondButtonReturn else { return }
-        pendingResetSpaceEstimate = estimate
-        resetInProgress = true
-        render()
-        resetStorage()
+        let prompt = ResetConfirmationPrompt(detail: detail)
+        resetConfirmationPrompt = prompt
+        prompt.present(for: window) { [weak self, weak prompt] confirmed in
+            guard let self,
+                  let prompt,
+                  resetConfirmationPrompt === prompt else { return }
+            resetConfirmationPrompt = nil
+            guard confirmed else { return }
+            pendingResetSpaceEstimate = estimate
+            resetInProgress = true
+            render()
+            resetStorage()
+        }
     }
 
     @objc private func launchOmarchy() {

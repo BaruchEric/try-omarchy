@@ -14,6 +14,17 @@ fail() {
 
 storage_mode=persistent
 reset_only=0
+boot_recovery_consent_required_status=80
+boot_recovery_failed_status=81
+# QEMU 11's HVF backend requires Apple's in-hypervisor GICv3. Keep recovery
+# and normal launches on one machine definition so they cannot drift apart.
+qemu_machine='virt,accel=hvf,gic-version=3'
+
+boot_recovery_fail() {
+  echo "run-qemu-gpu: $*" >&2
+  exit "$boot_recovery_failed_status"
+}
+
 case ${1:-} in
   --ephemeral)
     storage_mode=ephemeral
@@ -47,7 +58,7 @@ port_forwarding_library="$script_dir/qemu-port-forwarding.sh"
 [[ -d $guest_input && ! -L $guest_input ]] || fail "ARM guest directory is missing or unsafe: $guest_input"
 guest_dir=$(cd "$guest_input" && pwd -P)
 
-for command in codesign file getconf id mktemp ps sysctl; do
+for command in codesign file getconf id mktemp plutil ps sysctl; do
   command -v "$command" >/dev/null || fail "$command is required"
 done
 
@@ -355,6 +366,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "authentication",
         "camera",
         "clipboard",
         "compressedDisk",
@@ -396,6 +408,20 @@ clipboard = {
     "device": "virtserialport",
     "port": "dev.tryomarchy.clipboard",
     "formats": ["text/plain;charset=utf-8", "image/png"],
+}
+authentication = {
+    "activation": "explicit-menu-opt-in",
+    "approvalLifetimeSeconds": 15,
+    "authorizationScope": "sudo-authentication",
+    "device": "virtserialport",
+    "guestDeviceMode": "0600",
+    "guestIdentity": "root-private-random-256-bit",
+    "hostKey": "per-guest-secure-enclave-p256",
+    "pamService": "sudo",
+    "port": "dev.tryomarchy.authentication",
+    "protocolVersion": 3,
+    "requiresEnrollment": True,
+    "signature": "ecdsa-p256-sha256",
 }
 shared_folder = {
     "device": "virtio-9p-pci",
@@ -473,6 +499,7 @@ if (
     or runtime.get("camera") != camera
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
+    or runtime.get("authentication") != authentication
     or runtime.get("sharedFolder") != shared_folder
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
@@ -506,6 +533,8 @@ supply_chain_keys = {
     "omarchyPackagesCommit",
     "omarchyPackagesRepository",
     "ttfx",
+    "vivaldi",
+    "voxtype",
     "yay",
 }
 supply_chain = exact_keys(spec.get("supplyChain"), supply_chain_keys, "build spec supply chain")
@@ -649,6 +678,72 @@ if yay != {
     "licenseSha256": "589ed823e9a84c56feb95ac58e7cf384626b9cbf4fda2a907bc36e103de1bad2",
 }:
     fail("factory yay component is not the reviewed ARM64 release")
+vivaldi = exact_keys(
+    supply_chain.get("vivaldi"),
+    {
+        "license",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "rpmRelease",
+        "rpmSha256",
+        "rpmUrl",
+        "signingFingerprint",
+        "signingKey",
+        "signingKeySha256",
+        "version",
+    },
+    "build spec Vivaldi component",
+)
+if vivaldi != {
+    "version": "8.2.4133.33",
+    "rpmRelease": 1,
+    "pkgrel": 2,
+    "repository": "https://repo.vivaldi.com/stable",
+    "rpmUrl": "https://downloads.vivaldi.com/stable/vivaldi-stable-8.2.4133.33-1.aarch64.rpm",
+    "rpmSha256": "99fe7542199ba11d16d9af02783540c8c03554c37d80597a219595751414503d",
+    "signingKey": "keys/vivaldi-package-composer-key11.asc",
+    "signingKeySha256": "5c67d85c0aca9c0d166edb5bc5e6ebc21d67bce4e67c645e7bd76d299fd337ef",
+    "signingFingerprint": "8D1FA52AEF58A09D889DD4221256C34716BD9233",
+    "reportedVersion": "Vivaldi 8.2.4133.33",
+    "license": "Multiple, see https://www.vivaldi.com/",
+}:
+    fail("Vivaldi installer is not pinned to the reviewed signed ARM64 release")
+voxtype = exact_keys(
+    supply_chain.get("voxtype"),
+    {
+        "assets",
+        "license",
+        "pkgrel",
+        "reportedVersion",
+        "repository",
+        "signingFingerprint",
+        "signingKey",
+        "signingKeySha256",
+        "sourceSha256",
+        "sourceSignatureSha256",
+        "sourceSignatureUrl",
+        "sourceUrl",
+        "version",
+    },
+    "build spec voxtype component",
+)
+voxtype_assets = exact_keys(
+    voxtype.get("assets"),
+    {"audioBridge", "cpu", "onnx", "osd", "osdGtk4", "osdQuickshell"},
+    "build spec voxtype assets",
+)
+for name, asset in voxtype_assets.items():
+    exact_keys(
+        asset,
+        {"sha256", "signatureSha256", "signatureUrl", "url"},
+        f"build spec voxtype asset {name}",
+    )
+voxtype_identity = hashlib.sha256(
+    json.dumps(voxtype, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+).hexdigest()
+if voxtype_identity != "906951dd6a221d39a63116af86dddf77c202bf8dfca59cccc73536c44cd22669":
+    fail("factory Voxtype component is not the reviewed signed ARM64 release")
 
 command_line = runtime.get("kernelCommandLine")
 if not isinstance(command_line, str) or not command_line or any(character in command_line for character in "\x00\r\n\t"):
@@ -874,6 +969,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+authentication_bridge_pid=""
 camera_bridge_pid=""
 clipboard_bridge_pid=""
 
@@ -905,6 +1001,9 @@ cleanup() {
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
+  fi
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$authentication_bridge_pid" 20
   fi
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$camera_bridge_pid" 20
@@ -982,6 +1081,164 @@ reap_stale_work_dirs() {
 
 reap_stale_work_dirs
 
+boot_export_has_only_expected_contents() (
+  local candidate=''
+  local names=''
+
+  shopt -s nullglob dotglob
+  for candidate in "$1"/*; do
+    names+="${candidate##*/}"$'\n'
+  done
+  shopt -u nullglob dotglob
+  [[ $names == $'build-spec.json\ncomplete\ninitramfs\nkernel\n' ]]
+)
+
+assert_direct_owned_export_file() {
+  local path=$1
+  local label=$2
+
+  [[ -f $path && ! -L $path ]] || boot_recovery_fail "$label is missing or unsafe"
+  [[ $(_qps_lstat_kind "$path") == 'Regular File' ]] || {
+    boot_recovery_fail "$label is not a direct regular file"
+  }
+  [[ $(_qps_owner "$path") == $(id -u) ]] || {
+    boot_recovery_fail "$label is not owned by this user"
+  }
+}
+
+recover_persistent_boot_kit() {
+  local boot_export_dir="$work_dir/boot-export"
+  local recovery_argument=''
+  local recovery_command_line=''
+  local recovery_state=''
+  local recovery_status=0
+  local recovery_stopped=0
+  local attempt=0
+  local recovered_command_line=''
+
+  [[ $QEMU_SELECTED_STORAGE_MODE == persistent && \
+     -n $QEMU_PERSISTENT_STORAGE_IDENTITY ]] || {
+    boot_recovery_fail 'boot recovery requires a selected persistent VM'
+  }
+  [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 0 ]] || {
+    boot_recovery_fail 'this saved VM needs a one-time boot recovery; launch it normally before using dry-run mode'
+  }
+  mkdir -m 700 "$boot_export_dir" || boot_recovery_fail 'could not create the private boot-export directory'
+  [[ -d $boot_export_dir && ! -L $boot_export_dir ]] || {
+    boot_recovery_fail 'the private boot-export directory is unsafe'
+  }
+  [[ $(_qps_owner "$boot_export_dir") == $(id -u) && \
+     $(_qps_permissions "$boot_export_dir") == 700 ]] || {
+    boot_recovery_fail 'the private boot-export directory is not protected'
+  }
+
+  # The recovery initramfs mounts the old disk only far enough to read /boot.
+  # QEMU also exposes the block device read-only, so neither fsck nor a malformed
+  # guest can change user data while the matching boot pair is being recovered.
+  for recovery_argument in $kernel_command_line; do
+    if [[ $recovery_argument == rootflags=* ]]; then
+      continue
+    fi
+    if [[ $recovery_argument == rw ]]; then
+      recovery_argument=ro
+    fi
+    recovery_command_line+=" $recovery_argument"
+  done
+  recovery_command_line=${recovery_command_line# }
+  recovery_command_line+=' rootflags=noload fsck.mode=skip tryomarchy.export_boot=1'
+
+  echo '[qemu-gpu] Pairing the saved VM with its original boot files (one time).' >&2
+  "$qemu_bin" \
+    -name 'Try Omarchy Boot Recovery' \
+    -machine "$qemu_machine" \
+    -cpu 'host,pmu=off' \
+    -smp '2,sockets=1,cores=2,threads=1' \
+    -m 2G \
+    -nodefaults \
+    -no-reboot \
+    -display none \
+    -serial none \
+    -monitor none \
+    -qmp "unix:$qmp_socket,server=on,wait=off" \
+    -kernel "$bundled_kernel" \
+    -initrd "$bundled_initramfs" \
+    -append "$recovery_command_line" \
+    -drive "if=none,id=omarchy-recovery-root,file=$working_disk,format=raw,media=disk,cache=none,readonly=on" \
+    -device 'virtio-blk-pci,drive=omarchy-recovery-root,serial=omarchy-root' \
+    -device 'virtio-serial-pci,id=omarchy-recovery-serial' \
+    -chardev 'stdio,id=omarchy-recovery-hvc0,signal=off' \
+    -device 'virtconsole,bus=omarchy-recovery-serial.0,nr=0,chardev=omarchy-recovery-hvc0' \
+    -fsdev "local,id=omarchy-boot-export,path=$boot_export_dir,security_model=none,multidevs=remap" \
+    -device 'virtio-9p-pci,fsdev=omarchy-boot-export,mount_tag=try-omarchy-boot-export,romfile=' \
+    -add-fd "$QEMU_PERSISTENT_STORAGE_QEMU_ADD_FD" &
+  qemu_pid=$!
+  printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not record the recovery process'
+  chmod 600 "$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not protect the recovery process record'
+
+  for ((attempt = 0; attempt < 600; attempt++)); do
+    recovery_state=$(ps -p "$qemu_pid" -o state= 2>/dev/null || true)
+    if [[ -z $recovery_state || $recovery_state == *Z* ]]; then
+      recovery_stopped=1
+      break
+    fi
+    sleep 0.1
+  done
+  if (( recovery_stopped == 0 )); then
+    terminate_child "$qemu_pid" 40
+    qemu_pid=''
+    boot_recovery_fail 'the one-time boot recovery did not finish within 60 seconds'
+  fi
+  if wait "$qemu_pid"; then
+    recovery_status=0
+  else
+    recovery_status=$?
+  fi
+  qemu_pid=''
+  /bin/rm -f "$work_dir/.qemu.pid" || \
+    boot_recovery_fail 'could not clear the recovery process record'
+  [[ ! -e $qmp_socket && ! -L $qmp_socket ]] || \
+    /bin/rm -f "$qmp_socket" || boot_recovery_fail 'could not clear the recovery control socket'
+  (( recovery_status == 0 )) || {
+    boot_recovery_fail "the one-time boot recovery exited with status $recovery_status"
+  }
+
+  boot_export_has_only_expected_contents "$boot_export_dir" || {
+    boot_recovery_fail 'the one-time boot recovery did not publish an exact, complete export'
+  }
+  assert_direct_owned_export_file "$boot_export_dir/complete" 'boot-export marker'
+  assert_direct_owned_export_file "$boot_export_dir/kernel" 'recovered kernel'
+  assert_direct_owned_export_file "$boot_export_dir/initramfs" 'recovered initramfs'
+  assert_direct_owned_export_file "$boot_export_dir/build-spec.json" 'recovered build specification'
+  [[ $(_qps_size "$boot_export_dir/complete") == 27 && \
+     $(<"$boot_export_dir/complete") == try-omarchy-boot-export-v1 ]] || {
+    boot_recovery_fail 'the one-time boot recovery completion marker is invalid'
+  }
+  [[ $(_qps_size "$boot_export_dir/build-spec.json") =~ ^[1-9][0-9]*$ && \
+     $(_qps_size "$boot_export_dir/build-spec.json") -le 1048576 ]] || {
+    boot_recovery_fail 'the recovered build specification has an invalid size'
+  }
+  recovered_command_line=$(
+    /usr/bin/plutil -extract runtime.kernelCommandLine raw -expect string \
+      "$boot_export_dir/build-spec.json" 2>/dev/null
+  ) || boot_recovery_fail 'the recovered build specification has no kernel command line'
+  chmod 600 \
+    "$boot_export_dir/complete" \
+    "$boot_export_dir/kernel" \
+    "$boot_export_dir/initramfs" \
+    "$boot_export_dir/build-spec.json" || {
+      boot_recovery_fail 'could not protect the recovered boot files'
+    }
+  qemu_persistent_storage_stage_selected_boot_kit \
+    "$boot_export_dir/kernel" \
+    "$boot_export_dir/initramfs" \
+    "$recovered_command_line" || {
+      boot_recovery_fail 'could not pair the saved VM with its recovered boot files'
+    }
+  echo '[qemu-gpu] Saved VM boot files recovered; continuing normal launch.' >&2
+}
+
 umask 077
 work_dir=$(mktemp -d '/private/tmp/omarchy-qemu-gpu.XXXXXX') || {
   fail "could not create a private temporary directory"
@@ -1002,39 +1259,86 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+authentication_bridge_socket="/tmp/${work_dir##*/}/authentication.sock"
 camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
 mkdir -m 700 "$work_dir/audio-routes"
 
-source_disk="$guest_dir/rootfs.ext4"
-if [[ ! -e $source_disk && ! -L $source_disk ]]; then
-  qemu_persistent_storage_materialize_source \
+bundled_kernel="$guest_dir/vmlinuz-linux"
+bundled_initramfs="$guest_dir/initramfs-linux.img"
+selected_existing=0
+if [[ $storage_mode == persistent ]]; then
+  if qemu_persistent_storage_select_existing \
+    "$bundle_identity" "$bundled_kernel" "$bundled_initramfs" \
+    "$kernel_command_line"; then
+    selected_existing=1
+  else
+    storage_status=$?
+    if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+      exit "$storage_status"
+    fi
+    if (( storage_status != QEMU_PERSISTENT_STORAGE_MISSING_STATUS )); then
+      fail "could not inspect the saved VM disk"
+    fi
+  fi
+fi
+
+if (( selected_existing == 0 )); then
+  source_disk="$guest_dir/rootfs.ext4"
+  if [[ ! -e $source_disk && ! -L $source_disk ]]; then
+    qemu_persistent_storage_materialize_source \
+      "$bundle_identity" \
+      "$guest_dir/rootfs.ext4.zst" \
+      "$compressed_disk_bytes" \
+      "$source_disk_sha" \
+      "$source_disk_bytes" \
+      "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
+    source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
+  fi
+  if qemu_persistent_storage_select \
+    "$storage_mode" \
     "$bundle_identity" \
-    "$guest_dir/rootfs.ext4.zst" \
-    "$compressed_disk_bytes" \
+    "$source_disk" \
     "$source_disk_sha" \
     "$source_disk_bytes" \
-    "$resources_dir/runtime/bin/zstd" || fail "could not materialize the bundled root disk"
-  source_disk=$QEMU_IMMUTABLE_SOURCE_DISK
-fi
-if qemu_persistent_storage_select \
-  "$storage_mode" \
-  "$bundle_identity" \
-  "$source_disk" \
-  "$source_disk_sha" \
-  "$source_disk_bytes" \
-  "$work_dir" \
-  "$expanded_disk_bytes"; then
-  :
-else
-  storage_status=$?
-  if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
-    exit "$storage_status"
+    "$work_dir" \
+    "$expanded_disk_bytes" \
+    "$bundled_kernel" \
+    "$bundled_initramfs" \
+    "$kernel_command_line"; then
+    :
+  else
+    storage_status=$?
+    if (( storage_status == QEMU_PERSISTENT_STORAGE_INCOMPATIBLE_STATUS )); then
+      exit "$storage_status"
+    fi
+    fail "could not prepare the selected root disk"
   fi
-  fail "could not prepare the selected root disk"
 fi
 working_disk=$QEMU_SELECTED_DISK
+
+case ${OMARCHY_QEMU_GPU_DRY_RUN:-0} in
+  0|1) ;;
+  *) fail "OMARCHY_QEMU_GPU_DRY_RUN must be 0 or 1" ;;
+esac
+case ${OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY:-0} in
+  0|1) ;;
+  *) fail "OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY must be 0 or 1" ;;
+esac
+if (( QEMU_PERSISTENT_STORAGE_NEEDS_BOOT_RECOVERY )); then
+  if [[ ${OMARCHY_QEMU_GPU_ALLOW_BOOT_RECOVERY:-0} != 1 ]]; then
+    echo '[qemu-gpu] This older saved VM needs consent for one-time read-only boot pairing.' >&2
+    exit "$boot_recovery_consent_required_status"
+  fi
+  recover_persistent_boot_kit
+fi
+launch_kernel=$QEMU_SELECTED_KERNEL
+launch_initramfs=$QEMU_SELECTED_INITRAMFS
+launch_kernel_command_line=$QEMU_SELECTED_KERNEL_COMMAND_LINE
+[[ -n $launch_kernel && -n $launch_initramfs && -n $launch_kernel_command_line ]] || {
+  fail 'the selected VM has no complete boot kit'
+}
 
 if ((reset_only)); then
   qemu_persistent_storage_release_lock
@@ -1043,15 +1347,21 @@ if ((reset_only)); then
 fi
 
 case ${OMARCHY_QEMU_GPU_IMMERSIVE:-1} in
-  1) cocoa_immersive=on ;;
-  0) cocoa_immersive=off ;;
+  1)
+    cocoa_full_screen=on
+    cocoa_immersive=on
+    ;;
+  0)
+    cocoa_full_screen=off
+    cocoa_immersive=off
+    ;;
   *) fail "OMARCHY_QEMU_GPU_IMMERSIVE must be 0 or 1" ;;
 esac
 
 # M3 and newer Apple Silicon can expose EL2 to this Linux guest. Probe the
 # actual Hypervisor.framework capability instead of guessing from a model name;
 # older Apple Silicon keeps the existing platform-GIC/EL1 launch path.
-qemu_virtualization_args=(-machine 'virt,accel=hvf,gic-version=3')
+qemu_virtualization_args=(-machine "$qemu_machine")
 if printf '%s\n' \
     '{"execute":"qmp_capabilities"}' \
     '{"execute":"quit"}' | \
@@ -1093,18 +1403,18 @@ qemu_args=(
   -serial none
   -monitor none
   -qmp "unix:$qmp_socket,server=on,wait=off"
-  -kernel "$guest_dir/vmlinuz-linux"
-  -initrd "$guest_dir/initramfs-linux.img"
-  -append "$kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
+  -kernel "$launch_kernel"
+  -initrd "$launch_initramfs"
+  -append "$launch_kernel_command_line omarchy.qemu_virgl=1$shared_folder_kernel_argument$ssh_kernel_argument"
   -drive "if=none,id=omarchy-root,file=$working_disk,format=raw,media=disk,cache=writeback"
   -device 'virtio-blk-pci,drive=omarchy-root,serial=omarchy-root'
   -device "$gpu_device"
   # Cocoa forwards its live backing-pixel dimensions and the current host
   # display refresh rate through Virtio GPU EDID. Its accessibility-backed
   # Full grab keeps every Command chord with the focused guest in either
-  # presentation mode. Immersive controls only whether Cocoa hard-hides the
-  # Mac menu bar and Dock instead of using standard fullscreen auto-hide.
-  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
+  # presentation mode. Immersive launches Full Screen and hard-hides the Mac
+  # menu bar and Dock; otherwise Cocoa opens a centered, resizable window.
+  -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=$cocoa_full_screen,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
@@ -1117,6 +1427,8 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
   -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
+  -chardev "socket,id=omarchy-authentication-bridge,path=$authentication_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
   -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
@@ -1151,6 +1463,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  printf '\n[qemu-gpu] authentication bridge command: %q --bridge-native-authentication QEMU_PID %q' \
+    "$native_bridge" "$authentication_bridge_socket" >&2
   printf '\n[qemu-gpu] camera bridge command: %q --bridge-native-camera QEMU_PID %q' \
     "$native_bridge" "$camera_bridge_socket" >&2
   if [[ -n $shared_folder ]]; then
@@ -1182,7 +1496,7 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $authentication_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
     break
   fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
@@ -1190,9 +1504,10 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $authentication_bridge_socket ]] || fail "QEMU did not create its private authentication bridge socket"
 [[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
-echo "[qemu-gpu] Ready." >&2
+echo "[qemu-gpu] Ready. QMP: $qmp_socket" >&2
 
 # FD 9 deliberately remains open only in QEMU. Letting the sibling audio
 # bridge inherit it could keep a persistent workspace locked after QEMU exits.
@@ -1207,6 +1522,14 @@ start_clipboard_bridge() {
 }
 start_clipboard_bridge
 clipboard_bridge_restarts=0
+
+start_authentication_bridge() {
+  "$native_bridge" --bridge-native-authentication \
+    "$qemu_pid" "$authentication_bridge_socket" 9>&- &
+  authentication_bridge_pid=$!
+}
+start_authentication_bridge
+authentication_bridge_restarts=0
 
 start_camera_bridge() {
   "$native_bridge" --bridge-native-camera \
@@ -1254,6 +1577,27 @@ while true; do
       fi
     fi
   fi
+  # Touch ID sudo remains optional to VM availability: signed-response failure
+  # falls back to the guest password. Reconnect a transiently failed helper.
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    authentication_bridge_state=$(ps -p "$authentication_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $authentication_bridge_state || $authentication_bridge_state == *Z* ]]; then
+      if wait "$authentication_bridge_pid"; then
+        authentication_bridge_status=0
+      else
+        authentication_bridge_status=$?
+      fi
+      authentication_bridge_pid=""
+      if (( authentication_bridge_restarts < 5 )); then
+        authentication_bridge_restarts=$((authentication_bridge_restarts + 1))
+        echo "[qemu-gpu] authentication bridge exited (status $authentication_bridge_status); restarting ($authentication_bridge_restarts/5)" >&2
+        sleep 1
+        start_authentication_bridge
+      else
+        echo "[qemu-gpu] Touch ID sudo is unavailable for the rest of this session; password authentication remains available" >&2
+      fi
+    fi
+  fi
   # Camera sharing is optional. A failed capture backend must not stop the VM;
   # reconnect it so a transient device change can recover in this session.
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
@@ -1297,6 +1641,10 @@ else
   wait "$audio_bridge_pid" 2>/dev/null || true
 fi
 audio_bridge_pid=""
+if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$authentication_bridge_pid" 20
+fi
+authentication_bridge_pid=""
 if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi

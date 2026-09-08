@@ -183,10 +183,20 @@ install_file 0644 "$source_dir/etc/profile.d/omarchy.sh" "$root/etc/profile.d/om
 install_file 0644 "$source_dir/etc/fastfetch/config.jsonc" "$root/etc/fastfetch/config.jsonc"
 
 # Preserve the application metadata and artwork used by Quickshell's real app
-# provider. A single scalable hicolor location works for these demo assets.
+# provider. Normalize display-style artwork names to the lowercase, hyphenated
+# icon identifiers used by the desktop files and accepted by GTK's icon cache.
+# The stem is normalized separately so Battle.net.png becomes battle-net.png
+# rather than battle.net.png.
 mkdir -p "$root/usr/share/icons/hicolor/256x256/apps"
 while IFS= read -r icon; do
-  install_file 0644 "$icon" "$root/usr/share/icons/hicolor/256x256/apps/$(basename "$icon")"
+  icon_base=$(basename "$icon")
+  icon_stem=${icon_base%.*}
+  icon_ext=${icon_base##*.}
+  icon_stem=$(printf '%s' "$icon_stem" | LC_ALL=C tr '[:upper:]. ' '[:lower:]--')
+  icon_name="$icon_stem.$icon_ext"
+  icon_target="$root/usr/share/icons/hicolor/256x256/apps/$icon_name"
+  [[ ! -e $icon_target ]] || fail "normalized icon name collides: $icon_name"
+  install_file 0644 "$icon" "$icon_target"
 done < <(find "$source_dir/applications/icons" -maxdepth 1 -type f | sort)
 install_file 0644 "$source_dir/icon.png" "$root/usr/share/pixmaps/omarchy.png"
 install_file 0644 "$source_dir/icon.png" "$root/usr/share/icons/hicolor/256x256/apps/omarchy.png"

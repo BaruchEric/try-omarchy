@@ -81,9 +81,23 @@ struct QEMUGPURuntimeEnvironmentTests {
             "KEEP_ME": "yes",
             QEMUGPURuntimeEnvironment.inspectOnlyKey: "1",
             QEMUGPURuntimeEnvironment.dryRunKey: "1",
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey: "1",
         ])
 
         #expect(environment == ["KEEP_ME": "yes"])
+    }
+
+    @Test("boot recovery consent is an explicit one-launch environment addition")
+    func addsBootRecoveryConsent() {
+        let ordinary = QEMUGPURuntimeEnvironment.sanitizedForLaunch(["KEEP_ME": "yes"])
+        let approved = QEMUGPURuntimeEnvironment.withBootRecoveryConsent(ordinary)
+
+        #expect(ordinary == ["KEEP_ME": "yes"])
+        #expect(approved == [
+            "KEEP_ME": "yes",
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey: "1",
+        ])
+        #expect(QEMUGPURuntimeEnvironment.sanitizedForLaunch(approved) == ordinary)
     }
 
     @Test("storage reset ignores inherited integration settings")
@@ -96,6 +110,7 @@ struct QEMUGPURuntimeEnvironmentTests {
             PortForwardPolicy.environmentKey,
             QEMUGPURuntimeEnvironment.inspectOnlyKey,
             QEMUGPURuntimeEnvironment.dryRunKey,
+            QEMUGPURuntimeEnvironment.bootRecoveryConsentKey,
         ]
         var inherited = ["KEEP_ME": "yes"]
         for key in controlledKeys {
@@ -151,6 +166,47 @@ struct QEMUStandardErrorDrainTests {
         #expect(end.data.isEmpty)
         #expect(end.reachedEnd)
         #expect(Darwin.fcntl(descriptor, F_GETFL) == originalFlags)
+    }
+
+    @Test("waits for a complete Ready line and carries its private QMP socket")
+    func parsesReadyControlSocket() {
+        let partial = "startup output\n[qemu-gpu] Ready. QMP: /tmp/omarchy-qemu-gpu.A1b2C3/qmp"
+        #expect(QEMUGPUProcessSupervisor.virtualMachineReadyEvent(in: partial) == nil)
+
+        let complete = partial + ".sock\nmore output\n"
+        #expect(QEMUGPUProcessSupervisor.virtualMachineReadyEvent(in: complete) ==
+            .virtualMachineReady(
+                qmpSocketPath: "/tmp/omarchy-qemu-gpu.A1b2C3/qmp.sock"
+            ))
+    }
+
+    @Test("ignores a Ready marker embedded inside another diagnostic line")
+    func readyMarkerMustStartItsLine() {
+        let output = """
+            shared folder: /tmp/[qemu-gpu] Ready. QMP: not-a-socket
+            [qemu-gpu] Ready. QMP: /tmp/omarchy-qemu-gpu.Z9y8X7/qmp.sock
+            """ + "\n"
+        #expect(QEMUGPUProcessSupervisor.virtualMachineReadyEvent(in: output) ==
+            .virtualMachineReady(
+                qmpSocketPath: "/tmp/omarchy-qemu-gpu.Z9y8X7/qmp.sock"
+            ))
+
+        let lookalike = "[qemu-gpu] Ready.bad QMP: /tmp/omarchy-qemu-gpu.Z9y8X7/qmp.sock\n"
+        #expect(QEMUGPUProcessSupervisor.virtualMachineReadyEvent(in: lookalike) == nil)
+    }
+
+    @Test("does not trust a malformed socket advertised by the launcher")
+    func rejectsMalformedReadyControlSocket() {
+        for path in [
+            "/tmp/omarchy-qemu-gpu.short/qmp.sock",
+            "/tmp/omarchy-qemu-gpu.A1b2C3/../qmp.sock",
+            "/private/tmp/omarchy-qemu-gpu.A1b2C3/qmp.sock",
+            "/tmp/other.A1b2C3/qmp.sock",
+        ] {
+            let output = "[qemu-gpu] Ready. QMP: \(path)\n"
+            #expect(QEMUGPUProcessSupervisor.virtualMachineReadyEvent(in: output) ==
+                .virtualMachineReady(qmpSocketPath: nil))
+        }
     }
 }
 

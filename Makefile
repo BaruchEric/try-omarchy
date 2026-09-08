@@ -3,7 +3,7 @@ SHELL := /bin/bash
 override ROOT := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 override DIST := $(ROOT)/dist
 override GUEST_DIST := $(DIST)/guest
-override APP := $(DIST)/Try Omarchy.app
+override APP := $(DIST)/app.noindex/Try Omarchy.app
 override DMG := $(DIST)/TryOmarchy.dmg
 override BUILD_CACHE := $(ROOT)/scripts/build-cache.py
 override BUILD_STATE := $(ROOT)/.build/state
@@ -54,6 +54,7 @@ doctor:
 
 test:
 	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/tests/test-build-cache.py"
+	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/tests/test-pack-app-icon.py"
 	@$(ROOT)/guest/test
 	@$(ROOT)/macos/Tests/macos-compatibility.test.sh
 	@$(ROOT)/macos/Tests/runtime-relocation.test.sh
@@ -63,6 +64,7 @@ test:
 	@$(ROOT)/macos/Tests/run-qemu-ssh-contract.test.sh
 	@$(ROOT)/macos/Tests/qemu-power-actions.test.sh
 	@$(ROOT)/macos/Tests/qemu-persistent-storage.test.sh
+	@PYTHONDONTWRITEBYTECODE=1 python3 "$(ROOT)/macos/Tests/resize-vm-disk.test.py"
 
 guest:
 	@OMARCHY_FORCE_BUILD="$(FORCE)" "$(BUILD_CACHE)" \
