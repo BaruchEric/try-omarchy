@@ -73,6 +73,7 @@ cat >"$resources/runtime/bin/Try Omarchy" <<'SH'
 # OMARCHY_SDL_INPUT_DEVICE_NAME
 # OMARCHY_SDL_OUTPUT_DEVICE_NAME
 # guest_owner_uid guest_owner_gid
+# hv_vm_config_set_el2_enabled hv_gic_create
 case " $* " in
   *' -accel help '*) printf '%s\n' hvf ;;
   *' -machine help '*) printf '%s\n' 'virt                 ARM Virtual Machine' ;;
@@ -97,6 +98,9 @@ case " $* " in
   *' -machine virt -netdev help '*) printf '%s\n' user ;;
   *' -machine virt -audiodev help '*) printf '%s\n' sdl ;;
   *' -device virtio-gpu-gl-pci,help '*) printf '%s\n' 'romfile=<str>' ;;
+  *' -machine virt,gic-version=3,virtualization=on '*' -qmp stdio '*)
+    exit "${FAKE_QEMU_NESTED_STATUS:-0}"
+    ;;
   *)
     exec /usr/bin/python3 - "$@" <<'PY'
 import os
@@ -419,7 +423,8 @@ run_scenario() {
 run_scenario disabled 0 ''
 disabled_qemu=$(<"$test_root/disabled/qemu.log")
 assert_line_pair "$test_root/disabled/qemu.log" -machine \
-  'virt,accel=hvf,gic-version=3'
+  'virt,gic-version=3,virtualization=on'
+assert_line_pair "$test_root/disabled/qemu.log" -accel 'hvf,kernel-irqchip=on'
 assert_not_contains "$disabled_qemu" gic-version=2
 assert_line_pair "$test_root/disabled/qemu.log" -netdev 'user,id=omarchy-net'
 assert_line_pair "$test_root/disabled/qemu.log" -kernel "$persistent_root/boot/kernel"
@@ -434,6 +439,13 @@ assert_contains "$disabled_qemu" \
   'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
+
+run_scenario nested-fallback 0 '' FAKE_QEMU_NESTED_STATUS=1
+nested_fallback_qemu=$(<"$test_root/nested-fallback/qemu.log")
+assert_line_pair "$test_root/nested-fallback/qemu.log" -machine \
+  'virt,accel=hvf,gic-version=3'
+assert_not_contains "$nested_fallback_qemu" virtualization=on
+assert_not_contains "$nested_fallback_qemu" kernel-irqchip=on
 
 run_scenario non-immersive 0 '' OMARCHY_QEMU_GPU_IMMERSIVE=0
 non_immersive_qemu=$(<"$test_root/non-immersive/qemu.log")
