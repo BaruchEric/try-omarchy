@@ -285,6 +285,47 @@ all of that app's factory-image changes to an existing VM, and an in-guest
 update should not be assumed to reproduce them. A confirmed reset is the
 deliberate, destructive way to start again from the newest bundled factory.
 
+### Growing an existing VM disk
+
+To add capacity without resetting the VM, shut down Omarchy and run the
+maintenance command from a source checkout on the Mac:
+
+```sh
+# Preview a new total capacity of 32 GiB.
+macos/resize-vm-disk.sh --size-gib 32
+
+# Retain a verified backup, then enlarge the stopped disk.
+macos/resize-vm-disk.sh --size-gib 32 --apply
+```
+
+Run as the macOS user who owns the VM, without `sudo`. The command requires
+Python 3 and an APFS volume, but does not require building the app. It uses the
+same workspace lock as the launcher and refuses an active VM, shrinking,
+unrecognized metadata, or a missing/invalid paired boot kit. An equal size is
+a no-op. Whole-number targets up to 8192 GiB are accepted.
+
+The default state directory is
+`~/Library/Application Support/Try Omarchy/VM/v1`. For a custom VM location,
+pass `--state-root "/path/to/selected-folder/VM/v1"`, using the directory that
+contains `.omarchy-qemu-storage` and `disks/current`. The command does not read
+the app's saved location preference or select legacy development workspaces.
+
+The backup is an APFS clone in a private sibling directory named
+`v1.resize-backup.XXXXXX`; the command prints its exact path. It retains the
+original disk, disk metadata, and paired boot files and verifies the disk's
+checksum before resizing; reading both full disk images can take several
+minutes. Keep it until the resized VM is working. To roll back, shut down the
+VM and restore its original disk from this backup; any
+writes made after the backup would be lost, so preserve the newer disk first.
+Never shrink the enlarged disk to undo the operation.
+
+The host must have free space for the requested increase plus 1 GiB of
+headroom. Growth is sparse, not a reservation of host capacity, and retained
+clones consume additional space as their contents diverge. On the next normal
+boot, the guest's enabled `systemd-growfs-root.service` grows ext4 to fill the
+disk. Verify inside Omarchy with `lsblk` and `df -h /`. No app rebuild, guest
+reinstall, or change to the factory image is needed.
+
 ### Choosing where the VM lives
 
 **Change…** on the start menu's **VM Location** row moves the VM to any folder
