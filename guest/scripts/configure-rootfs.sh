@@ -69,6 +69,9 @@ cp -a "$guest_dir/factory-overlay/." "$root/"
 # The clipboard bridge mirrors the Mac pasteboard into the Wayland session,
 # and the Mac folder mount completes the host integration.
 cp -a "$guest_dir/native-overlay/." "$root/"
+"$guest_dir/scripts/install-touch-id-sudo.sh" \
+  --root "$root" \
+  --guest-dir "$guest_dir"
 chmod 0755 \
   "$root/usr/bin/omarchy-audio-input-set-default" \
   "$root/usr/bin/omarchy-screensaver" \
@@ -80,6 +83,11 @@ chmod 0755 \
   "$root/usr/local/bin/omarchy-native-cursor-restore" \
   "$root/usr/local/bin/omarchy-native-display-sync" \
   "$root/usr/local/bin/omarchy-native-mac-share" \
+  "$root/usr/local/bin/try-omarchy-touch-id" \
+  "$root/usr/local/bin/try-omarchy-touch-id-test" \
+  "$root/usr/local/lib/try-omarchy/native-authentication-broker" \
+  "$root/usr/local/sbin/try-omarchy-touch-id-control" \
+  "$root/usr/local/sbin/try-omarchy-touch-id-enroll" \
   "$root/usr/local/lib/try-omarchy/install-vivaldi-arm64" \
   "$root/usr/lib/systemd/system-generators/try-omarchy-ssh-access"
 

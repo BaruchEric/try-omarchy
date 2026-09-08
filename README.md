@@ -249,6 +249,47 @@ Loopback binding prevents devices on Wi-Fi, Ethernet, or the wider LAN from
 connecting. It does not isolate the listener from other users or processes on
 the same Mac; guest SSH authentication is still required.
 
+### Touch ID for sudo
+
+The native authentication bridge can enroll this Mac and use
+Touch ID as a sufficient authentication method for guest `sudo`. Open
+**Omarchy Menu → Setup → Security → Touch ID for sudo**, or run:
+
+```sh
+try-omarchy-touch-id
+```
+
+The integration ships disabled. Enabling first requires the normal guest sudo
+password, then Touch ID creates and proves possession of a Secure Enclave
+signing key. Only after that succeeds is the narrowly scoped sudo PAM rule
+installed. The menu then offers Test, Re-pair, and Disable actions.
+
+The Mac stores only the Secure Enclave's device-bound encrypted key
+representation. Every later approval is signed over a root-private guest ID,
+fresh challenge, the sudo user and requesting user, the interactive TTY, and a
+15-second validity window. Each enrolled guest has a distinct host signing key.
+The QEMU window must be frontmost. Cancellation, invalid responses, missing
+enrollment, and unavailable Touch ID all fall back to the normal guest password;
+no login or screen-unlock PAM policy is changed.
+
+If Touch ID falls back, sudo displays the reason before asking for the guest
+password. Signed approvals require synchronized Mac and guest clocks; factory
+images enable `systemd-timesyncd` at boot. On an existing guest with clock drift,
+run `sudo systemctl enable --now systemd-timesyncd.service`, then check
+`timedatectl` for `System clock synchronized: yes` before retrying.
+
+The Touch ID test refuses guest-password fallback and returns failure if sudo
+cannot authenticate. A passwordless sudo policy can also satisfy this check;
+the result only demonstrates Touch ID when its prompt appeared. Unanswered Mac
+prompts are canceled after 55 seconds, before the guest's 65-second timeout.
+Late responses are discarded without extending the current request's deadline.
+
+Enrollment persists across guest and Mac restarts for the same persistent VM,
+Mac, and macOS account. Factory Reset, moving the VM to another Mac or account,
+or changing the enrolled Touch ID fingerprint set requires re-pairing. Disabling
+removes the guest enrollment and, while the host bridge is available, its wrapped
+Secure Enclave key representation.
+
 ## Requirements
 
 - Apple Silicon Mac (`arm64`)

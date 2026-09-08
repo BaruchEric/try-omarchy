@@ -155,15 +155,16 @@ def main() -> None:
     verbatim_trees = authenticity["verbatimRuntimeTrees"]
     backported_trees = authenticity["backportedRuntimeTrees"]
     check(
-        not {"bin", "install", "shell"} & set(verbatim_trees)
-        and backported_trees == ["bin", "install", "shell"]
+        not {"bin", "config", "install", "shell"} & set(verbatim_trees)
+        and backported_trees == ["bin", "config", "install", "shell"]
         and not set(verbatim_trees) & set(backported_trees),
-        "patched bin, install, and shell trees are separated from verbatim upstream runtime trees",
+        "patched bin, config, install, and shell trees are separated from verbatim upstream runtime trees",
     )
     backports = authenticity["backports"]
     check(
         [backport.get("id") for backport in backports]
         == [
+            "touch-id-sudo-menu",
             "1password-arm64-installer",
             "vivaldi-arm64-browser",
             "vivaldi-menu-entries",
@@ -181,8 +182,10 @@ def main() -> None:
             f"backport patch digest matches: {backport['id']}",
         )
         check(
-            backport.get("reference", "").startswith("https://github.com/basecamp/omarchy/"),
-            f"backport has an upstream review reference: {backport['id']}",
+            backport.get("reference", "").startswith(
+                ("https://github.com/basecamp/omarchy/", "https://github.com/omacom/try-omarchy/")
+            ),
+            f"backport has a public review reference: {backport['id']}",
         )
         for target in backport["targets"]:
             check(
@@ -588,6 +591,30 @@ def main() -> None:
         spec["runtime"]["clipboard"]["port"] == "dev.tryomarchy.clipboard",
         "clipboard contract names the virtio port",
     )
+    authentication = spec["runtime"]["authentication"]
+    authentication_launcher = read(REPO / "macos/run-qemu-gpu.sh")
+    check(
+        authentication
+        == {
+            "activation": "explicit-menu-opt-in",
+            "approvalLifetimeSeconds": 15,
+            "authorizationScope": "sudo-authentication",
+            "device": "virtserialport",
+            "guestDeviceMode": "0600",
+            "guestIdentity": "root-private-random-256-bit",
+            "hostKey": "per-guest-secure-enclave-p256",
+            "pamService": "sudo",
+            "port": "dev.tryomarchy.authentication",
+            "protocolVersion": 3,
+            "requiresEnrollment": True,
+            "signature": "ecdsa-p256-sha256",
+        }
+        and "virtserialport,bus=omarchy-serial.0,nr=3" in authentication_launcher
+        and "name=dev.tryomarchy.authentication" in authentication_launcher
+        and "--bridge-native-authentication" in authentication_launcher
+        and "authentication_bridge_restarts < 5" in authentication_launcher,
+        "Touch ID sudo has a signed, supervised virtio contract",
+    )
     camera = spec["runtime"]["camera"]
     check(
         camera
@@ -925,6 +952,7 @@ def main() -> None:
     check("factory" in finalizer and "aarch64" in finalizer, "finalizer enforces the native factory contract")
     check("systemd-growfs-root.service" in finalizer, "factory disk grows on first boot")
     check("systemctl enable omarchy-native-mac-share.service" in finalizer, "shared Mac folder mounts at boot")
+    check("systemctl enable systemd-timesyncd.service" in finalizer, "guest time synchronization starts at boot")
     check(
         'expected_ttfx=$(read_spec' in finalizer
         and "/usr/bin/ttfx --version" in finalizer
@@ -1003,6 +1031,73 @@ def main() -> None:
     check(
         'ATTR{name}=="dev.tryomarchy.clipboard"' in clipboard_rule and 'GROUP="users"' in clipboard_rule,
         "clipboard port is readable by the provisioned users group",
+    )
+    authentication_command = (
+        GUEST / "native-overlay/usr/local/bin/try-omarchy-touch-id-test"
+    )
+    check(
+        authentication_command.stat().st_mode & stat.S_IXUSR != 0
+        and "sudo -k" in read(authentication_command)
+        and "/var/lib/try-omarchy/native-authentication.json" not in read(authentication_command),
+        "Touch ID sudo test command is executable",
+    )
+    enrollment_command = (
+        GUEST / "native-overlay/usr/local/sbin/try-omarchy-touch-id-enroll"
+    )
+    menu_command = GUEST / "native-overlay/usr/local/bin/try-omarchy-touch-id"
+    control_command = (
+        GUEST / "native-overlay/usr/local/sbin/try-omarchy-touch-id-control"
+    )
+    check(
+        enrollment_command.stat().st_mode & stat.S_IXUSR != 0
+        and menu_command.stat().st_mode & stat.S_IXUSR != 0
+        and control_command.stat().st_mode & stat.S_IXUSR != 0,
+        "Touch ID menu, enrollment, and root control commands are executable",
+    )
+    authentication_broker = (
+        GUEST
+        / "native-overlay/usr/local/lib/try-omarchy/native-authentication-broker"
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        py_compile.compile(
+            str(authentication_broker),
+            cfile=str(Path(temporary) / "authentication.pyc"),
+            doraise=True,
+        )
+    installer = read(GUEST / "scripts/install-touch-id-sudo.sh")
+    control = read(control_command)
+    menu = read(menu_command)
+    check(
+        authentication_broker.stat().st_mode & stat.S_IXUSR != 0
+        and "/etc/pam.d/sudo" not in installer
+        and "pam_exec.so quiet seteuid stdout" in control
+        and control.index('"$broker" enroll') < control.index("rewrite_policy enable")
+        and control.index("rewrite_policy disable") < control.index('"$broker" disable')
+        and "native-authentication-broker migrate" in installer
+        and "/usr/bin/omarchy menu refresh" in installer
+        and "sudo -k" in menu
+        and "omarchy menu refresh" in menu
+        and "gum choose" in menu
+        and "install-touch-id-sudo.sh" in configure,
+        "Touch ID stays dormant until transactional menu enrollment enables sudo PAM",
+    )
+    touch_id_menu_patch = read(GUEST / "patches/omarchy/touch-id-sudo-menu.patch")
+    check(
+        '"setup.security.touch-id"' in touch_id_menu_patch
+        and '"checked":"/usr/local/bin/try-omarchy-touch-id status --quiet"' in touch_id_menu_patch
+        and "omarchy-launch-floating-terminal-with-presentation /usr/local/bin/try-omarchy-touch-id" in touch_id_menu_patch,
+        "Omarchy Setup > Security exposes one stateful Touch ID sudo control",
+    )
+    authentication_rule = read(
+        GUEST
+        / "native-overlay/etc/udev/rules.d/93-omarchy-native-authentication.rules"
+    )
+    check(
+        'ATTR{name}=="dev.tryomarchy.authentication"' in authentication_rule
+        and 'OWNER="root"' in authentication_rule
+        and 'GROUP="root"' in authentication_rule
+        and 'MODE="0600"' in authentication_rule,
+        "Touch ID authorization port is root-only",
     )
     mac_share = GUEST / "native-overlay/usr/local/bin/omarchy-native-mac-share"
     check(mac_share.stat().st_mode & stat.S_IXUSR != 0, "native Mac share mounter is executable")

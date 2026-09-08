@@ -191,16 +191,30 @@
   "authenticity": {
     "verbatimRuntimeTrees": [
       "applications",
-      "config",
       "default",
       "migrations"
     ],
     "backportedRuntimeTrees": [
       "bin",
+      "config",
       "install",
       "shell"
     ],
     "backports": [
+      {
+        "id": "touch-id-sudo-menu",
+        "description": "Add an explicit opt-in control for Try Omarchy Touch ID sudo authentication under Setup > Security.",
+        "reference": "https://github.com/omacom/try-omarchy/issues/133",
+        "patch": "patches/omarchy/touch-id-sudo-menu.patch",
+        "patchSha256": "9a415cd0fe2377b49b5ad78668158e167419bb88a537516e46fe4a3321689b6a",
+        "targets": [
+          {
+            "path": "config/omarchy/extensions/omarchy-menu.jsonc",
+            "beforeSha256": "1ca0fdf7d2c0976f0e4c5d8c8a5d5eeeddc693ad05c72809638eeb730c9f470c",
+            "afterSha256": "39b4fb16cdc9ab0812613d39530c5d44b7c5627926d57784b252cf501cda3c89"
+          }
+        ]
+      },
       {
         "id": "1password-arm64-installer",
         "description": "Install 1Password from its signed ARM64 release with VM-compatible launchers and Quick Access.",
@@ -450,6 +464,20 @@
         "text/plain;charset=utf-8",
         "image/png"
       ]
+    },
+    "authentication": {
+      "activation": "explicit-menu-opt-in",
+      "approvalLifetimeSeconds": 15,
+      "authorizationScope": "sudo-authentication",
+      "device": "virtserialport",
+      "guestDeviceMode": "0600",
+      "guestIdentity": "root-private-random-256-bit",
+      "hostKey": "per-guest-secure-enclave-p256",
+      "pamService": "sudo",
+      "port": "dev.tryomarchy.authentication",
+      "protocolVersion": 3,
+      "requiresEnrollment": true,
+      "signature": "ecdsa-p256-sha256"
     },
     "sharedFolder": {
       "device": "virtio-9p-pci",

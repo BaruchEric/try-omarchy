@@ -361,6 +361,7 @@ runtime = exact_keys(
     spec.get("runtime"),
     {
         "audio",
+        "authentication",
         "camera",
         "clipboard",
         "compressedDisk",
@@ -402,6 +403,20 @@ clipboard = {
     "device": "virtserialport",
     "port": "dev.tryomarchy.clipboard",
     "formats": ["text/plain;charset=utf-8", "image/png"],
+}
+authentication = {
+    "activation": "explicit-menu-opt-in",
+    "approvalLifetimeSeconds": 15,
+    "authorizationScope": "sudo-authentication",
+    "device": "virtserialport",
+    "guestDeviceMode": "0600",
+    "guestIdentity": "root-private-random-256-bit",
+    "hostKey": "per-guest-secure-enclave-p256",
+    "pamService": "sudo",
+    "port": "dev.tryomarchy.authentication",
+    "protocolVersion": 3,
+    "requiresEnrollment": True,
+    "signature": "ecdsa-p256-sha256",
 }
 shared_folder = {
     "device": "virtio-9p-pci",
@@ -479,6 +494,7 @@ if (
     or runtime.get("camera") != camera
     or runtime.get("storage") != storage
     or runtime.get("clipboard") != clipboard
+    or runtime.get("authentication") != authentication
     or runtime.get("sharedFolder") != shared_folder
     or runtime.get("devices") != expected_devices
     or runtime.get("minimumMemoryMiB") != 2048
@@ -948,6 +964,7 @@ owner_marker=""
 owner_token=""
 qemu_pid=""
 audio_bridge_pid=""
+authentication_bridge_pid=""
 camera_bridge_pid=""
 clipboard_bridge_pid=""
 
@@ -979,6 +996,9 @@ cleanup() {
   fi
   if [[ $audio_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$audio_bridge_pid" 20
+  fi
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    terminate_child "$authentication_bridge_pid" 20
   fi
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
     terminate_child "$camera_bridge_pid" 20
@@ -1234,6 +1254,7 @@ chmod 600 "$owner_marker"
 # for cleanup, but expose the runtime sockets through that standardized alias.
 qmp_socket="/tmp/${work_dir##*/}/qmp.sock"
 audio_bridge_socket="/tmp/${work_dir##*/}/audio.sock"
+authentication_bridge_socket="/tmp/${work_dir##*/}/authentication.sock"
 camera_bridge_socket="/tmp/${work_dir##*/}/camera.sock"
 clipboard_bridge_socket="/tmp/${work_dir##*/}/clipboard.sock"
 audio_route_dir="/tmp/${work_dir##*/}/audio-routes"
@@ -1375,6 +1396,8 @@ qemu_args=(
   -device 'virtserialport,bus=omarchy-serial.0,nr=1,chardev=omarchy-audio-bridge,name=dev.tryomarchy.audio'
   -chardev "socket,id=omarchy-clipboard-bridge,path=$clipboard_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=2,chardev=omarchy-clipboard-bridge,name=dev.tryomarchy.clipboard'
+  -chardev "socket,id=omarchy-authentication-bridge,path=$authentication_bridge_socket,server=on,wait=off"
+  -device 'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
   -chardev "socket,id=omarchy-camera-bridge,path=$camera_bridge_socket,server=on,wait=off"
   -device 'virtserialport,bus=omarchy-serial.0,nr=4,chardev=omarchy-camera-bridge,name=dev.tryomarchy.camera'
 )
@@ -1409,6 +1432,8 @@ if [[ ${OMARCHY_QEMU_GPU_DRY_RUN:-0} == 1 ]]; then
     "$native_bridge" "$audio_bridge_socket" "$audio_route_dir" >&2
   printf '\n[qemu-gpu] clipboard bridge command: %q --bridge-native-clipboard QEMU_PID %q' \
     "$native_bridge" "$clipboard_bridge_socket" >&2
+  printf '\n[qemu-gpu] authentication bridge command: %q --bridge-native-authentication QEMU_PID %q' \
+    "$native_bridge" "$authentication_bridge_socket" >&2
   printf '\n[qemu-gpu] camera bridge command: %q --bridge-native-camera QEMU_PID %q' \
     "$native_bridge" "$camera_bridge_socket" >&2
   if [[ -n $shared_folder ]]; then
@@ -1440,7 +1465,7 @@ printf '%s\n' "$qemu_pid" >"$work_dir/.qemu.pid"
 chmod 600 "$work_dir/.qemu.pid"
 
 for ((attempt = 0; attempt < 100; attempt++)); do
-  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
+  if [[ -S $qmp_socket && -S $audio_bridge_socket && -S $authentication_bridge_socket && -S $camera_bridge_socket && -S $clipboard_bridge_socket ]]; then
     break
   fi
   kill -0 "$qemu_pid" 2>/dev/null || fail "QEMU exited before creating its private QMP socket"
@@ -1448,6 +1473,7 @@ for ((attempt = 0; attempt < 100; attempt++)); do
 done
 [[ -S $qmp_socket ]] || fail "QEMU did not create its private QMP socket"
 [[ -S $audio_bridge_socket ]] || fail "QEMU did not create its private audio bridge socket"
+[[ -S $authentication_bridge_socket ]] || fail "QEMU did not create its private authentication bridge socket"
 [[ -S $camera_bridge_socket ]] || fail "QEMU did not create its private camera bridge socket"
 [[ -S $clipboard_bridge_socket ]] || fail "QEMU did not create its private clipboard bridge socket"
 echo "[qemu-gpu] Ready. QMP: $qmp_socket" >&2
@@ -1465,6 +1491,14 @@ start_clipboard_bridge() {
 }
 start_clipboard_bridge
 clipboard_bridge_restarts=0
+
+start_authentication_bridge() {
+  "$native_bridge" --bridge-native-authentication \
+    "$qemu_pid" "$authentication_bridge_socket" 9>&- &
+  authentication_bridge_pid=$!
+}
+start_authentication_bridge
+authentication_bridge_restarts=0
 
 start_camera_bridge() {
   "$native_bridge" --bridge-native-camera \
@@ -1512,6 +1546,27 @@ while true; do
       fi
     fi
   fi
+  # Touch ID sudo remains optional to VM availability: signed-response failure
+  # falls back to the guest password. Reconnect a transiently failed helper.
+  if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+    authentication_bridge_state=$(ps -p "$authentication_bridge_pid" -o state= 2>/dev/null || true)
+    if [[ -z $authentication_bridge_state || $authentication_bridge_state == *Z* ]]; then
+      if wait "$authentication_bridge_pid"; then
+        authentication_bridge_status=0
+      else
+        authentication_bridge_status=$?
+      fi
+      authentication_bridge_pid=""
+      if (( authentication_bridge_restarts < 5 )); then
+        authentication_bridge_restarts=$((authentication_bridge_restarts + 1))
+        echo "[qemu-gpu] authentication bridge exited (status $authentication_bridge_status); restarting ($authentication_bridge_restarts/5)" >&2
+        sleep 1
+        start_authentication_bridge
+      else
+        echo "[qemu-gpu] Touch ID sudo is unavailable for the rest of this session; password authentication remains available" >&2
+      fi
+    fi
+  fi
   # Camera sharing is optional. A failed capture backend must not stop the VM;
   # reconnect it so a transient device change can recover in this session.
   if [[ $camera_bridge_pid =~ ^[0-9]+$ ]]; then
@@ -1555,6 +1610,10 @@ else
   wait "$audio_bridge_pid" 2>/dev/null || true
 fi
 audio_bridge_pid=""
+if [[ $authentication_bridge_pid =~ ^[0-9]+$ ]]; then
+  terminate_child "$authentication_bridge_pid" 20
+fi
+authentication_bridge_pid=""
 if [[ $clipboard_bridge_pid =~ ^[0-9]+$ ]]; then
   terminate_child "$clipboard_bridge_pid" 20
 fi

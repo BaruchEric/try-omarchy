@@ -54,6 +54,7 @@ cat >"$contents/MacOS/omarchy-vm-helper" <<'SH'
 #!/bin/bash
 set -euo pipefail
 if [[ ${1:-} == --bridge-native-audio \
+   || ${1:-} == --bridge-native-authentication \
    || ${1:-} == --bridge-native-clipboard \
    || ${1:-} == --bridge-native-camera ]]; then
   while kill -0 "$2" 2>/dev/null; do
@@ -294,6 +295,100 @@ printf 'factory\n' >"$guest/rootfs.ext4"
 launcher="$resources/scripts/run-qemu-gpu.sh"
 persistent_root="$test_root/persistent"
 
+# Exercise the repo-local development path, where release-time launch.plist is
+# absent and the launcher validates build-spec.json directly.
+development_guest="$resources/development-guest"
+mkdir -p "$development_guest"
+/bin/cp "$macos_dir/../guest/spec.json" "$development_guest/build-spec.json"
+DEVELOPMENT_GUEST="$development_guest" /usr/bin/python3 <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+
+guest = Path(os.environ["DEVELOPMENT_GUEST"])
+spec = json.loads(guest.joinpath("build-spec.json").read_text())
+files = {
+    "LICENSE.omarchy": b"MIT\n",
+    "initramfs-linux.img": b"070701",
+    "packages.lock.txt": b"fixture\n",
+    "provenance.json": b"{}\n",
+    "rootfs.ext4.zst": b"\x28\xb5\x2f\xfd",
+}
+kernel = bytearray(60)
+kernel[56:60] = b"ARM\x64"
+files["vmlinuz-linux"] = bytes(kernel)
+for name, data in files.items():
+    guest.joinpath(name).write_bytes(data)
+
+metadata = {
+    "LICENSE.omarchy": ("guest-license", "text/plain"),
+    "build-spec.json": ("guest-metadata", "application/json"),
+    "initramfs-linux.img": ("guest-initramfs", "application/vnd.linux.initramfs"),
+    "packages.lock.txt": ("guest-metadata", "text/plain"),
+    "provenance.json": ("guest-metadata", "application/json"),
+    "rootfs.ext4": ("guest-rootfs", "application/vnd.omarchy.ext4"),
+    "rootfs.ext4.zst": ("guest-rootfs-compressed", "application/zstd"),
+    "vmlinuz-linux": ("guest-kernel", "application/vnd.linux.kernel"),
+}
+records = []
+checksums = {}
+for name, (role, media_type) in metadata.items():
+    if name == "rootfs.ext4":
+        size = spec["image"]["sizeMiB"] * 1024 * 1024
+        digest = "0" * 64
+    else:
+        data = guest.joinpath(name).read_bytes()
+        size = len(data)
+        digest = hashlib.sha256(data).hexdigest()
+    records.append(
+        {
+            "bytes": size,
+            "mediaType": media_type,
+            "path": name,
+            "role": role,
+            "sha256": digest,
+        }
+    )
+    checksums[name] = digest
+
+manifest = {
+    "artifacts": records,
+    "build": {},
+    "guest": {
+        "architecture": "aarch64",
+        "display": spec["guest"]["virtualDisplay"],
+        "distribution": "Arch Linux",
+        "kernelCommandLine": spec["runtime"]["kernelCommandLine"],
+        "profile": "factory",
+        "username": None,
+    },
+    "kind": "try-omarchy-guest-artifacts",
+    "normalizedUpstreamTree": {},
+    "schemaVersion": 1,
+    "upstream": {},
+}
+manifest_data = (json.dumps(manifest, separators=(",", ":")) + "\n").encode()
+guest.joinpath("guest-manifest.json").write_bytes(manifest_data)
+checksums["guest-manifest.json"] = hashlib.sha256(manifest_data).hexdigest()
+guest.joinpath("SHA256SUMS").write_text(
+    "".join(f"{checksums[name]}  {name}\n" for name in sorted(checksums)),
+    encoding="ascii",
+)
+PY
+
+development_stderr="$test_root/development-validation.stderr"
+if ! development_validation=$(env \
+  PATH="$shim_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
+  OMARCHY_QEMU_GPU_INSPECT_ONLY=1 \
+  "$launcher" "$development_guest" 2>"$development_stderr"); then
+  /bin/cat "$development_stderr" >&2 || true
+  fail 'generated build spec failed repo-local development validation'
+fi
+assert_contains "$development_validation" \
+  'root=/dev/vda rw rootwait console=tty0 console=hvc0'
+
 run_scenario() {
   local scenario=$1
   local expected_status=$2
@@ -333,6 +428,10 @@ assert_not_contains "$disabled_qemu" hostfwd
 assert_not_contains "$disabled_qemu" tryomarchy.ssh_access
 assert_contains "$disabled_qemu" \
   'cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=on,full-grab=on,immersive=on,swap-opt-cmd=off'
+assert_contains "$disabled_qemu" \
+  'socket,id=omarchy-authentication-bridge,path='
+assert_contains "$disabled_qemu" \
+  'virtserialport,bus=omarchy-serial.0,nr=3,chardev=omarchy-authentication-bridge,name=dev.tryomarchy.authentication'
 assert_contains "$(<"$test_root/disabled/storage.log")" select-existing
 assert_contains "$(<"$test_root/disabled/storage.log")" create
 
