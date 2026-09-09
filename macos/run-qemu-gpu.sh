@@ -151,7 +151,8 @@ for device in \
   virtio-net-pci \
   virtio-rng-pci \
   virtio-serial-pci \
-  virtio-tablet-pci; do
+  virtio-tablet-pci \
+  virtio-pinch-pci; do
   require_qemu_device "$device"
 done
 for marker in guest_owner_uid guest_owner_gid; do
@@ -1499,6 +1500,7 @@ qemu_args=(
   -display "cocoa,gl=es,show-cursor=on,zoom-to-fit=on,full-screen=$cocoa_full_screen,full-grab=on,immersive=$cocoa_immersive,swap-opt-cmd=off"
   -device 'virtio-keyboard-pci,romfile='
   -device 'virtio-tablet-pci,romfile='
+  -device 'virtio-pinch-pci,romfile='
   -object 'rng-random,id=omarchy-rng,filename=/dev/urandom'
   -device 'virtio-rng-pci,rng=omarchy-rng'
   -device virtio-balloon-pci

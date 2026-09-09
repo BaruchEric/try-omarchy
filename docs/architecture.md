@@ -43,6 +43,12 @@ starts at EL2 and Linux exposes `/dev/kvm`; on older chips the launcher keeps
 the existing platform-GIC/EL1 configuration. The pinned QEMU 11.1.1 runtime
 contains the upstream HVF vGIC and nested-virtualization implementation.
 
+Trackpad magnification uses a dedicated indirect virtio touchpad alongside the
+ordinary pointer tablet. The Cocoa bridge reconstructs two contacts from each
+pinch and releases them on cancellation or focus loss; the guest disables
+tapping for this gesture-only device. See [pinch zoom](pinch-zoom.md) for the
+input contract, existing-guest setup, and integration validation.
+
 The macOS helper opens an authenticated connection to QEMU's private,
 single-client machine protocol socket before host sleep and retains that control
 session through wake. Before macOS sleeps it synchronously pauses the guest
